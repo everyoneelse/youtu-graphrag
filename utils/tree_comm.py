@@ -78,8 +78,6 @@ class FastTreeComm:
         return sp.csr_matrix((data, (row, col)), shape=(n, n))
 
     def _precompute_all_triples(self):
-        start_time = time.time()
-        
         for node_id in self.node_list:
             self.triple_strings_cache[node_id] = self._get_triple_strings(node_id)
         
