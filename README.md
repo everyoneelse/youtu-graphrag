@@ -46,7 +46,7 @@ A skeched overview of our proposed framework Youtu-GraphRAG.
 
 🔗 Multi-hop Reasoning/Summarization/Conclusion: Complex questions requiring multi-step reasoning<br>
 📚 Knowledge-Intensive Tasks: Questions dependent on large amounts of structured/private/domain knowledge<br>
-🌐 Domain Scalability: Easily support novels, encyclopedias, academic papers, personal knowledge base, private/commercial knowledge base and other domains with minimal intervention on the shcema<br>
+🌐 Domain Scalability: Easily support novels, encyclopedias, academic papers, personal knowledge base, private/commercial knowledge base and other domains with minimal intervention on the schema<br>
 
 <a id="contributions"></a>
 ## 🚀 Contributions and Novely
