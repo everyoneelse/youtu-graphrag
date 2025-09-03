@@ -165,6 +165,8 @@ youtu-graphrag/
 | **🌳 Community Detection** | `tree_comm.struct_weight` | Weight to control impacts from topology |
 | **⚡ Performance** | `embeddings.batch_size` | Batch processing size |
 
+<a id="quickstart"></a>
+
 ## 🚀 Quick Start
 
 ### 💻 Web UI Experience
@@ -177,11 +179,11 @@ visit http://localhost:8000
 
 ### 🔧 Basic Command Line Usage
 ```bash
-python kt_rag.py --datasets demo
+python main.py --datasets demo
 ```
 
 ### 📖 Full Usage Guide
-For advanced config and usage：[**🚀 Quick Start**](QUICKSTART.md)
+For advanced config and usage：[**🚀 FullGuide**](FULLGUIDE.md)
 
 ## 🤝 Contributing
 
