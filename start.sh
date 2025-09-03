@@ -1,26 +1,8 @@
 #!/bin/bash
 
-# Youtu-GraphRAG Startup Script
-# Author: Youtu-GraphRAG Team
-
 echo "🌟 Starting Youtu-GraphRAG Server..."
 echo "=========================================="
 
-# Check if conda is available
-if ! command -v conda &> /dev/null; then
-    echo "❌ Conda not found. Please install Anaconda or Miniconda."
-    exit 1
-fi
-
-# Activate ktrag environment
-# echo "🔧 Activating ktrag environment..."
-# source /data/anaconda3/bin/activate ktrag
-
-# if [ $? -ne 0 ]; then
-#     echo "❌ Failed to activate ktrag environment."
-#     echo "💡 Please run: conda create -n ktrag python=3.8"
-#     exit 1
-# fi
 
 # Check if required files exist
 if [ ! -f "backend.py" ]; then
