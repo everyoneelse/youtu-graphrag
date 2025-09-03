@@ -168,23 +168,34 @@ youtu-graphrag/
 <a id="quickstart"></a>
 
 ## 🚀 Quick Start
+We provide two approaches to run and experience the demo service.
 
 ### 💻 Web UI Experience
 ```bash
-# 1. create .env.example according to .env
+# 1. Create .env according to .env.example
 
-# 2. setup 
+# 2. Setup 
 ./setup_env.sh
 
-# 3. launch the web
+# 3. Launch the web
 ./start.sh
-```
-visit http://localhost:8000
 
-### 🔧 Basic Command Line Usage
-```bash
-python main.py --datasets demo
+# 4. Visit http://localhost:8000
 ```
+
+### 💻 Start with dockerfile
+```bash
+# 1. Create .env according to .env.example
+
+# 2. Build with dockerfile 
+docker build -t youtu_graphrag:v1 -f ./docker/Dockerfile .
+
+# 3. Docker run
+docker run -d -p 8000:8000 youtu_graphrag:v1
+
+# 4. Visit http://localhost:8000
+```
+
 
 ### 📖 Full Usage Guide
 For advanced config and usage：[**🚀 FullGuide**](FULLGUIDE.md)
