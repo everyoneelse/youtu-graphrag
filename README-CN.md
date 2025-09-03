@@ -163,28 +163,34 @@ youtu-graphrag/
 
 ### 💻 直接启动Web服务体验交互式界面
 ```bash
-# 1. 创建 .env 文件
+# 1. 克隆项目
+git clone https://github.com/TencentCloudADP/Youtu-GraphRAG
 
-# 2. 配置环境 
+# 2. 按照.env.example文件格式创建 .env
+
+# 3. 配置环境 
 ./setup_env.sh
 
-# 3. 启动服务
+# 4. 启动服务
 ./start.sh
 
-# 4. 访问 http://localhost:8000 体验交互式GraphRAG
+# 5. 访问 http://localhost:8000 体验Youtu-GraphRAG
 ```
 
 ### 💻 通过docker环境启动
 ```bash
-# 1. 创建 .env 文件
+# 1. 克隆项目
+git clone https://github.com/TencentCloudADP/Youtu-GraphRAG
 
-# 2. 通过dockerfile文件构建镜像
-docker build -t youtu_graphrag:v1 -f ./docker/Dockerfile .
+# 2. 按照.env.example文件格式创建 .env
 
-# 3. 启动docker容器
+# 3. 通过dockerfile文件构建镜像
+docker build -t youtu_graphrag:v1 .
+
+# 4. 启动docker容器
 docker run -d -p 8000:8000 youtu_graphrag:v1
 
-# 4. 访问 http://localhost:8000 体验交互式GraphRAG
+# 5. 访问 http://localhost:8000 体验Youtu-GraphRAG
 ```
 
 ### 📖 完整使用指南

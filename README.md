@@ -172,28 +172,34 @@ We provide two approaches to run and experience the demo service.
 
 ### 💻 Web UI Experience
 ```bash
-# 1. Create .env according to .env.example
+# 1. Clone Youtu-GraphRAG project
+git clone https://github.com/TencentCloudADP/Youtu-GraphRAG
 
-# 2. Setup 
+# 2. Create .env according to .env.example
+
+# 3. Setup environment
 ./setup_env.sh
 
-# 3. Launch the web
+# 4. Launch the web
 ./start.sh
 
-# 4. Visit http://localhost:8000
+# 5. Visit http://localhost:8000
 ```
 
 ### 💻 Start with dockerfile
 ```bash
-# 1. Create .env according to .env.example
+# 1. Clone Youtu-GraphRAG project
+git clone https://github.com/TencentCloudADP/Youtu-GraphRAG
 
-# 2. Build with dockerfile 
-docker build -t youtu_graphrag:v1 -f ./docker/Dockerfile .
+# 2. Create .env according to .env.example
 
-# 3. Docker run
+# 3. Build with dockerfile 
+docker build -t youtu_graphrag:v1 .
+
+# 4. Docker run
 docker run -d -p 8000:8000 youtu_graphrag:v1
 
-# 4. Visit http://localhost:8000
+# 5. Visit http://localhost:8000
 ```
 
 
