@@ -149,7 +149,7 @@ youtu-graphrag/
 │
 ├── 📁 retriever/                 # Retrieval Cache
 │
-├── kt_rag.py                     # 🎯 Main program entry
+├── main.py                       # 🎯 Main program entry
 ├── requirements.txt              # Dependencies list
 └── README.md                     # Project documentation
 ```
@@ -158,7 +158,6 @@ youtu-graphrag/
 
 | Configuration Category | Key Parameters | Description |
 |------------------------|----------------|-------------|
-| **🔑 API** | `llm_api_key`, `model`, `temperature` | LLM service configuration |
 | **🤖 Mode** | `triggers.mode` | agent(intelligent)/noagent(basic) |
 | **🏗️ Construction** | `construction.max_workers` | Graph construction concurrency |
 | **🔍 Retrieval** | `retrieval.top_k_filter`, `recall_paths` | Retrieval parameters |
@@ -188,29 +187,29 @@ pip install -r requirements.txt
 
 ```bash
 # 1. Run with default configuration
-python kt_rag.py --datasets demo
+python main.py --datasets demo
 
 # 2. Specify multiple datasets
-python kt_rag.py --datasets hotpot 2wiki musique
+python main.py --datasets hotpot 2wiki musique
 
 # 3. Use custom configuration file
-python kt_rag.py --config my_config.yaml --datasets demo
+python main.py --config my_config.yaml --datasets demo
 
 # 4. Runtime parameter override
-python kt_rag.py --override '{"retrieval": {"top_k_filter": 50}, "triggers": {"mode": "noagent"}}' --datasets demo
+python main.py --override '{"retrieval": {"top_k_filter": 50}, "triggers": {"mode": "noagent"}}' --datasets demo
 ```
 
 ### 🔧 Advanced Usage
 
 ```bash
 # 1. Build knowledge graph only
-python kt_rag.py --override '{"triggers": {"constructor_trigger": true, "retrieve_trigger": false}}' --datasets demo
+python main.py --override '{"triggers": {"constructor_trigger": true, "retrieve_trigger": false}}' --datasets demo
 
 # 2. Execute retrieval only (skip construction)
-python kt_rag.py --override '{"triggers": {"constructor_trigger": false, "retrieve_trigger": true}}' --datasets demo
+python main.py --override '{"triggers": {"constructor_trigger": false, "retrieve_trigger": true}}' --datasets demo
 
 # 3. Performance optimization configuration
-python kt_rag.py --override '{"construction": {"max_workers": 64}, "embeddings": {"batch_size": 64}}' --datasets demo
+python main.py --override '{"construction": {"max_workers": 64}, "embeddings": {"batch_size": 64}}' --datasets demo
 ```
 
 <details>
@@ -218,7 +217,7 @@ python kt_rag.py --override '{"construction": {"max_workers": 64}, "embeddings":
 
 ```bash
 # Adjust retrieval parameters
-python kt_rag.py --override '{
+python main.py --override '{
   "retrieval": {
     "top_k_filter": 30,
     "recall_paths": 3,
@@ -226,16 +225,8 @@ python kt_rag.py --override '{
   }
 }' --datasets hotpot
 
-# Adjust API parameters
-python kt_rag.py --override '{
-  "api": {
-    "temperature": 0.1,
-    "max_retries": 10
-  }
-}' --datasets novel_eng
-
 # Adjust Community Detection parameters
-python kt_rag.py --override '{
+python main.py --override '{
   "tree_comm": {
     "struct_weight": 0.5,
     "embedding_model": "all-mpnet-base-v2"
@@ -251,13 +242,13 @@ python kt_rag.py --override '{
 
 ```bash
 # Construction only: Build knowledge graph
-python kt_rag.py --override '{"triggers": {"constructor_trigger": true, "retrieve_trigger": false}}' --datasets hotpot 2wiki novel
+python main.py --override '{"triggers": {"constructor_trigger": true, "retrieve_trigger": false}}' --datasets hotpot 2wiki novel
 
 # Retrieval only: Execute retrieval QA
-python kt_rag.py --override '{"triggers": {"constructor_trigger": false, "retrieve_trigger": true}}' --datasets hotpot 2wiki novel
+python main.py --override '{"triggers": {"constructor_trigger": false, "retrieve_trigger": true}}' --datasets hotpot 2wiki novel
 
 # End-to-end: One-click run (construction + retrieval)
-python kt_rag.py --override '{"triggers": {"constructor_trigger": true, "retrieve_trigger": true}}' --datasets hotpot 2wiki novel
+python main.py --override '{"triggers": {"constructor_trigger": true, "retrieve_trigger": true}}' --datasets hotpot 2wiki novel
 ```
 
 ## 🤝 Contributing
