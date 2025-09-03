@@ -1,19 +1,21 @@
-import torch
-import torch.nn.functional as F
-import spacy
-from sentence_transformers import SentenceTransformer
-from typing import List, Dict, Set, Tuple, Optional
-import faiss
 import os
 import pickle
-import numpy as np
-from utils import graph_processor
-from models.retriever.faiss_filter import DualFAISSRetriever
-import time
-import concurrent.futures
 import threading
+import time
 from functools import lru_cache
-from utils.call_llm_api import call_llm_api
+from typing import Dict, List, Optional, Set, Tuple
+
+import faiss
+import numpy as np
+import spacy
+import torch
+import torch.nn.functional as F
+import concurrent.futures
+from sentence_transformers import SentenceTransformer
+
+from models.retriever.faiss_filter import DualFAISSRetriever
+from utils import graph_processor
+from utils import call_llm_api
 
 try:
     from config import get_config
@@ -28,7 +30,6 @@ class KTRetriever:
         qa_encoder: Optional[SentenceTransformer] = None,
         device: str = "cuda",
         cache_dir: str = "retriever/faiss_cache_new",
-        llm_api_key: Optional[str] = None,
         top_k: int = 5,
         recall_paths: int = 2,
         schema_path: str = None,
@@ -48,7 +49,6 @@ class KTRetriever:
             json_path = json_path or config.get_dataset_config(dataset).graph_output
             device = device if device != "cuda" else config.embeddings.device
             cache_dir = cache_dir if cache_dir != "retriever/faiss_cache_new" else config.retrieval.cache_dir
-            llm_api_key = llm_api_key or config.api.llm_api_key
             top_k = top_k if top_k != 5 else config.retrieval.top_k
             recall_paths = recall_paths if recall_paths != 2 else config.retrieval.recall_paths
             schema_path = schema_path or config.get_dataset_config(dataset).schema_path
@@ -57,6 +57,8 @@ class KTRetriever:
         
         self.graph = graph_processor.load_graph_from_json(json_path)
         self.qa_encoder = qa_encoder or SentenceTransformer('all-MiniLM-L6-v2')
+
+        self.llm_client = call_llm_api.LLMCompletionCall()
         
         if device == "cuda" and not torch.cuda.is_available():
             print("Warning: CUDA requested but not available, falling back to CPU")
@@ -68,7 +70,6 @@ class KTRetriever:
         
         print(f"Using device: {self.device}")
         self.cache_dir = cache_dir
-        self.llm_api_key = llm_api_key
         self.top_k = top_k
         self.dataset = dataset
         self.schema_path = schema_path
@@ -1827,12 +1828,9 @@ class KTRetriever:
                 """
             return prompt
 
-        return prompt
     
-    def generate_answer(self, prompt: str, use_qwen: bool = False) -> Tuple[str, str, float]:
-        
-        llm = call_llm_api(self.llm_api_key, use_qwen)
-        answer = llm.call_llm_api(prompt)
+    def generate_answer(self, prompt: str) -> str:
+        answer = self.llm_client.call_api(prompt)
         print("Retrieved context:")
         print(prompt)
         print(f"Answer: {answer}")  

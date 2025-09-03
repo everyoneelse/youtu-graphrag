@@ -1,5 +1,5 @@
 import json_repair
-import utils.call_llm_api as llm_api
+from  utils import call_llm_api
 
 try:
     from config import get_config
@@ -7,21 +7,13 @@ except ImportError:
     get_config = None
 
 class GraphQ:
-    def __init__(self, dataset_name, api_key: str = None, config=None):
+    def __init__(self, dataset_name, config=None):
         if config is None and get_config is not None:
             try:
-                config = get_config()
+                self.config = get_config()
             except:
-                pass
-                config = None
-        self.config = config
-        if config:
-            api_key = api_key or config.api.llm_api_key
-            use_qwen = config.api.use_qwen
-        else:
-            use_qwen = False
-        self.api_key = api_key
-        self.client = llm_api.call_llm_api(api_key, use_qwen)
+                self.config = None
+        self.llm_client = call_llm_api.LLMCompletionCall()
         self.dataset_name = dataset_name
             
     def read_schema(self, schema_path: str) -> str:
@@ -31,12 +23,12 @@ class GraphQ:
     
     def prompt_format(self, schema: str, question: str) -> str:
         if self.config:
-            if self.dataset_name == "novel":
-                return self.config.get_prompt_formatted("decomposition", "novel_chs", ontology=schema, question=question)
+            if self.dataset_name == "anony_chs":
+                return self.config.get_prompt_formatted("decomposition", "anony_chs", ontology=schema, question=question)
             else:
                 return self.config.get_prompt_formatted("decomposition", "general", ontology=schema, question=question)
         else:
-            if self.dataset_name == "novel":
+            if self.dataset_name == "anony_chs":
                 return f"""
                 你是一个专业的问题分解大师，请根据以下问题和图本体模式，将问题分解为2-3个子问题。
                 要求：
@@ -107,7 +99,7 @@ class GraphQ:
     def decompose(self, question: str, schema_path: str) -> dict:
         schema = self.read_schema(schema_path)
         prompt = self.prompt_format(schema, question)
-        response = self.client.call_llm_api(prompt)
+        response = self.llm_client.call_api(prompt)
         content = json_repair.loads(response)
         
         # Ensure backward compatibility - if old format, convert to new format

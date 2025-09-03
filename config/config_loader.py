@@ -3,25 +3,14 @@ Configuration loader and manager for KT-RAG framework.
 Handles loading, validation, and access to configuration parameters.
 """
 
-import os
-import yaml
-import json
-from typing import Dict, Any, Optional, Union
-from pathlib import Path
 import logging
-from dataclasses import dataclass, asdict
+import os
+from dataclasses import asdict, dataclass
+from pathlib import Path
+from typing import Any, Dict, Optional
 
-@dataclass
-class APIConfig:
-    """API configuration settings"""
-    llm_api_key: str = ""
-    base_url: str = ""
-    model: str = "deepseek-v3-0324"
-    temperature: float = 0.3
-    max_retries: int = 20
-    retry_delay: int = 1
-    timeout: int = 30
-    use_qwen: bool = False
+import yaml
+
 
 @dataclass
 class DatasetConfig:
@@ -49,7 +38,7 @@ class ConstructionConfig:
     
     def __post_init__(self):
         if self.datasets_no_chunk is None:
-            self.datasets_no_chunk = ["hotpot", "2wiki", "musique", "graphrag-bench", "novel", "novel_eng"]
+            self.datasets_no_chunk = ["hotpot", "2wiki", "musique", "graphrag-bench", "anony_chs", "anony_eng"]
 
 @dataclass
 class TreeCommConfig:
@@ -154,7 +143,6 @@ class ConfigManager:
         """
         self.config_path = config_path or self._get_default_config_path()
         self.config_data: Dict[str, Any] = {}
-        self.api: Optional[APIConfig] = None
         self.datasets: Dict[str, DatasetConfig] = {}
         self.triggers: Optional[TriggersConfig] = None
         self.construction: Optional[ConstructionConfig] = None
@@ -194,9 +182,6 @@ class ConfigManager:
     
     def _parse_config(self) -> None:
         """Parse the loaded configuration data into structured objects."""
-        api_data = self.config_data.get("api", {})
-        self.api = APIConfig(**api_data)
-        
         datasets_data = self.config_data.get("datasets", {})
         self.datasets = {
             name: DatasetConfig(**config) 
@@ -237,9 +222,6 @@ class ConfigManager:
     
     def _validate_config(self) -> None:
         """Validate the loaded configuration."""
-        if not self.api.llm_api_key:
-            raise ValueError("LLM API key is required")
-        
         for dataset_name, dataset_config in self.datasets.items():
             if not os.path.exists(dataset_config.corpus_path):
                 logging.warning(f"Corpus path not found for {dataset_name}: {dataset_config.corpus_path}")

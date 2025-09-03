@@ -1,21 +1,24 @@
-import numpy as np
-import json_repair
-from sklearn.metrics.pairwise import cosine_similarity
-from sentence_transformers import SentenceTransformer
+import json
+import os
+import time
+import warnings
 from collections import defaultdict
 from itertools import combinations
+from typing import Any, Dict, List, Tuple
+
 import networkx as nx
-from scipy.spatial.distance import cosine
-from openai import OpenAI
-import json
-import time
-import os
-from typing import Dict, List, Tuple, Any
-from sentence_transformers import util
-import torch
+import numpy as np
 import scipy.sparse as sp
+import torch
+import json_repair
+from openai import OpenAI
+from scipy.spatial.distance import cosine
+from sentence_transformers import SentenceTransformer, util
 from sklearn.cluster import KMeans
-import warnings
+from sklearn.metrics.pairwise import cosine_similarity
+
+from utils import call_llm_api
+
 warnings.filterwarnings('ignore')
 
 try:
@@ -25,7 +28,7 @@ except ImportError:
 
 
 class FastTreeComm:
-    def __init__(self, graph, embedding_model="all-MiniLM-L6-v2", struct_weight=0.3, llm_api_key=None, config=None):
+    def __init__(self, graph, embedding_model="all-MiniLM-L6-v2", struct_weight=0.3, config=None):
         """
         :param graph: Input graph (NetworkX DiGraph)
         :param embedding_model: Sentence embedding model
@@ -43,13 +46,11 @@ class FastTreeComm:
         if config:
             embedding_model = embedding_model or config.tree_comm.embedding_model
             struct_weight = struct_weight if struct_weight != 0.3 else config.tree_comm.struct_weight
-            llm_api_key = llm_api_key or config.api.llm_api_key
         
         self.model = SentenceTransformer(embedding_model)
         self.semantic_cache = {}
         self.struct_weight = struct_weight
         self.node_list = list(graph.nodes())
-        self.llm_api_key = llm_api_key
         self.node_names = {n: graph.nodes[n]["properties"]["name"] for n in graph.nodes()}
         self.neighbor_cache = {n: set(graph.neighbors(n)) for n in graph.nodes()}
         self.edge_relations = {(u, v): data.get("relation", "related_to") 
@@ -62,16 +63,7 @@ class FastTreeComm:
 
         self._precompute_all_triples()
         
-        if self.llm_api_key:
-            base_url = "https://api.lkeap.cloud.tencent.com/v1"
-            if config:
-                base_url = config.api.base_url
-            self.llm_client = OpenAI(
-                api_key=self.llm_api_key,
-                base_url=base_url,
-            )
-        else:
-            self.llm_client = None
+        self.llm_client = call_llm_api.LLMCompletionCall()
 
     def _build_sparse_adjacency(self):
         n = len(self.node_list)
@@ -318,7 +310,6 @@ class FastTreeComm:
     
     def _should_merge_clusters(self, cluster1_nodes, cluster2_nodes, sim_info):
 
-
         if sim_info['similarity'] < 0.5:
             return False
         
@@ -372,44 +363,11 @@ class FastTreeComm:
     def _call_llm_api_batch(self, content: str) -> List[Dict]:
         if not self.llm_client:
             return []
-            
-        max_retries = 20
-        retry_delay = 1
-        model = "deepseek-v3-0324"
-        temperature = 0.3
-        
-        if self.config:
-            max_retries = self.config.api.max_retries
-            retry_delay = self.config.api.retry_delay
-            model = self.config.api.model
-            temperature = self.config.api.temperature
-        
-        for attempt in range(max_retries):
-            try:
-                completion = self.llm_client.chat.completions.create(
-                    model=model, 
-                    messages=[{"role": "user", "content": content}], 
-                    temperature=temperature
-                )
-                
-                response_text = completion.choices[0].message.content.strip("```json").strip("```")
-                
-                return json_repair.loads(response_text)
-                
-            except Exception as e:
-                error_msg = str(e)
-                print(f"LLM API call failed (attempt {attempt + 1}/{max_retries}): {error_msg}")
-                
+        response_text = self.llm_client.call_api(content)
+        response_json = json_repair.loads(response_text)
 
-                if "rate limit" in error_msg.lower() or "429" in error_msg:
-                    wait_time = retry_delay * (2 ** attempt) 
-                    print(f"Rate limit detected, waiting {wait_time} seconds...")
-                    time.sleep(wait_time)
-                elif attempt < max_retries - 1:
-                    time.sleep(retry_delay)
-                else:  
-                    print(f"All retry attempts failed. Last error: {error_msg}")
-                    return [] 
+        return response_json
+        
 
     def create_super_nodes(self, comm_to_nodes: Dict[str, List[str]], level: int = 4, batch_size: int = 5):
         # print(f"Creating super nodes for {len(comm_to_nodes)} communities...")

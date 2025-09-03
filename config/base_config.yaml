@@ -1,12 +1,3 @@
-api:
-  base_url: ""
-  llm_api_key: ""
-  max_retries: 20
-  model: deepseek-v3-0324
-  retry_delay: 1
-  temperature: 0.3
-  timeout: 30
-  use_qwen: false
 construction:
   chunk_size: 1000
   datasets_no_chunk:
@@ -14,8 +5,8 @@ construction:
   - 2wiki
   - musique
   - graphrag-bench
-  - novel
-  - novel_eng
+  - annoy_chs
+  - annoy_eng
   - demo
   max_workers: 32
   mode: agent
@@ -24,42 +15,44 @@ construction:
     embedding_model: all-MiniLM-L6-v2
     enable_fast_mode: true
     struct_weight: 0.3
+    
 datasets:
-  2wiki:
-    corpus_path: data/2wiki/2wikimultihopqa_corpus.json
-    graph_output: output/graphs/2wiki_new.json
-    qa_path: data/2wiki/2wikimultihopqa.json
-    schema_path: schemas/2wiki.json
-  demo:
-    corpus_path: data/demo/demo_corpus.json
-    graph_output: output/graphs/demo_new.json
-    qa_path: data/demo/demo.json
-    schema_path: schemas/demo.json
-  graphrag-bench:
-    corpus_path: data/graphrag-bench-reformat/bench_corpus.json
-    graph_output: output/graphs/graphrag-bench_new.json
-    qa_path: data/graphrag-bench-reformat/graphrag-bench.json
-    schema_path: schemas/graphrag-bench.json
   hotpot:
     corpus_path: data/hotpotqa/hotpotqa_corpus.json
-    graph_output: output/graphs/hotpot_new.json
     qa_path: data/hotpotqa/hotpotqa.json
     schema_path: schemas/hotpot.json
+    graph_output: output/graphs/hotpot_new.json
+  2wiki:
+    corpus_path: data/2wiki/2wikimultihopqa_corpus.json
+    qa_path: data/2wiki/2wikimultihopqa.json
+    schema_path: schemas/2wiki.json
+    graph_output: output/graphs/2wiki_new.json
   musique:
     corpus_path: data/musique/musique_corpus.json
-    graph_output: output/graphs/musique_new.json
     qa_path: data/musique/musique.json
     schema_path: schemas/musique.json
-  novel:
+    graph_output: output/graphs/musique_new.json
+  graphrag-bench:
+    corpus_path: data/graphrag-bench-reformat/bench_corpus.json
+    qa_path: data/graphrag-bench-reformat/graphrag-bench.json
+    schema_path: schemas/graphrag-bench.json
+    graph_output: output/graphs/graphrag-bench_new.json
+  demo:
+    corpus_path: data/demo/demo_corpus.json
+    qa_path: data/demo/demo.json
+    schema_path: schemas/demo.json
+    graph_output: output/graphs/demo_new.json
+  anony_chs:
     corpus_path: data/novels/chs/final_chunk_corpus.json
-    graph_output: output/graphs/novel_new.json
     qa_path: data/novels/chs/final_qa_pairs.json
     schema_path: schemas/novels_chs.json
-  novel_eng:
+    graph_output: output/graphs/novel_new.json
+  anony_eng:
     corpus_path: data/novels/eng/final_chunk_corpus.json
-    graph_output: output/graphs/novel_eng_new.json
     qa_path: data/novels/eng/final_qa_pairs.json
     schema_path: schemas/novels_eng.json
+    graph_output: output/graphs/novel_eng_new.json
+
 embeddings:
   batch_size: 32
   device: cpu
@@ -256,7 +249,7 @@ retrieval:
   enable_query_enhancement: true
   enable_reranking: true
   faiss:
-    device: cuda
+    device: cpu
     max_workers: 4
     search_k: 50
   recall_paths: 2

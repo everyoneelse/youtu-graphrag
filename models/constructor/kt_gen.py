@@ -1,24 +1,24 @@
 import json
 import os
+import threading
 import time
+from concurrent import futures
+from typing import Any, Dict, List, Tuple
+
 import nanoid
 import networkx as nx
 import tiktoken
-import threading
 import json_repair
-import concurrent.futures
-from typing import List, Dict, Any, Tuple
 
-from utils import graph_processor,tree_comm_fast,call_llm_api
 from config import get_config
+from utils import call_llm_api, graph_processor, tree_comm
 
 class KTBuilder:
-    def __init__(self, dataset_name, llm_api_key=None, schema_path=None, mode=None, config=None):
+    def __init__(self, dataset_name, schema_path=None, mode=None, config=None):
         if config is None:
             config = get_config()
         
         self.config = config
-        self.llm_api_key = llm_api_key or config.api.llm_api_key
         self.dataset_name = dataset_name
         self.schema = self.load_schema(schema_path or config.get_dataset_config(dataset_name).schema_path)
         self.graph = nx.MultiDiGraph()
@@ -26,7 +26,7 @@ class KTBuilder:
         self.datasets_no_chunk = config.construction.datasets_no_chunk
         self.token_len = 0
         self.lock = threading.Lock()
-        self.llm_client = call_llm_api.call_llm_api(self.llm_api_key, config.api.use_qwen)
+        self.llm_client = call_llm_api.LLMCompletionCall()
         self.all_chunks = {}
         self.mode = mode or config.construction.mode
 
@@ -111,68 +111,11 @@ class KTBuilder:
         
         print(f"Chunk data saved to {chunk_file} ({len(all_data)} chunks)")
     
-    def _call_llm_api(self, content: str) -> str:  
-        max_retries = self.config.api.max_retries
-        retry_delay = self.config.api.retry_delay
-        timeout = self.config.api.timeout  
-        
-        for attempt in range(max_retries):
-            try:
-                raw_response = self.llm_client.call_llm_api(content)
-                parsed_json = None
-                
-                try:
-                    parsed_json = raw_response.strip("```").strip("json")
-                    json_repair.loads(parsed_json)  
-                    return parsed_json  
-                except Exception as e:
-                    pass
-                    
-                    try:
-                        parsed_dict = json_repair.loads(raw_response)
-                        parsed_json = json.dumps(parsed_dict, ensure_ascii=False)
-                        return parsed_json 
-                    except Exception as e2:
-                        pass
-                        
-                        try:
-                            parsed_json = self.llm_client.call_llm_api(content)
-
-                            json.loads(parsed_json)
-                            return parsed_json  
-                        except Exception as e3:
-                            pass
-
-                            try:
-                                cleaned_response = raw_response
-                                cleaned_response = cleaned_response.replace('\\"', '"').replace('\\n', ' ').replace('\\t', ' ').strip("```").strip("json")
-                                
-                                parsed_dict = json_repair.loads(cleaned_response)
-                                parsed_json = json.dumps(parsed_dict, ensure_ascii=False)
-                                return parsed_json 
-                            except Exception as e4:
-                                pass
-                                return '{"attributes": {}, "triples": []}'
-                
-            except Exception as e:
-                error_msg = str(e)
-                print(f"LLM API call failed (attempt {attempt + 1}/{max_retries}): {error_msg}")
-                
-                if "rate limit" in error_msg.lower() or "429" in error_msg:
-                    wait_time = retry_delay * (2 ** attempt)  
-                    print(f"Rate limit detected, waiting {wait_time} seconds...")
-                    time.sleep(wait_time)
-                elif attempt < max_retries - 1: 
-                    time.sleep(retry_delay)
-                else: 
-                    print(f"All retry attempts failed. Last error: {error_msg}")
-                    return '{"attributes": {}, "triples": []}'
-        
-        return '{"attributes": {}, "triples": []}'
-
     def extract_with_llm(self, prompt: str):
-        response = self._call_llm_api(prompt)
-        return response
+        response = self.llm_client.call_api(prompt)
+        parsed_dict = json_repair.loads(response)
+        parsed_json = json.dumps(parsed_dict, ensure_ascii=False)
+        return parsed_json 
 
     def token_cal(self, text: str):
         encoding = tiktoken.get_encoding("cl100k_base")
@@ -473,11 +416,10 @@ class KTBuilder:
         """Process communities using Tree-Comm algorithm"""
         level2_nodes = [n for n, d in self.graph.nodes(data=True) if d['level'] == 2]
         start_comm = time.time()
-        _tree_comm = tree_comm_fast.FastTreeComm(
+        _tree_comm = tree_comm.FastTreeComm(
             self.graph, 
             embedding_model=self.config.tree_comm.embedding_model,
             struct_weight=self.config.tree_comm.struct_weight,
-            llm_api_key=self.llm_api_key
         )
         comm_to_nodes = _tree_comm.detect_communities(level2_nodes)
 
@@ -547,11 +489,11 @@ class KTBuilder:
         failed_count = 0
         
         try:
-            with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+            with futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
                 # Submit all documents for processing and store futures
                 all_futures = [executor.submit(self.process_document, doc) for doc in documents]
 
-                for i, future in enumerate(concurrent.futures.as_completed(all_futures)):
+                for i, future in enumerate(futures.as_completed(all_futures)):
                     try:
                         future.result()
                         processed_count += 1
