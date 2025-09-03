@@ -160,9 +160,7 @@ def retrieval(datasets):
 
 
 def no_agent_retrieval(graphq, kt_retriever, qa_pairs, schema_path):
-    accuracy = 0
     total_time = 0
-    total_questions = len(qa_pairs)
 
     for qa in qa_pairs:
         all_triples = set()
@@ -184,7 +182,6 @@ def no_agent_retrieval(graphq, kt_retriever, qa_pairs, schema_path):
 
         if len(sub_questions) > 1:
             logging.info("🚀 Using parallel sub-question processing...")
-            start_time = time.time()
             aggregated_results, parallel_time = kt_retriever.process_subquestions_parallel(
                 sub_questions, top_k=config.retrieval.top_k_filter, involved_types=involved_types
             )
@@ -295,19 +292,21 @@ def no_agent_retrieval(graphq, kt_retriever, qa_pairs, schema_path):
 
         logging.info("-"*30)
 
-        # eval_result = evaluator.eval(qa["question"], qa["answer"], answer)
-        # print(f"Eval result: {eval_result}")
-        # if eval_result == "1":
-        #     accuracy += 1
-        # logging.info(f"Eval result: {'Correct' if eval_result == '1' else 'Wrong'}")
-        # logging.info(f"Overall Accuracy: {accuracy/total_questions*100}%")     
-        # logging.info(f"Average time taken: {total_time/total_questions} seconds")
+        accuracy = 0
+        total_questions = len(qa_pairs)
+
+        evaluator = Eval()
+        eval_result = evaluator.eval(qa["question"], qa["answer"], answer)
+        print(f"Eval result: {eval_result}")
+        if eval_result == "1":
+            accuracy += 1
+        logging.info(f"Eval result: {'Correct' if eval_result == '1' else 'Wrong'}")
+        logging.info(f"Overall Accuracy: {accuracy/total_questions*100}%")     
+        logging.info(f"Average time taken: {total_time/total_questions} seconds")
 
 
 def agent_retrieval(graphq, kt_retriever, qa_pairs, schema_path):
-    accuracy = 0
     total_time = 0
-    total_questions = len(qa_pairs)
 
     max_steps = config.retrieval.agent.max_steps 
                     
@@ -343,139 +342,141 @@ def agent_retrieval(graphq, kt_retriever, qa_pairs, schema_path):
         all_chunk_ids.update(retrieved_chunk_ids)
         all_chunk_contents.update(chunk_contents_dict)
     
-    while step <= max_steps:
-        logging.info(f"📝 IRCoT Step {step}/{max_steps}")
+        while step <= max_steps:
+            logging.info(f"📝 IRCoT Step {step}/{max_steps}")
+            
+            dedup_triples = deduplicate_triples(list(all_triples))
+            dedup_chunk_ids = list(set(all_chunk_ids))
+            dedup_chunk_contents = merge_chunk_contents(dedup_chunk_ids, all_chunk_contents)
+            
+            context = "=== Triples ===\n" + "\n".join(dedup_triples)
+            context += "\n=== Chunks ===\n" + "\n".join(dedup_chunk_contents)
+            
+            ircot_prompt = f"""
+                            You are an expert knowledge assistant using iterative retrieval with chain-of-thought reasoning.
+                            
+                            Current Question: {current_query}
+                            
+                            Available Knowledge Context:
+                            {context}
+                            
+                            Previous Thoughts: {' '.join(thoughts) if thoughts else 'None'}
+                            
+                            Step {step}: Please think step by step about what additional information you need to answer the question completely and accurately.
+                            
+                            Instructions:
+                            1. Analyze the current knowledge context and the question
+                            2. Think about what information might be missing or unclear
+                            3. If you have enough information to answer, in the end of your response, write "So the answer is:" followed by your final answer
+                            4. If you need more information, in the end of your response, write a specific query begin with "The new query is:" to retrieve additional relevant information
+                            5. Be specific and focused in your reasoning
+                            
+                            Your reasoning:
+                            """
+            max_retries = 20
+            response = None
+            for retry in range(max_retries):
+                try:
+                    response = kt_retriever.generate_answer(ircot_prompt)
+                    if response and response.strip():
+                        break
+                except Exception as e:
+                    logging.error(f"Error generating IRCoT response (attempt {retry + 1}): {str(e)}")
+                    if retry == max_retries - 1:
+                        response = "Error: Unable to generate reasoning"
+                    time.sleep(1)
+            
+            thoughts.append(response)
+            
+            logs.append({
+                "step": step,
+                "query": current_query,
+                "retrieved_triples_count": len(dedup_triples),
+                "retrieved_chunks_count": len(dedup_chunk_contents),
+                "response": response,
+                "thoughts": thoughts.copy()
+            })
+            
+            logging.info(f"Step {step} response: {response[:100]}...")
+            
+            if "So the answer is:" in response:
+                logging.info("✅ Final answer found, stopping IRCoT")
+                break
+
+            if "The new query is:" in response:
+                new_query = response.split("The new query is:")[1].strip()
+            else:
+                new_query = response
+            
+            if new_query and new_query != current_query:
+                current_query = new_query
+                logging.info(f"🔄 New query for next iteration: {current_query}")
+                
+                retrieval_results, time_taken = kt_retriever.process_retrieval_results(current_query, top_k=config.retrieval.top_k_filter)
+                total_time += time_taken
+                
+                new_triples = retrieval_results.get('triples', []) or []
+                new_chunk_ids = retrieval_results.get('chunk_ids', []) or []
+                new_chunk_contents = retrieval_results.get('chunk_contents', []) or []
+                
+                if isinstance(new_chunk_contents, list):
+                    new_chunk_contents_dict = {}
+                    for i, chunk_id in enumerate(new_chunk_ids):
+                        if i < len(new_chunk_contents):
+                            new_chunk_contents_dict[chunk_id] = new_chunk_contents[i]
+                        else:
+                            new_chunk_contents_dict[chunk_id] = f"[Missing content for chunk {chunk_id}]"
+                else:
+                    new_chunk_contents_dict = new_chunk_contents
+                
+                all_triples.update(new_triples)
+                all_chunk_ids.update(new_chunk_ids)
+                all_chunk_contents.update(new_chunk_contents_dict)
+                
+                logging.info(f"Retrieved {len(new_triples)} new triples, {len(new_chunk_ids)} new chunks")
+            else:
+                logging.info("No new query generated, stopping IRCoT")
+                break
+            
+            step += 1
         
-        dedup_triples = deduplicate_triples(list(all_triples))
-        dedup_chunk_ids = list(set(all_chunk_ids))
-        dedup_chunk_contents = merge_chunk_contents(dedup_chunk_ids, all_chunk_contents)
+        final_context = "=== Final Triples ===\n" + "\n".join(deduplicate_triples(list(all_triples)))
+        final_context += "\n=== Final Chunks ===\n" + "\n".join(merge_chunk_contents(list(set(all_chunk_ids)), all_chunk_contents))
         
-        context = "=== Triples ===\n" + "\n".join(dedup_triples)
-        context += "\n=== Chunks ===\n" + "\n".join(dedup_chunk_contents)
+        final_prompt = kt_retriever.generate_prompt(qa["question"], final_context)
         
-        ircot_prompt = f"""
-                        You are an expert knowledge assistant using iterative retrieval with chain-of-thought reasoning.
-                        
-                        Current Question: {current_query}
-                        
-                        Available Knowledge Context:
-                        {context}
-                        
-                        Previous Thoughts: {' '.join(thoughts) if thoughts else 'None'}
-                        
-                        Step {step}: Please think step by step about what additional information you need to answer the question completely and accurately.
-                        
-                        Instructions:
-                        1. Analyze the current knowledge context and the question
-                        2. Think about what information might be missing or unclear
-                        3. If you have enough information to answer, in the end of your response, write "So the answer is:" followed by your final answer
-                        4. If you need more information, in the end of your response, write a specific query begin with "The new query is:" to retrieve additional relevant information
-                        5. Be specific and focused in your reasoning
-                        
-                        Your reasoning:
-                        """
         max_retries = 20
-        response = None
+        answer = None
         for retry in range(max_retries):
             try:
-                response = kt_retriever.generate_answer(ircot_prompt)
-                if response and response.strip():
+                answer = kt_retriever.generate_answer(final_prompt)
+                if answer and answer.strip():
                     break
             except Exception as e:
-                logging.error(f"Error generating IRCoT response (attempt {retry + 1}): {str(e)}")
+                logging.error(f"Error generating final answer (attempt {retry + 1}): {str(e)}")
                 if retry == max_retries - 1:
-                    response = "Error: Unable to generate reasoning"
+                    answer = "Error: Unable to generate answer"
                 time.sleep(1)
         
-        thoughts.append(response)
+        logging.info(f"========== Original Question: {qa['question']} ==========") 
+        logging.info(f"IRCoT Steps: {len(thoughts)}")
+        logging.info(f"Final Triples: {len(deduplicate_triples(list(all_triples)))}")
+        logging.info(f"Final Chunks: {len(merge_chunk_contents(list(set(all_chunk_ids)), all_chunk_contents))}")
+        logging.info(f"Gold Answer: {qa['answer']}")
+        logging.info(f"Generated Answer: {answer}")
+        logging.info(f"Thought Process: {' | '.join(thoughts)}")
+        logging.info("-"*30)
         
-        logs.append({
-            "step": step,
-            "query": current_query,
-            "retrieved_triples_count": len(dedup_triples),
-            "retrieved_chunks_count": len(dedup_chunk_contents),
-            "response": response,
-            "thoughts": thoughts.copy()
-        })
-        
-        logging.info(f"Step {step} response: {response[:100]}...")
-        
-        if "So the answer is:" in response:
-            logging.info("✅ Final answer found, stopping IRCoT")
-            break
-
-        if "The new query is:" in response:
-            new_query = response.split("The new query is:")[1].strip()
-        else:
-            new_query = response
-        
-        if new_query and new_query != current_query:
-            current_query = new_query
-            logging.info(f"🔄 New query for next iteration: {current_query}")
-            
-            retrieval_results, time_taken = kt_retriever.process_retrieval_results(current_query, top_k=config.retrieval.top_k_filter)
-            total_time += time_taken
-            
-            new_triples = retrieval_results.get('triples', []) or []
-            new_chunk_ids = retrieval_results.get('chunk_ids', []) or []
-            new_chunk_contents = retrieval_results.get('chunk_contents', []) or []
-            
-            if isinstance(new_chunk_contents, list):
-                new_chunk_contents_dict = {}
-                for i, chunk_id in enumerate(new_chunk_ids):
-                    if i < len(new_chunk_contents):
-                        new_chunk_contents_dict[chunk_id] = new_chunk_contents[i]
-                    else:
-                        new_chunk_contents_dict[chunk_id] = f"[Missing content for chunk {chunk_id}]"
-            else:
-                new_chunk_contents_dict = new_chunk_contents
-            
-            all_triples.update(new_triples)
-            all_chunk_ids.update(new_chunk_ids)
-            all_chunk_contents.update(new_chunk_contents_dict)
-            
-            logging.info(f"Retrieved {len(new_triples)} new triples, {len(new_chunk_ids)} new chunks")
-        else:
-            logging.info("No new query generated, stopping IRCoT")
-            break
-        
-        step += 1
-    
-    final_context = "=== Final Triples ===\n" + "\n".join(deduplicate_triples(list(all_triples)))
-    final_context += "\n=== Final Chunks ===\n" + "\n".join(merge_chunk_contents(list(set(all_chunk_ids)), all_chunk_contents))
-    
-    final_prompt = kt_retriever.generate_prompt(qa["question"], final_context)
-    
-    max_retries = 20
-    answer = None
-    for retry in range(max_retries):
-        try:
-            answer = kt_retriever.generate_answer(final_prompt)
-            if answer and answer.strip():
-                break
-        except Exception as e:
-            logging.error(f"Error generating final answer (attempt {retry + 1}): {str(e)}")
-            if retry == max_retries - 1:
-                answer = "Error: Unable to generate answer"
-            time.sleep(1)
-    
-    logging.info(f"========== Original Question: {qa['question']} ==========") 
-    logging.info(f"IRCoT Steps: {len(thoughts)}")
-    logging.info(f"Final Triples: {len(deduplicate_triples(list(all_triples)))}")
-    logging.info(f"Final Chunks: {len(merge_chunk_contents(list(set(all_chunk_ids)), all_chunk_contents))}")
-    logging.info(f"Gold Answer: {qa['answer']}")
-    logging.info(f"Generated Answer: {answer}")
-    logging.info(f"Thought Process: {' | '.join(thoughts)}")
-    logging.info("-"*30)
-    
-    # eval_result = evaluator.eval(qa["question"], qa["answer"], answer)
-    # print(f"Eval result: {eval_result}")
-    # if eval_result == "1":
-    #     accuracy += 1
-    # logging.info(f"Eval result: {'Correct' if eval_result == '1' else 'Wrong'}")
-    
-    # logging.info(f"Overall Accuracy: {accuracy/total_questions*100}%")     
-    # logging.info(f"Average time taken: {total_time/total_questions} seconds")
+        accuracy = 0
+        total_questions = len(qa_pairs)
+        evaluator = Eval()
+        eval_result = evaluator.eval(qa["question"], qa["answer"], answer)
+        print(f"Eval result: {eval_result}")
+        if eval_result == "1":
+            accuracy += 1
+        logging.info(f"Eval result: {'Correct' if eval_result == '1' else 'Wrong'}")
+        logging.info(f"Overall Accuracy: {accuracy/total_questions*100}%")     
+        logging.info(f"Average time taken: {total_time/total_questions} seconds")
 
 
 if __name__ == "__main__":

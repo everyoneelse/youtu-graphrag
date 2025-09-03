@@ -1,11 +1,13 @@
 import time
-from openai import OpenAI
 from collections import Counter
-import utils.call_llm_api as llm_api
+
+from openai import OpenAI
+
+from utils import call_llm_api
 
 class Eval:
-    def __init__(self, llm_api_key):
-        self.llm_api_key = llm_api_key
+    def __init__(self):
+        self.llm_client = call_llm_api.LLMCompletionCall()
         
     def eval(self, question, gold_answer, answer):
         prompt = f"""
@@ -18,6 +20,4 @@ class Eval:
         
         Return only "1" (correct) or "0" (incorrect):
         """
-        pass
-        client = llm_api.call_llm_api(self.llm_api_key, False)
-        return client.call_llm_api(prompt)
+        return self.llm_client.call_api(prompt)
