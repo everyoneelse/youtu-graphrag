@@ -1,19 +1,15 @@
 import json
-import os
 import time
 import warnings
 from collections import defaultdict
-from itertools import combinations
-from typing import Any, Dict, List, Tuple
+from typing import Dict, List
 
 import networkx as nx
 import numpy as np
 import scipy.sparse as sp
 import torch
 import json_repair
-from openai import OpenAI
-from scipy.spatial.distance import cosine
-from sentence_transformers import SentenceTransformer, util
+from sentence_transformers import SentenceTransformer
 from sklearn.cluster import KMeans
 from sklearn.metrics.pairwise import cosine_similarity
 
@@ -87,7 +83,7 @@ class FastTreeComm:
         for node_id in self.node_list:
             self.triple_strings_cache[node_id] = self._get_triple_strings(node_id)
         
-        pass
+        return
 
     def _get_triple_strings(self, node_id):
         """extract all neighbors for one node, enhance the structural perception with 1-hop neighbors"""
@@ -116,7 +112,6 @@ class FastTreeComm:
     
     def get_triple_embeddings_batch(self, node_ids):
         """Batch processing for GPU acceleration with optimized caching"""
-        start_time = time.time()
         uncached_ids = [nid for nid in node_ids if nid not in self.semantic_cache]
         
         if uncached_ids:
@@ -131,7 +126,6 @@ class FastTreeComm:
                 
             for nid, emb in zip(uncached_ids, embeddings):
                 self.semantic_cache[nid] = emb.cpu().numpy()
-        pass
         return np.array([self.semantic_cache[nid] for nid in node_ids])
 
     def _compute_jaccard_matrix_vectorized(self, level_nodes):
@@ -168,7 +162,6 @@ class FastTreeComm:
         
         sim_matrix = (self.struct_weight * structural_sim_matrix + 
                      (1 - self.struct_weight) * semantic_sim_matrix)
-        pass
         return sim_matrix
 
     def _fast_clustering(self, level_nodes, n_clusters=None):
@@ -484,7 +477,6 @@ class FastTreeComm:
             except Exception as e:
                 print(f"Error creating keywords for community {comm_id}: {e}")
         
-        pass
         return super_nodes, keyword_mapping
 
     

@@ -43,15 +43,15 @@ datasets:
     schema_path: schemas/demo.json
     graph_output: output/graphs/demo_new.json
   anony_chs:
-    corpus_path: data/novels/chs/final_chunk_corpus.json
-    qa_path: data/novels/chs/final_qa_pairs.json
-    schema_path: schemas/novels_chs.json
-    graph_output: output/graphs/novel_new.json
+    corpus_path: data/anony_chs/final_chunk_corpus.json
+    qa_path: data/anony_chs/final_qa_pairs.json
+    schema_path: schemas/anony_chs.json
+    graph_output: output/graphs/anony_chs_new.json
   anony_eng:
-    corpus_path: data/novels/eng/final_chunk_corpus.json
-    qa_path: data/novels/eng/final_qa_pairs.json
-    schema_path: schemas/novels_eng.json
-    graph_output: output/graphs/novel_eng_new.json
+    corpus_path: data/anony_eng/final_chunk_corpus.json
+    qa_path: data/anony_eng/final_qa_pairs.json
+    schema_path: schemas/anony_eng.json
+    graph_output: output/graphs/anony_eng_new.json
 
 embeddings:
   batch_size: 32
