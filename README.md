@@ -216,6 +216,8 @@ We welcome contributions from the community! Here's how you can help:
 - **📊 Custom Datasets**: Integrate new datasets with minimal schema intervention
 - **🎯 Domain-Specific Applications**: Extend framework for specialized use cases with 'Best Practice'
 
+## ⭐ **Start using Youtu-GraphRAG now and experience the intelligent question answering!** 🚀
+
 ## 📄 License
 
 This project is licensed under the [MIT License](LICENSE) - see the LICENSE file for details.
@@ -238,7 +240,5 @@ This project is licensed under the [MIT License](LICENSE) - see the LICENSE file
       url={https://arxiv.org/abs/2508.19855}, 
 }
 ```
-
-### ⭐ **Start using Youtu-GraphRAG now and experience the intelligent question answering!** 🚀
 
 <!-- [![GitHub stars](https://img.shields.io/github/stars/youtu-graphrag/youtu-graphrag?style=social)](https://github.com/youtu-graphrag/youtu-graphrag) -->
