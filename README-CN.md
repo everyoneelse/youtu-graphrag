@@ -213,6 +213,8 @@ docker run -d -p 8000:8000 youtu_graphrag:v1
 
 本项目采用 [MIT License](LICENSE) 开源协议，详细条款请参见LICENSE文件。
 
+## ⭐ **立即体验Youtu-GraphRAG，开启智能问答的新篇章！** 🚀
+
 ## 📞 联系我们
 
 **董俊男** - hansonjdong@tencent.com  **安思宇** - siyuan@tencent.com
@@ -231,7 +233,5 @@ docker run -d -p 8000:8000 youtu_graphrag:v1
       url={https://arxiv.org/abs/2508.19855}, 
 }
 ```
-
-### ⭐ **立即体验Youtu-GraphRAG，开启智能问答的新篇章！** 🚀
 
 <!-- [![GitHub stars](https://img.shields.io/github/stars/youtu-graphrag/youtu-graphrag?style=social)](https://github.com/youtu-graphrag/youtu-graphrag) -->
