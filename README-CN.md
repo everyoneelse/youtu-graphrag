@@ -187,9 +187,10 @@ docker run -d -p 8000:8000 youtu_graphrag:v1
 # 4. 访问 http://localhost:8000 体验交互式GraphRAG
 ```
 
-
 ### 📖 完整使用指南
 详细的安装、配置和使用说明请参考：[**🚀 完整指南**](FULLGUIDE.md)
+
+## ⭐ **立即体验Youtu-GraphRAG，开启智能问答的新篇章！** 🚀
 
 ## 🤝 参与贡献
 
@@ -212,8 +213,6 @@ docker run -d -p 8000:8000 youtu_graphrag:v1
 ## 📄 开源协议
 
 本项目采用 [MIT License](LICENSE) 开源协议，详细条款请参见LICENSE文件。
-
-## ⭐ **立即体验Youtu-GraphRAG，开启智能问答的新篇章！** 🚀
 
 ## 📞 联系我们
 
