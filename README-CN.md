@@ -162,9 +162,13 @@ youtu-graphrag/
 
 ### 💻 Web界面体验（推荐）
 ```bash
-# 一键启动
-./setup_env.sh  # 安装环境
-./start.sh      # 启动服务
+# 1. 根据.env.example创建.env文件
+
+# 2. 配置环境
+./setup_env.sh
+
+# 3. 启动服务
+./start.sh
 ```
 访问 http://localhost:8000 体验交互式GraphRAG
 
