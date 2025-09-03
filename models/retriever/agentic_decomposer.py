@@ -13,6 +13,8 @@ class GraphQ:
                 self.config = get_config()
             except:
                 self.config = None
+        else:
+            self.config = config
         self.llm_client = call_llm_api.LLMCompletionCall()
         self.dataset_name = dataset_name
             
