@@ -205,7 +205,7 @@ async def upload_files(files: List[UploadFile] = File(...), client_id: str = "de
             json.dump(corpus_data, f, ensure_ascii=False, indent=2)
         
         # Create dataset configuration
-        await create_dataset_config(dataset_name)
+        await create_dataset_config()
         
         await send_progress_update(client_id, "upload", 100, "Upload completed successfully!")
         
