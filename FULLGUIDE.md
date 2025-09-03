@@ -20,14 +20,11 @@
 <a id="web-interface-quick-experience"></a>
 ## 💻 Web Interface Quick Experience
 
-### Environment Setup
 ```bash
 # One-command installation of all dependencies
 ./setup_env.sh
-```
 
-### Launch Web Service
-```bash
+# Launch Web Service
 ./start.sh
 ```
 **Visit URL:** http://localhost:8000
@@ -71,34 +68,34 @@ cd Youtu-Graphrag
 pip install -r requirements.txt
 
 # 3. Configure API key
-# Edit config/base_config.yaml to set your API key
+# create .env according to .env.example to set your API key
 ```
 
 ### Basic Usage
 ```bash
 # 1. Run with default configuration
-python kt_rag.py --datasets demo
+python main.py --datasets demo
 
 # 2. Specify multiple datasets
-python kt_rag.py --datasets hotpot 2wiki musique
+python main.py --datasets hotpot 2wiki musique
 
 # 3. Use custom configuration file
-python kt_rag.py --config my_config.yaml --datasets demo
+python main.py --config my_config.yaml --datasets demo
 
 # 4. Runtime parameter override
-python kt_rag.py --override '{"retrieval": {"top_k_filter": 50}, "triggers": {"mode": "noagent"}}' --datasets demo
+python main.py --override '{"retrieval": {"top_k_filter": 50}, "triggers": {"mode": "noagent"}}' --datasets demo
 ```
 
 ### Specialized Functions
 ```bash
 # 1. Build knowledge graph only
-python kt_rag.py --override '{"triggers": {"constructor_trigger": true, "retrieve_trigger": false}}' --datasets demo
+python main.py --override '{"triggers": {"constructor_trigger": true, "retrieve_trigger": false}}' --datasets demo
 
 # 2. Execute retrieval only (skip construction)
-python kt_rag.py --override '{"triggers": {"constructor_trigger": false, "retrieve_trigger": true}}' --datasets demo
+python main.py --override '{"triggers": {"constructor_trigger": false, "retrieve_trigger": true}}' --datasets demo
 
 # 3. Performance optimization configuration
-python kt_rag.py --override '{"construction": {"max_workers": 64}, "embeddings": {"batch_size": 64}}' --datasets demo
+python main.py --override '{"construction": {"max_workers": 64}, "embeddings": {"batch_size": 64}}' --datasets demo
 ```
 
 ---
@@ -113,7 +110,7 @@ python kt_rag.py --override '{"construction": {"max_workers": 64}, "embeddings":
 
 ```bash
 # Retrieval related configuration
-python kt_rag.py --override '{
+python main.py --override '{
   "retrieval": {
     "top_k_filter": 30,
     "chunk_similarity_threshold": 0.7,
@@ -122,7 +119,7 @@ python kt_rag.py --override '{
 }' --datasets demo
 
 # Construction related configuration
-python kt_rag.py --override '{
+python main.py --override '{
   "construction": {
     "max_workers": 32,
     "chunk_size": 512,
@@ -131,7 +128,7 @@ python kt_rag.py --override '{
 }' --datasets demo
 
 # Embedding related configuration
-python kt_rag.py --override '{
+python main.py --override '{
   "embeddings": {
     "model_name": "sentence-transformers/all-MiniLM-L6-v2",
     "batch_size": 16,
@@ -140,7 +137,7 @@ python kt_rag.py --override '{
 }' --datasets demo
 
 # LLM related configuration
-python kt_rag.py --override '{
+python main.py --override '{
   "llm": {
     "model": "gpt-3.5-turbo",
     "temperature": 0.7,
@@ -156,7 +153,7 @@ python kt_rag.py --override '{
 **CPU Optimization:**
 ```bash
 # Suitable for CPU environment
-python kt_rag.py --override '{
+python main.py --override '{
   "construction": {"max_workers": 4},
   "embeddings": {"batch_size": 8, "device": "cpu"}
 }' --datasets demo
@@ -165,7 +162,7 @@ python kt_rag.py --override '{
 **GPU Optimization:**
 ```bash
 # Suitable for GPU environment
-python kt_rag.py --override '{
+python main.py --override '{
   "construction": {"max_workers": 16},
   "embeddings": {"batch_size": 64, "device": "cuda"}
 }' --datasets demo
