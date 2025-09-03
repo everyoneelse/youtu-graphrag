@@ -171,9 +171,13 @@ youtu-graphrag/
 
 ### 💻 Web UI Experience
 ```bash
-# one-command to launch the web
-./setup_env.sh  
-./start.sh   
+# 1. create .env.example according to .env
+
+# 2. setup 
+./setup_env.sh
+
+# 3. launch the web
+./start.sh
 ```
 visit http://localhost:8000
 
