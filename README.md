@@ -200,6 +200,8 @@ docker run -d -p 8000:8000 youtu_graphrag:v1
 ### 📖 Full Usage Guide
 For advanced config and usage：[**🚀 FullGuide**](FULLGUIDE.md)
 
+## ⭐ **Start using Youtu-GraphRAG now and experience the intelligent question answering!** 🚀
+
 ## 🤝 Contributing
 
 We welcome contributions from the community! Here's how you can help:
@@ -216,7 +218,6 @@ We welcome contributions from the community! Here's how you can help:
 - **📊 Custom Datasets**: Integrate new datasets with minimal schema intervention
 - **🎯 Domain-Specific Applications**: Extend framework for specialized use cases with 'Best Practice'
 
-## ⭐ **Start using Youtu-GraphRAG now and experience the intelligent question answering!** 🚀
 
 ## 📄 License
 
