@@ -165,91 +165,23 @@ youtu-graphrag/
 | **🌳 Community Detection** | `tree_comm.struct_weight` | Weight to control impacts from topology |
 | **⚡ Performance** | `embeddings.batch_size` | Batch processing size |
 
-<a id="quickstart"></a>
 ## 🚀 Quick Start
 
-### 🛠️ Installation & Environment
-
+### 💻 Web UI Experience
 ```bash
-# 1. Clone project
-git clone <repository-url>
-cd youtu-graphrag
+# one-command to launch the web
+./setup_env.sh  
+./start.sh   
+```
+visit http://localhost:8000
 
-# 2. Install dependencies
-pip install -r requirements.txt
-
-# 3. Configure API key
-# Edit config/base_config.yaml and set your API key
+### 🔧 Basic Command Line Usage
+```bash
+python kt_rag.py --datasets demo
 ```
 
-
-### 🎯 Basic Usage
-
-```bash
-# 1. Run with default configuration
-python main.py --datasets demo
-
-# 2. Specify multiple datasets
-python main.py --datasets hotpot 2wiki musique
-
-# 3. Use custom configuration file
-python main.py --config my_config.yaml --datasets demo
-
-# 4. Runtime parameter override
-python main.py --override '{"retrieval": {"top_k_filter": 50}, "triggers": {"mode": "noagent"}}' --datasets demo
-```
-
-### 🔧 Advanced Usage
-
-```bash
-# 1. Build knowledge graph only
-python main.py --override '{"triggers": {"constructor_trigger": true, "retrieve_trigger": false}}' --datasets demo
-
-# 2. Execute retrieval only (skip construction)
-python main.py --override '{"triggers": {"constructor_trigger": false, "retrieve_trigger": true}}' --datasets demo
-
-# 3. Performance optimization configuration
-python main.py --override '{"construction": {"max_workers": 64}, "embeddings": {"batch_size": 64}}' --datasets demo
-```
-
-<details>
-<summary><strong>🎛️ Configuration Parameter Override Examples</strong></summary>
-
-```bash
-# Adjust retrieval parameters
-python main.py --override '{
-  "retrieval": {
-    "top_k_filter": 30,
-    "recall_paths": 3,
-    "agent": {"max_steps": 8}
-  }
-}' --datasets hotpot
-
-# Adjust Community Detection parameters
-python main.py --override '{
-  "tree_comm": {
-    "struct_weight": 0.5,
-    "embedding_model": "all-mpnet-base-v2"
-  }
-}' --datasets 2wiki
-```
-
-</details>
-
-## 🧪 Complete Workflow Examples
-
-### 📊 End-to-End Workflow
-
-```bash
-# Construction only: Build knowledge graph
-python main.py --override '{"triggers": {"constructor_trigger": true, "retrieve_trigger": false}}' --datasets hotpot 2wiki novel
-
-# Retrieval only: Execute retrieval QA
-python main.py --override '{"triggers": {"constructor_trigger": false, "retrieve_trigger": true}}' --datasets hotpot 2wiki novel
-
-# End-to-end: One-click run (construction + retrieval)
-python main.py --override '{"triggers": {"constructor_trigger": true, "retrieve_trigger": true}}' --datasets hotpot 2wiki novel
-```
+### 📖 Full Usage Guide
+For advanced config and usage：[**🚀 Quick Start**](QUICKSTART.md)
 
 ## 🤝 Contributing
 

@@ -149,7 +149,6 @@ youtu-graphrag/
 
 | 配置类别 | 核心参数 | 功能说明 |
 |---------|---------|---------|
-| **🔑 API配置** | `llm_api_key`, `model`, `temperature` | 大语言模型服务配置 |
 | **🤖 运行模式** | `triggers.mode` | agent(智能体模式)/noagent(基础模式) |
 | **🏗️ 构建设置** | `construction.max_workers` | 图构建时的并发工作线程数 |
 | **🔍 检索设置** | `retrieval.top_k_filter`, `recall_paths` | 检索相关参数 |
@@ -157,98 +156,23 @@ youtu-graphrag/
 | **🌳 社区检测** | `tree_comm.struct_weight` | 结构权重系数 |
 | **⚡ 性能优化** | `embeddings.batch_size` | 嵌入向量批处理大小 |
 
-<a id="quickstart"></a>
 ## 🚀 快速开始
 
-### 🛠️ 环境准备与安装
-
+### 💻 Web界面体验（推荐）
 ```bash
-# 1. 克隆代码仓库
-git clone <repository-url>
-cd youtu-graphrag
+# 一键启动
+./setup_env.sh  # 安装环境
+./start.sh      # 启动服务
+```
+访问 http://localhost:8000 体验交互式GraphRAG
 
-# 2. 安装项目依赖
-pip install -r requirements.txt
-
-# 3. 配置API密钥
-# 编辑 config/base_config.yaml 文件，设置您的API密钥
+### 🔧 基础命令行使用
+```bash
+python main.py --datasets demo
 ```
 
-### 🎯 基础使用
-
-```bash
-# 1. 使用默认配置运行
-python kt_rag.py --datasets demo
-
-# 2. 同时处理多个数据集
-python kt_rag.py --datasets hotpot 2wiki musique
-
-# 3. 使用自定义配置文件
-python kt_rag.py --config my_config.yaml --datasets demo
-
-# 4. 运行时覆盖配置参数
-python kt_rag.py --override '{"retrieval": {"top_k_filter": 50}, "triggers": {"mode": "noagent"}}' --datasets demo
-```
-
-### 🔧 高级使用技巧
-
-```bash
-# 1. 仅构建知识图谱（不执行检索）
-python kt_rag.py --override '{"triggers": {"constructor_trigger": true, "retrieve_trigger": false}}' --datasets demo
-
-# 2. 仅执行检索任务（跳过图构建）
-python kt_rag.py --override '{"triggers": {"constructor_trigger": false, "retrieve_trigger": true}}' --datasets demo
-
-# 3. 启用性能优化配置
-python kt_rag.py --override '{"construction": {"max_workers": 64}, "embeddings": {"batch_size": 64}}' --datasets demo
-```
-
-<details>
-<summary><strong>🎛️ 配置参数覆盖示例</strong></summary>
-
-```bash
-# 调整检索相关参数
-python kt_rag.py --override '{
-  "retrieval": {
-    "top_k_filter": 30,
-    "recall_paths": 3,
-    "agent": {"max_steps": 8}
-  }
-}' --datasets hotpot
-
-# 调整API相关参数
-python kt_rag.py --override '{
-  "api": {
-    "temperature": 0.1,
-    "max_retries": 10
-  }
-}' --datasets novel_eng
-
-# 调整社区检测参数
-python kt_rag.py --override '{
-  "tree_comm": {
-    "struct_weight": 0.5,
-    "embedding_model": "all-mpnet-base-v2"
-  }
-}' --datasets 2wiki
-```
-
-</details>
-
-## 🧪 完整工作流示例
-
-### 📊 端到端处理流程
-
-```bash
-# 构建阶段：仅构建知识图谱
-python kt_rag.py --override '{"triggers": {"constructor_trigger": true, "retrieve_trigger": false}}' --datasets hotpot 2wiki novel
-
-# 检索阶段：仅执行检索问答
-python kt_rag.py --override '{"triggers": {"constructor_trigger": false, "retrieve_trigger": true}}' --datasets hotpot 2wiki novel
-
-# 完整流程：一键运行构建和检索全过程
-python kt_rag.py --override '{"triggers": {"constructor_trigger": true, "retrieve_trigger": true}}' --datasets hotpot 2wiki novel
-```
+### 📖 完整使用指南
+详细的安装、配置和使用说明请参考：[**🚀 完整指南**](FULLGUIDE.md)
 
 ## 🤝 参与贡献
 
