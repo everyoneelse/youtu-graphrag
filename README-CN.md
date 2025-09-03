@@ -159,23 +159,34 @@ youtu-graphrag/
 <a id="quickstart"></a>
 
 ## 🚀 快速开始
+我们提供两种方式来运行并体验示例服务。
 
-### 💻 Web界面体验（推荐）
+### 💻 直接启动Web服务体验交互式界面
 ```bash
-# 1. 根据.env.example创建.env文件
+# 1. 创建 .env 文件
 
-# 2. 配置环境
+# 2. 配置环境 
 ./setup_env.sh
 
 # 3. 启动服务
 ./start.sh
-```
-访问 http://localhost:8000 体验交互式GraphRAG
 
-### 🔧 基础命令行使用
-```bash
-python main.py --datasets demo
+# 4. 访问 http://localhost:8000 体验交互式GraphRAG
 ```
+
+### 💻 通过docker环境启动
+```bash
+# 1. 创建 .env 文件
+
+# 2. 通过dockerfile文件构建镜像
+docker build -t youtu_graphrag:v1 -f ./docker/Dockerfile .
+
+# 3. 启动docker容器
+docker run -d -p 8000:8000 youtu_graphrag:v1
+
+# 4. 访问 http://localhost:8000 体验交互式GraphRAG
+```
+
 
 ### 📖 完整使用指南
 详细的安装、配置和使用说明请参考：[**🚀 完整指南**](FULLGUIDE.md)
