@@ -5,7 +5,8 @@
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Documentation](https://img.shields.io/badge/paper-latest-blue.svg)](Youtu-GraphRAG.pdf)
-[![Tencent Youtu Lab GraphRAG Comunity](https://img.shields.io/badge/Youtu--_-GraphRAG_Community-8A2BE2)](assets/wechat.jpg)
+[![WeChat Community](https://img.shields.io/badge/Youtu--_-WeChat-32CD32)](assets/wechat.jpg)
+[![Discord](https://img.shields.io/badge/Youtu--_-Discord-8A2BE2)](https://discord.gg/svwuqgUx)
 
 *🚀 Revolutionary framework moving Pareto Frontier with 90.71% lower token cost and 16.62% higher accuracy over SOTA baselines*
 
