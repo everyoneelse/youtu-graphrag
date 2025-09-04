@@ -125,7 +125,7 @@ youtu-graphrag/
 │   └── └── faiss_filter.py           # DualFAISSRetriever - FAISS检索器
 │
 ├── 📁 utils/                      # 工具模块
-│   ├── tree_comm_fast.py          # 社区检测算法
+│   ├── tree_comm.py               # 社区检测算法
 │   ├── call_llm_api.py            # 大语言模型API调用
 │   ├── eval.py                    # 评估工具
 │   └── graph_processor.py         # 图处理工具
@@ -140,7 +140,7 @@ youtu-graphrag/
 │
 ├── 📁 retriever/                  # 检索缓存
 │
-├── main.py                     # 🎯 主程序入口
+├── main.py                       # 🎯 主程序入口
 ├── requirements.txt              # 依赖包列表
 └── README.md                     # 项目文档
 ```
@@ -167,6 +167,10 @@ youtu-graphrag/
 git clone https://github.com/TencentCloudADP/Youtu-GraphRAG
 
 # 2. 按照.env.example文件格式创建 .env
+cd Youtu-GraphRAG && touch .env
+# LLM_MODEL=deepseek-chat
+# LLM_BASE_URL=https://api.deepseek.com
+# LLM_API_KEY=sk-xxxxxx
 
 # 3. 配置环境 
 ./setup_env.sh

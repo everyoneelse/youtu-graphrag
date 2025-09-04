@@ -134,7 +134,7 @@ youtu-graphrag/
 │   └── └── faiss_filter.py           # DualFAISSRetriever - FAISS retrieval
 │
 ├── 📁 utils/                      # Utility Modules
-│   ├── tree_comm_fast.py         # community detection algorithm
+│   ├── tree_comm.py              # community detection algorithm
 │   ├── call_llm_api.py           # LLM API calling
 │   ├── eval.py                   # Evaluation tools
 │   └── graph_processor.py        # Graph processing tools
@@ -176,6 +176,10 @@ We provide two approaches to run and experience the demo service.
 git clone https://github.com/TencentCloudADP/Youtu-GraphRAG
 
 # 2. Create .env according to .env.example
+cd Youtu-GraphRAG && touch .env
+# LLM_MODEL=deepseek-chat
+# LLM_BASE_URL=https://api.deepseek.com
+# LLM_API_KEY=sk-xxxxxx
 
 # 3. Setup environment
 ./setup_env.sh
