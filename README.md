@@ -21,6 +21,12 @@
 A skeched overview of our proposed framework Youtu-GraphRAG.
 </div>
 
+## 📲 Interactive interface
+
+<img src="assets/dashboard_demo.png" alt="Dashboard" width="30%"/>
+<img src="assets/graph_demo.png" alt="Graph Construction" width="30%"/>
+<img src="assets/retrieval_demo.png" alt="Retrieval" width="30%"/>
+
 
 ## 🎯 Brief Introduction
 

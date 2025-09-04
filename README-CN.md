@@ -20,6 +20,12 @@
 Youtu-GraphRAG框架概览
 </div>
 
+## 📲 交互式体验界面
+
+<img src="assets/dashboard_demo.png" alt="Dashboard" width="30%"/>
+<img src="assets/graph_demo.png" alt="Graph Construction" width="30%"/>
+<img src="assets/retrieval_demo.png" alt="Retrieval" width="30%"/>
+
 ## 🎯 项目简介
 
 <table>
