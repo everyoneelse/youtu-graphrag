@@ -47,8 +47,8 @@ A skeched overview of our proposed framework Youtu-GraphRAG.
 </table>
 
 <div align="center">
-<img src="assets/performance.png" alt="Cost/acc performance" width="60%"/>
-<img src="assets/radar.png" alt="radar comparison" width="40%"/>
+<img src="assets/performance.png" alt="Cost/acc performance" width="55%"/>
+<img src="assets/radar.png" alt="radar comparison" width="35%"/>
 </div>
 
 ### 🎨 When to use Youtu-GraphRAG: Main Application Scenarios
@@ -58,7 +58,7 @@ A skeched overview of our proposed framework Youtu-GraphRAG.
 🌐 Domain Scalability: Easily support novels, encyclopedias, academic papers, personal knowledge base, private/commercial knowledge base and other domains with minimal intervention on the schema<br>
 
 <a id="contributions"></a>
-## 🚀 Contributions and Novely
+## 🚀 Contributions and Novelty
 
 Based on our unified agentic paradigm for Graph Retrieval-Augmented Generation (GraphRAG), Youtu-GraphRAG introduces several key innovations that jointly connect the entire framework as an intricate integration:
 
@@ -197,7 +197,7 @@ cd Youtu-GraphRAG && touch .env
 ./start.sh
 
 # 5. Visit http://localhost:8000
-curl -v http://127.0.0.1:8000
+curl -v http://localhost:8000
 ```
 
 ### 💻 Start with dockerfile

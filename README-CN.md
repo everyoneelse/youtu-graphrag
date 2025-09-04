@@ -46,8 +46,8 @@ Youtu-GraphRAG框架概览
 </table>
 
 <div align="center">
-<img src="assets/performance.png" alt="成本精度性能对比" width="45%"/>
-<img src="assets/radar.png" alt="雷达图对比" width="25%"/>
+<img src="assets/performance.png" alt="成本精度性能对比" width="55%"/>
+<img src="assets/radar.png" alt="雷达图对比" width="35%"/>
 </div>
 
 ### 🎨 Youtu-GraphRAG三大落地场景
@@ -189,7 +189,7 @@ cd Youtu-GraphRAG && touch .env
 ./start.sh
 
 # 5. 访问 http://localhost:8000 体验Youtu-GraphRAG
-curl -v http://127.0.0.1:8000
+curl -v http://localhost:8000
 ```
 
 ### 💻 通过docker环境启动
