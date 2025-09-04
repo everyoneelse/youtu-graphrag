@@ -17,7 +17,7 @@
 ## 🏗️ Framework Architecture
 
 <div align="center">
-<img src="assets/framework.png" alt="Youtu-GraphRAG Framework Architecture" width="70%"/><br>
+<img src="assets/framework.png" alt="Youtu-GraphRAG Framework Architecture" width="95%"/><br>
 A skeched overview of our proposed framework Youtu-GraphRAG.
 </div>
 
@@ -47,8 +47,8 @@ A skeched overview of our proposed framework Youtu-GraphRAG.
 </table>
 
 <div align="center">
-<img src="assets/performance.png" alt="Cost/acc performance" width="55%"/>
-<img src="assets/radar.png" alt="radar comparison" width="30%"/>
+<img src="assets/performance.png" alt="Cost/acc performance" width="64%"/>
+<img src="assets/radar.png" alt="radar comparison" width="31%"/>
 </div>
 
 ### 🎨 When to use Youtu-GraphRAG: Main Application Scenarios
