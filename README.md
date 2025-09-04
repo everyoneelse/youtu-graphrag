@@ -223,7 +223,8 @@ curl -v http://localhost:8000
 ### 📖 Full Usage Guide
 For advanced config and usage：[**🚀 FullGuide**](FULLGUIDE.md)
 
-## ⭐ **Start using Youtu-GraphRAG now and experience the intelligent question answering!** 🚀
+### ⭐ **Start using Youtu-GraphRAG now and experience the intelligent question answering!** 🚀
+
 
 ## 🤝 Contributing
 
