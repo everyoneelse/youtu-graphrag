@@ -192,6 +192,10 @@ git clone https://github.com/TencentCloudADP/Youtu-GraphRAG
 git clone https://github.com/TencentCloudADP/Youtu-GraphRAG
 
 # 2. Create .env according to .env.example
+cd Youtu-GraphRAG && touch .env
+# LLM_MODEL=deepseek-chat
+# LLM_BASE_URL=https://api.deepseek.com
+# LLM_API_KEY=sk-xxxxxx
 
 # 3. Build with dockerfile 
 docker build -t youtu_graphrag:v1 .
