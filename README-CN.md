@@ -5,7 +5,7 @@
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Documentation](https://img.shields.io/badge/paper-latest-blue.svg)](Youtu-GraphRAG.pdf)
-[![腾讯优图实验室 GraphRAG 社区](https://img.shields.io/badge/Youtu--_-GraphRAG_Community-8A2BE2)](assets/wechat.png)
+[![腾讯优图实验室 GraphRAG 社区](https://img.shields.io/badge/Youtu--_-GraphRAG_Community-8A2BE2)](assets/wechat.jpg)
 
 *🚀 重新定义图检索增强推理范式，以90.71%的Token成本节约和16.62%的精度提升实现帕累托改进*
 
