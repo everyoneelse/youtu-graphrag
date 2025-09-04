@@ -16,7 +16,7 @@
 ## 🏗️ 框架架构
 
 <div align="center">
-<img src="assets/framework.png" alt="Youtu-GraphRAG框架架构图" width="60%"/><br>
+<img src="assets/framework.png" alt="Youtu-GraphRAG框架架构图" width="95%"/><br>
 Youtu-GraphRAG框架概览
 </div>
 
@@ -46,8 +46,8 @@ Youtu-GraphRAG框架概览
 </table>
 
 <div align="center">
-<img src="assets/performance.png" alt="成本精度性能对比" width="55%"/>
-<img src="assets/radar.png" alt="雷达图对比" width="35%"/>
+<img src="assets/performance.png" alt="成本精度性能对比" width="64%"/>
+<img src="assets/radar.png" alt="雷达图对比" width="31%"/>
 </div>
 
 ### 🎨 Youtu-GraphRAG三大落地场景
@@ -209,8 +209,8 @@ docker build -t youtu_graphrag:v1 .
 # 4. 启动docker容器
 docker run -d -p 8000:8000 youtu_graphrag:v1
 
-# 5. 访问 http://127.0.0.1:8000 体验Youtu-GraphRAG
-curl -v http://127.0.0.1:8000
+# 5. 访问 http://localhost:8000 体验Youtu-GraphRAG
+curl -v http://localhost:8000
 ```
 
 ### 📖 完整使用指南
