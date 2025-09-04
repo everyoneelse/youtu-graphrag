@@ -30,17 +30,15 @@ A skeched overview of our proposed framework Youtu-GraphRAG.
 </div>
 
 ## 🎯 Brief Introduction
+**Youtu-GraphRAG** is a vertically unified agentic paradigm that jointly connects the entire framework as an intricate integration based on graph schema. We allow seamless domain transfer with minimal intervention on the graph schema, providing insights of the next evolutionary GraphRAG paradigm for real-world applications with remarkable adaptability.
 
 <table>
 <tr>
-<td width="30%">
+<td width="40%">
 <img src="assets/pareto.png" alt="Moving Pareto Frontier" width="100%"/>
 </td>
 <td width="70%">
-
-**Youtu-GraphRAG** is a vertically unified agentic paradigm that jointly connects the entire framework as an intricate integration based on graph schema. We allow seamless domain transfer with minimal intervention on the graph schema, providing insights of the next evolutionary GraphRAG paradigm for real-world applications with remarkable adaptability.
-
-📊 **Results**: Extensive experiments across six challenging benchmarks demonstrate the robustness of Youtu-GraphRAG, remarkably moving the Pareto frontier with up to **90.71% saving of token costs** and **16.62% higher accuracy** over state-of-the-art baselines. The results indicate our adaptability, allowing seamless domain transfer with minimal intervention on schema.
+📊 **Performance**: Extensive experiments across six challenging benchmarks demonstrate the robustness of Youtu-GraphRAG, remarkably moving the Pareto frontier with up to **90.71% saving of token costs** and **16.62% higher accuracy** over state-of-the-art baselines. The results indicate our adaptability, allowing seamless domain transfer with minimal intervention on schema.
 
 </td>
 </tr>
@@ -104,12 +102,11 @@ Based on our unified agentic paradigm for Graph Retrieval-Augmented Generation (
 
 
 <summary><strong>📈 5. Fair Anonymous Dataset 'AnonyRAG'</strong></summary>
-<details>
+
 - Link: [Hugging Face AnonyRAG](https://huggingface.co/datasets/Youtu-Graph/AnonyRAG)
 - **Against knowledeg leakage in LLM/embedding model pretraining**
 - **In-depth test on real retrieval performance of GraphRAG**
 - **Multi-lingual with Chinese and English versions**
-</details>
 
 
 <summary><strong>⚙️ 6. Unified Configuration Management</strong></summary>
