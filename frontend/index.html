@@ -1261,8 +1261,8 @@
 
         async function constructGraph(datasetName) {
             try {
-                showMessage('Starting graph construction...', 'info');
-                await new Promise(resolve => setTimeout(resolve, 5000));
+                showMessage('Starting graph construction...', 'info', {color: '#ffffff', bgColor: '#2c3e50'});    // 深蓝背景 (推荐色);
+                await new Promise(resolve => setTimeout(resolve, 8000));
                 const response = await axios.post(`${API_BASE}/api/construct-graph`, {
                     dataset_name: datasetName,
                     client_id: 'web_client'
