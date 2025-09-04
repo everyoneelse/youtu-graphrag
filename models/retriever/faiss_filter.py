@@ -1,15 +1,16 @@
+import json
+import os
+import time
+from collections import defaultdict
+from itertools import combinations
+from typing import Dict, List, Set, Tuple
+
 import faiss
-import numpy as np
 import networkx as nx
+import numpy as np
 import torch
 import torch.nn.functional as F
 from sentence_transformers import SentenceTransformer
-from typing import List, Dict, Tuple, Set
-import os
-import json
-from collections import defaultdict
-from itertools import combinations
-import time
 
 class DualFAISSRetriever:
     def __init__(self, dataset, graph: nx.MultiDiGraph, model_name: str = "all-MiniLM-L6-v2", cache_dir: str = "retriever/faiss_cache_new", device: str = None):
@@ -583,7 +584,6 @@ class DualFAISSRetriever:
             
             # Save using torch.save with tensor format for better compatibility
             try:
-                # 转换为tensor格式保存，避免numpy序列化问题
                 tensor_cache = {}
                 for node, embed_array in numpy_cache.items():
                     if isinstance(embed_array, np.ndarray):
@@ -621,13 +621,10 @@ class DualFAISSRetriever:
                 
                 # 兼容PyTorch 2.6+的weights_only参数
                 try:
-                    # 首先尝试使用weights_only=False（兼容旧格式）
                     cpu_cache = torch.load(cache_path, map_location='cpu', weights_only=False)
                 except TypeError:
-                    # 如果PyTorch版本不支持weights_only参数，使用旧方式
                     cpu_cache = torch.load(cache_path, map_location='cpu')
                 except Exception as e:
-                    # 如果加载失败，尝试允许特定的numpy全局对象
                     if "numpy.core.multiarray._reconstruct" in str(e):
                         try:
                             import torch.serialization
