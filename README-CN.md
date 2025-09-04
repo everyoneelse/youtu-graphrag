@@ -179,6 +179,7 @@ cd Youtu-GraphRAG && touch .env
 ./start.sh
 
 # 5. 访问 http://localhost:8000 体验Youtu-GraphRAG
+curl -v http://127.0.0.1:8000
 ```
 
 ### 💻 通过docker环境启动
@@ -198,7 +199,8 @@ docker build -t youtu_graphrag:v1 .
 # 4. 启动docker容器
 docker run -d -p 8000:8000 youtu_graphrag:v1
 
-# 5. 访问 http://localhost:8000 体验Youtu-GraphRAG
+# 5. 访问 http://127.0.0.1:8000 体验Youtu-GraphRAG
+curl -v http://127.0.0.1:8000
 ```
 
 ### 📖 完整使用指南

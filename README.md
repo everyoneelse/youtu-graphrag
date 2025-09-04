@@ -188,6 +188,7 @@ cd Youtu-GraphRAG && touch .env
 ./start.sh
 
 # 5. Visit http://localhost:8000
+curl -v http://127.0.0.1:8000
 ```
 
 ### 💻 Start with dockerfile
@@ -207,7 +208,8 @@ docker build -t youtu_graphrag:v1 .
 # 4. Docker run
 docker run -d -p 8000:8000 youtu_graphrag:v1
 
-# 5. Visit http://localhost:8000
+# 5. Visit http://127.0.0.1:8000
+curl -v http://127.0.0.1:8000
 ```
 
 
