@@ -47,8 +47,8 @@ A skeched overview of our proposed framework Youtu-GraphRAG.
 </table>
 
 <div align="center">
-<img src="assets/performance.png" alt="Cost/acc performance" width="51.6%"/>
-<img src="assets/radar.png" alt="radar comparison" width="25%"/>
+<img src="assets/performance.png" alt="Cost/acc performance" width="60%"/>
+<img src="assets/radar.png" alt="radar comparison" width="40%"/>
 </div>
 
 ### 🎨 When to use Youtu-GraphRAG: Main Application Scenarios
