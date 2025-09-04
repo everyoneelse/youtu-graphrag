@@ -24,12 +24,10 @@
         body {
             font-family: 'Comic Neue', 'Comic Sans MS', cursive, sans-serif;
             background: 
-                linear-gradient(90deg, #4facfe 0%, #667eea 25%, #667eea 50%, #764ba2 75%, #9c27b0 100%),
-                linear-gradient(45deg, rgba(79, 172, 254, 0.6) 0%, rgba(102, 126, 234, 0.5) 50%, rgba(156, 39, 176, 0.6) 100%);
-            background-blend-mode: soft-light;
+                linear-gradient(135deg, #a8c8ec 0%, #e6f3ff 25%, #e6f3ff 75%, #b8d4f0 100%),
+                linear-gradient(45deg, #4a90e2 0%, #6b73ff 50%, #9bb5ff 100%);
+            background-blend-mode: multiply;
             background-attachment: fixed;
-            background-size: 200% 200%;
-            animation: gradientShift 25s ease-in-out infinite;
             min-height: 100vh;
             color: rgba(255, 255, 255, 0.95);
             overflow-x: hidden;
@@ -45,11 +43,11 @@
             width: 100%;
             height: 100%;
             background: 
-                radial-gradient(circle at 25% 75%, rgba(79, 172, 254, 0.2) 0%, transparent 50%),
-                radial-gradient(circle at 75% 25%, rgba(156, 39, 176, 0.25) 0%, transparent 55%),
-                radial-gradient(circle at 50% 50%, rgba(102, 126, 234, 0.1) 0%, transparent 40%);
+                radial-gradient(circle at 20% 80%, rgba(168, 200, 236, 0.3) 0%, transparent 60%),
+                radial-gradient(circle at 80% 20%, rgba(182, 212, 240, 0.3) 0%, transparent 60%),
+                radial-gradient(circle at 40% 40%, rgba(230, 243, 255, 0.2) 0%, transparent 60%);
             z-index: -1;
-            animation: backgroundFloat 30s ease-in-out infinite;
+            animation: backgroundFloat 25s ease-in-out infinite;
         }
 
         @keyframes backgroundFloat {
@@ -319,7 +317,7 @@
         .upload-icon {
             font-size: 64px;
             margin-bottom: 20px;
-            background: linear-gradient(45deg, #4facfe, #667eea, #9c27b0);
+            background: linear-gradient(45deg, #6b73ff, #9bb5ff, #a8c8ec);
             background-clip: text;
             -webkit-background-clip: text;
             -webkit-text-fill-color: transparent;
@@ -373,21 +371,21 @@
         }
 
         .btn-primary {
-            background: linear-gradient(135deg, #4facfe 0%, #667eea 50%, #9c27b0 100%);
+            background: linear-gradient(135deg, #4a90e2 0%, #6b73ff 50%, #9bb5ff 100%);
             background-size: 200% 200%;
-            animation: gradientMove 6s ease-in-out infinite;
+            animation: gradientMove 3s ease infinite;
         }
 
         .btn-secondary {
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 50%, #4facfe 100%);
+            background: linear-gradient(135deg, #a8c8ec 0%, #b8d4f0 50%, #e6f3ff 100%);
             background-size: 200% 200%;
-            animation: gradientMove 7s ease-in-out infinite;
+            animation: gradientMove 4s ease infinite;
         }
 
         .btn-danger {
-            background: linear-gradient(135deg, #9c27b0 0%, #764ba2 50%, #667eea 100%);
+            background: linear-gradient(135deg, #6b73ff 0%, #4a90e2 50%, #9bb5ff 100%);
             background-size: 200% 200%;
-            animation: gradientMove 6.5s ease-in-out infinite;
+            animation: gradientMove 3.5s ease infinite;
         }
 
         @keyframes gradientMove {
@@ -500,7 +498,7 @@
 
         .progress-fill {
             height: 100%;
-            background: linear-gradient(45deg, #667eea, #764ba2);
+            background: linear-gradient(45deg, #6b73ff, #9bb5ff);
             transition: width 0.3s ease;
             width: 0%;
         }
@@ -777,7 +775,7 @@
         .stat-number {
             font-size: 2em;
             font-weight: 700;
-            color: #667eea;
+            color: #6b73ff;
             margin-bottom: 8px;
         }
 
@@ -836,7 +834,7 @@
 
         .answer-content {
             background: rgba(255, 255, 255, 0.05);
-            border-left: 4px solid #667eea;
+            border-left: 4px solid #6b73ff;
             padding: 20px;
             border-radius: 8px;
             margin: 20px 0;
@@ -1275,13 +1273,58 @@
 
         async function constructGraph(datasetName) {
             try {
-                showMessage('Starting graph construction...', 'info', {color: '#ffffff', bgColor: '#2c3e50'});    // 深蓝背景 (推荐色);
-                await new Promise(resolve => setTimeout(resolve, 8000));
+                showMessage('Starting graph construction...', 'info');
+                
+                // 建立WebSocket连接来接收实时进展
+                const ws = new WebSocket(`ws://${window.location.host}/ws/web_client`);
+                let progressMessages = [];
+                
+                ws.onopen = function() {
+                    console.log('WebSocket connected for progress updates');
+                };
+                
+                ws.onmessage = function(event) {
+                    try {
+                        const data = JSON.parse(event.data);
+                        if (data.type === 'progress') {
+                            progressMessages.push(data.message);
+                            showMessage(`[${progressMessages.length}] ${data.message}`, 'info');
+                        } else if (data.type === 'complete') {
+                            showMessage('Graph construction completed!', 'success');
+                            ws.close();
+                        } else if (data.type === 'error') {
+                            showMessage(`Construction error: ${data.message}`, 'error');
+                            ws.close();
+                        }
+                    } catch (e) {
+                        console.log('Progress update:', event.data);
+                    }
+                };
+                
+                ws.onerror = function(error) {
+                    console.log('WebSocket error:', error);
+                };
+                
+                ws.onclose = function() {
+                    console.log('WebSocket connection closed');
+                };
+                
+                // 发送构图请求
                 const response = await axios.post(`${API_BASE}/api/construct-graph`, {
                     dataset_name: datasetName,
                     client_id: 'web_client'
                 });
-                showMessage('Graph constructed successfully!', 'success');
+                
+                // 如果没有WebSocket消息，等待一段时间后关闭连接
+                setTimeout(() => {
+                    if (ws.readyState === WebSocket.OPEN) {
+                        ws.close();
+                        if (progressMessages.length === 0) {
+                            showMessage('Graph construction completed!', 'success');
+                        }
+                    }
+                }, 30000); // 30秒超时
+                
                 refreshData();
             } catch (error) {
                 console.error('Construction failed:', error);
@@ -1296,10 +1339,55 @@
             
             try {
                 showMessage('正在重新构建图谱...', 'info');
+                
+                // 建立WebSocket连接来接收实时进展
+                const ws = new WebSocket(`ws://${window.location.host}/ws/web_client`);
+                let progressMessages = [];
+                
+                ws.onopen = function() {
+                    console.log('WebSocket connected for reconstruction progress updates');
+                };
+                
+                ws.onmessage = function(event) {
+                    try {
+                        const data = JSON.parse(event.data);
+                        if (data.type === 'progress') {
+                            progressMessages.push(data.message);
+                            showMessage(`[重构 ${progressMessages.length}] ${data.message}`, 'info');
+                        } else if (data.type === 'complete') {
+                            showMessage('图谱重构完成!', 'success');
+                            ws.close();
+                        } else if (data.type === 'error') {
+                            showMessage(`重构错误: ${data.message}`, 'error');
+                            ws.close();
+                        }
+                    } catch (e) {
+                        console.log('Reconstruction progress update:', event.data);
+                    }
+                };
+                
+                ws.onerror = function(error) {
+                    console.log('WebSocket error:', error);
+                };
+                
+                ws.onclose = function() {
+                    console.log('WebSocket connection closed');
+                };
+                
                 const response = await axios.post(`${API_BASE}/api/datasets/${datasetName}/reconstruct`, {}, {
                     params: { client_id: 'web_client' }
                 });
-                showMessage('图谱重构成功!', 'success');
+                
+                // 如果没有WebSocket消息，等待一段时间后关闭连接
+                setTimeout(() => {
+                    if (ws.readyState === WebSocket.OPEN) {
+                        ws.close();
+                        if (progressMessages.length === 0) {
+                            showMessage('图谱重构完成!', 'success');
+                        }
+                    }
+                }, 30000); // 30秒超时
+                
                 refreshData();
             } catch (error) {
                 console.error('Reconstruction failed:', error);

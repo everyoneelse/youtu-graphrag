@@ -23,10 +23,11 @@ A skeched overview of our proposed framework Youtu-GraphRAG.
 
 ## 📲 Interactive interface
 
+<div align="center">
 <img src="assets/dashboard_demo.png" alt="Dashboard" width="30%"/>
 <img src="assets/graph_demo.png" alt="Graph Construction" width="30%"/>
 <img src="assets/retrieval_demo.png" alt="Retrieval" width="30%"/>
-
+</div>
 
 ## 🎯 Brief Introduction
 
@@ -45,8 +46,10 @@ A skeched overview of our proposed framework Youtu-GraphRAG.
 </tr>
 </table>
 
+<div align="center">
 <img src="assets/performance.png" alt="Cost/acc performance" width="51.6%"/>
 <img src="assets/radar.png" alt="radar comparison" width="25%"/>
+</div>
 
 ### 🎨 When to use Youtu-GraphRAG: Main Application Scenarios
 
