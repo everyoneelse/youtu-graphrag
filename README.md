@@ -104,13 +104,11 @@ Based on our unified agentic paradigm for Graph Retrieval-Augmented Generation (
 
 
 <summary><strong>📈 5. Fair Anonymous Dataset 'AnonyRAG'</strong></summary>
-
+<details>
 - Link: [Hugging Face AnonyRAG](https://huggingface.co/datasets/Youtu-Graph/AnonyRAG)
 - **Against knowledeg leakage in LLM/embedding model pretraining**
 - **In-depth test on real retrieval performance of GraphRAG**
 - **Multi-lingual with Chinese and English versions**
-
-
 </details>
 
 
