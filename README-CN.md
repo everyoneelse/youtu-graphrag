@@ -5,8 +5,8 @@
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Documentation](https://img.shields.io/badge/paper-latest-blue.svg)](Youtu-GraphRAG.pdf)
-[![WeChat Community](https://img.shields.io/badge/Youtu--_-WeChat-32CD32)](assets/wechat.jpg)
-[![Discord](https://img.shields.io/badge/Youtu--_-Discord-8A2BE2)](https://discord.gg/svwuqgUx)
+[![WeChat Community](https://img.shields.io/badge/Community-WeChat-32CD32)](assets/wechat.jpg)
+[![Discord](https://img.shields.io/badge/Community-Discord-8A2BE2)](https://discord.gg/svwuqgUx)
 
 *🚀 重新定义图检索增强推理范式，以90.71%的Token成本节约和16.62%的精度提升实现帕累托改进*
 

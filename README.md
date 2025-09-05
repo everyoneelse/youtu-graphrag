@@ -4,9 +4,9 @@
 # 🌟 Youtu-GraphRAG: Vertically Unified Agents for Graph Retrieval-Augmented Complex Reasoning
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![Documentation](https://img.shields.io/badge/paper-latest-blue.svg)](Youtu-GraphRAG.pdf)
-[![WeChat Community](https://img.shields.io/badge/Youtu--_-WeChat-32CD32)](assets/wechat.jpg)
-[![Discord](https://img.shields.io/badge/Youtu--_-Discord-8A2BE2)](https://discord.gg/svwuqgUx)
+[![Paper](https://img.shields.io/badge/paper-latest-blue.svg)](https://arxiv.org/abs/2508.19855)
+[![WeChat Community](https://img.shields.io/badge/Community-WeChat-32CD32)](assets/wechat.jpg)
+[![Discord Community](https://img.shields.io/badge/Community-Discord-8A2BE2)](https://discord.gg/svwuqgUx)
 
 *🚀 Revolutionary framework moving Pareto Frontier with 90.71% lower token cost and 16.62% higher accuracy over SOTA baselines*
 
@@ -39,6 +39,7 @@ A skeched overview of our proposed framework Youtu-GraphRAG.
 <img src="assets/pareto.png" alt="Moving Pareto Frontier" width="100%"/>
 </td>
 <td width="70%">
+
 📊 **Performance**: Extensive experiments across six challenging benchmarks demonstrate the robustness of Youtu-GraphRAG, remarkably moving the Pareto frontier with up to **90.71% saving of token costs** and **16.62% higher accuracy** over state-of-the-art baselines. The results indicate our adaptability, allowing seamless domain transfer with minimal intervention on schema.
 
 </td>
