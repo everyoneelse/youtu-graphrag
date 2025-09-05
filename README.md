@@ -40,8 +40,9 @@ A skeched overview of our proposed framework Youtu-GraphRAG.
 </td>
 <td width="70%">
 
+<span style="font-size: 11.5px;">
 📊 **Performance**: Extensive experiments across six challenging benchmarks demonstrate the robustness of Youtu-GraphRAG, remarkably moving the Pareto frontier with up to **90.71% saving of token costs** and **16.62% higher accuracy** over state-of-the-art baselines. The results indicate our adaptability, allowing seamless domain transfer with minimal intervention on schema.
-
+</span>
 </td>
 </tr>
 </table>
