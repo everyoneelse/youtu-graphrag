@@ -4,7 +4,7 @@
 # 🌟 Youtu-GraphRAG：垂直统一的图增强复杂推理新范式
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![Documentation](https://img.shields.io/badge/paper-latest-blue.svg)](Youtu-GraphRAG.pdf)
+[![Documentation](https://img.shields.io/badge/Paper-Latest-blue.svg)](Youtu-GraphRAG.pdf)
 [![WeChat Community](https://img.shields.io/badge/Community-WeChat-32CD32)](assets/wechat.jpg)
 [![Discord](https://img.shields.io/badge/Community-Discord-8A2BE2)](https://discord.gg/svwuqgUx)
 

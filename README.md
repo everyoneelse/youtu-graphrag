@@ -4,7 +4,7 @@
 # 🌟 Youtu-GraphRAG: Vertically Unified Agents for Graph Retrieval-Augmented Complex Reasoning
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![Paper](https://img.shields.io/badge/paper-latest-blue.svg)](https://arxiv.org/abs/2508.19855)
+[![Paper](https://img.shields.io/badge/Paper-Latest-blue.svg)](https://arxiv.org/abs/2508.19855)
 [![WeChat Community](https://img.shields.io/badge/Community-WeChat-32CD32)](assets/wechat.jpg)
 [![Discord Community](https://img.shields.io/badge/Community-Discord-8A2BE2)](https://discord.gg/svwuqgUx)
 
