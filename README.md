@@ -183,7 +183,8 @@ We provide two approaches to run and experience the demo service.
 git clone https://github.com/TencentCloudADP/Youtu-GraphRAG
 
 # 2. Create .env according to .env.example
-cd Youtu-GraphRAG && touch .env
+cd Youtu-GraphRAG && cp .env.example .env
+# Config your LLM api in .env as OpenAI API format
 # LLM_MODEL=deepseek-chat
 # LLM_BASE_URL=https://api.deepseek.com
 # LLM_API_KEY=sk-xxxxxx
@@ -204,7 +205,8 @@ curl -v http://localhost:8000
 git clone https://github.com/TencentCloudADP/Youtu-GraphRAG
 
 # 2. Create .env according to .env.example
-cd Youtu-GraphRAG && touch .env
+cd Youtu-GraphRAG && cp .env.example .env
+# Config your LLM api in .env as OpenAI API format
 # LLM_MODEL=deepseek-chat
 # LLM_BASE_URL=https://api.deepseek.com
 # LLM_API_KEY=sk-xxxxxx

@@ -178,6 +178,7 @@ git clone https://github.com/TencentCloudADP/Youtu-GraphRAG
 
 # 2. 按照.env.example文件格式创建 .env
 cd Youtu-GraphRAG && touch .env
+# 按照如下格式在.env中配置OpenAI API 格式的 LLM API
 # LLM_MODEL=deepseek-chat
 # LLM_BASE_URL=https://api.deepseek.com
 # LLM_API_KEY=sk-xxxxxx
@@ -198,7 +199,8 @@ curl -v http://localhost:8000
 git clone https://github.com/TencentCloudADP/Youtu-GraphRAG
 
 # 2. 按照.env.example文件格式创建 .env
-cd Youtu-GraphRAG && touch .env
+cd Youtu-GraphRAG && cp .env.example .env
+# 按照如下格式在.env中配置OpenAI API 格式的 LLM API
 # LLM_MODEL=deepseek-chat
 # LLM_BASE_URL=https://api.deepseek.com
 # LLM_API_KEY=sk-xxxxxx
