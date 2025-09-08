@@ -34,8 +34,6 @@ Youtu-GraphRAG框架概览
 ## 📲 交互式体验界面
 
 <div align="center">
-
-[//]: # (<img src="assets/dashboard_demo.png" alt="Dashboard" width="32%"/>)
 <img src="assets/graph_demo.png" alt="Graph Construction" width="49%"/>
 <img src="assets/retrieval_demo.png" alt="Retrieval" width="49.1%"/>
 </div>
@@ -66,15 +64,18 @@ Youtu-GraphRAG框架概览
 - 📊 **层次化知识树**：自然生成既支持自顶向下过滤又支持自底向上推理的结构
 - 📝 **智能社区摘要**：利用大语言模型增强社区摘要生成，实现更高层次的知识抽象
 
-<img src="assets/comm.png" alt="Youtu-GraphRAG Community Detection" width="30%"/>
-
+<div align="center">
+<img src="assets/comm.png" alt="Youtu-GraphRAG Community Detection" width="60%"/>
+</div>
 
 <summary><strong>🤖 3. 智能迭代检索</strong></summary>
 
 - 🎯 **本体模式感知的复杂问题分解**：深度理解图本体模式结构，将复杂查询针对性智能转换为可并行处理的子查询
 - 🔄 **迭代反思机制**：通过迭代检索思维链实现深度反思，显著提升推理能力
 
-<img src="assets/agent.png" alt="Youtu-GraphRAG Agentic Decomposer" width="30%"/>
+<div align="center">
+<img src="assets/agent.png" alt="Youtu-GraphRAG Agentic Decomposer" width="50%"/>
+</div>
 
 <summary><strong>🧠 4. 领先的落地级构建、索引与推理能力及用户友好体验</strong></summary>
 
@@ -104,10 +105,10 @@ Youtu-GraphRAG框架概览
 ## 📊实验表现
 我们在六个权威跨领域多语言的基准数据集上进行了广泛实验，充分证明了Youtu-GraphRAG的企业级扩展性和泛化性。相比最先进的基线方法，Youtu-GraphRAG显著推动了帕累托前沿突破，实现了最高<strong>90.71%的Token成本节约</strong>和<strong>16.62%的精度提升</strong>。实验结果充分展现了我们框架的卓越泛化性，能够在本体模式干预最小化的前提下实现跨领域的无缝迁移。
 
-<div>
-<img src="assets/performance.png" alt="Cost/acc performance" width="80%"/>
-<img src="assets/pareto.png" alt="Moving Pareto Frontier" width="48%"/>
-<img src="assets/radar.png" alt="radar comparison" width="32%"/>
+<div align="center">
+<img src="assets/performance.png" alt="Cost/acc performance" width="90%"/>
+<img src="assets/pareto.png" alt="Moving Pareto Frontier" width="54%"/>
+<img src="assets/radar.png" alt="radar comparison" width="36%"/>
 </div>
 
 

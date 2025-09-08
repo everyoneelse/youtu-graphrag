@@ -108,13 +108,10 @@ Based on our unified agentic paradigm for Graph Retrieval-Augmented Generation (
 ## 📊 Performance Comparisons
 Extensive experiments across six challenging benchmarks demonstrate the robustness of Youtu-GraphRAG, remarkably moving the Pareto frontier with up to <strong>90.71% saving of token costs</strong> and <strong>16.62% higher accuracy</strong> over state-of-the-art baselines. The results indicate our adaptability, allowing seamless domain transfer with minimal intervention on schema.
 
-[//]: # (<div>)
 <div align="center">
 <img src="assets/performance.png" alt="Cost/acc performance" width="90%"/>
 <img src="assets/pareto.png" alt="Moving Pareto Frontier" width="54%"/>
 <img src="assets/radar.png" alt="radar comparison" width="36%"/>
-
-[//]: # (<div align="center">)
 </div>
 
 
