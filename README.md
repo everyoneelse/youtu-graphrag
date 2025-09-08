@@ -11,8 +11,22 @@
 
 [🔖 中文版](README-CN.md) • [⭐ Contributions](#contributions) • [📊 Benchmarks](https://huggingface.co/datasets/Youtu-Graph/AnonyRAG) • [🚀 Getting Started](#quickstart)
 
-
 </div>
+
+## 🎯 Brief Introduction
+**Youtu-GraphRAG** is a vertically unified agentic paradigm that jointly connects the entire framework as an intricate integration based on graph schema. We allow seamless domain transfer with minimal intervention on the graph schema, providing insights of the next evolutionary GraphRAG paradigm for real-world applications with remarkable adaptability.
+
+<img src="assets/logo.png" alt="Youtu-GrapHRAG Logo" width="150" align="left" style="margin-right:20px;">
+
+📊 <strong>Performance</strong>
+
+Extensive experiments across six challenging benchmarks demonstrate the robustness of Youtu-GraphRAG, remarkably moving the Pareto frontier with up to <strong>90.71% saving of token costs</strong> and <strong>16.62% higher accuracy</strong> over state-of-the-art baselines. The results indicate our adaptability, allowing seamless domain transfer with minimal intervention on schema.
+
+🎨 <strong>When and Why to use Youtu-GraphRAG</strong>
+
+🔗 Multi-hop Reasoning/Summarization/Conclusion: Complex questions requiring multi-step reasoning<br>
+📚 Knowledge-Intensive Tasks: Questions dependent on large amounts of structured/private/domain knowledge<br>
+🌐 Domain Scalability: Easily support encyclopedias, academic papers, commercial/personal/private knowledge base and other domains with minimal intervention on the schema<br>
 
 ## 🏗️ Framework Architecture
 
@@ -28,30 +42,6 @@ A skeched overview of our proposed framework Youtu-GraphRAG.
 <img src="assets/graph_demo.png" alt="Graph Construction" width="32%"/>
 <img src="assets/retrieval_demo.png" alt="Retrieval" width="32%"/>
 </div>
-
-## 🎯 Brief Introduction
-**Youtu-GraphRAG** is a vertically unified agentic paradigm that jointly connects the entire framework as an intricate integration based on graph schema. We allow seamless domain transfer with minimal intervention on the graph schema, providing insights of the next evolutionary GraphRAG paradigm for real-world applications with remarkable adaptability.
-
-<img src="assets/logo.png" alt="Youtu-GrapHRAG Logo" width="180" align="left" style="margin-right:20px;">
-
-📊 <strong>Performance</strong>
-
-Extensive experiments across six challenging benchmarks demonstrate the robustness of Youtu-GraphRAG, remarkably moving the Pareto frontier with up to <strong>90.71% saving of token costs</strong> and <strong>16.62% higher accuracy</strong> over state-of-the-art baselines. The results indicate our adaptability, allowing seamless domain transfer with minimal intervention on schema.
-
-🎨 <strong>When and Why to use Youtu-GraphRAG</strong>
-
-🔗 Multi-hop Reasoning/Summarization/Conclusion: Complex questions requiring multi-step reasoning<br>
-📚 Knowledge-Intensive Tasks: Questions dependent on large amounts of structured/private/domain knowledge<br>
-🌐 Domain Scalability: Easily support encyclopedias, academic papers, commercial/personal/private knowledge base and other domains with minimal intervention on the schema<br>
-
-
-<div align="center">
-<img src="assets/performance.png" alt="Cost/acc performance" width="80%"/>
-<img src="assets/pareto.png" alt="Moving Pareto Frontier" width="48%"/>
-<img src="assets/radar.png" alt="radar comparison" width="32%"/>
-</div>
-
-
 
 <a id="contributions"></a>
 ## 🚀 Contributions and Novelty
@@ -113,6 +103,13 @@ Based on our unified agentic paradigm for Graph Retrieval-Augmented Generation (
 - 🔧 **Runtime Parameter Override**: Dynamic configuration adjustment during execution
 - 🌍 **Multi-Environment Support**: Seamless domain transfer with minimal intervention on schema
 - 🔄 **Backward Compatibility**: Ensures existing code continues to function
+
+## 📈 Performance Comparisons
+<div align="center">
+<img src="assets/performance.png" alt="Cost/acc performance" width="80%"/>
+<img src="assets/pareto.png" alt="Moving Pareto Frontier" width="48%"/>
+<img src="assets/radar.png" alt="radar comparison" width="32%"/>
+</div>
 
 
 
