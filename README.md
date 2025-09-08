@@ -173,6 +173,9 @@ youtu-graphrag/
 We provide two approaches to run and experience the demo service.
 
 ### 💻 Web UI Experience
+
+This approach relies on Python 3.10 and the corresponding pip environment，you can install it according to the [official documentation](https://docs.python.org/3.10/installing/index.html).
+
 ```bash
 # 1. Clone Youtu-GraphRAG project
 git clone https://github.com/TencentCloudADP/youtu-graphrag
@@ -195,6 +198,8 @@ curl -v http://localhost:8000
 ```
 
 ### 💻 Start with Dockerfile
+
+This approach relies on the Docker environment, which could be installed according to [official documentation](https://docs.docker.com/engine/install).
 
 ```bash
 # 1. Clone Youtu-GraphRAG project

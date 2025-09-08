@@ -169,6 +169,8 @@ youtu-graphrag/
 我们提供两种方式来运行并体验示例服务。
 
 ### 💻 直接启动Web服务体验交互式界面
+
+本启动方式依赖Python 3.10和对应的pip环境，建议参照[官方文档](https://docs.python.org/3.10/installing/index.html)安装。
 ```bash
 # 1. 克隆项目
 git clone https://github.com/TencentCloudADP/Youtu-GraphRAG
@@ -191,6 +193,7 @@ curl -v http://localhost:8000
 ```
 
 ### 💻 通过docker环境启动
+本启动方式依赖docker环境，建议参照[官方文档](https://docs.docker.com/engine/install)安装。
 ```bash
 # 1. 克隆项目
 git clone https://github.com/TencentCloudADP/Youtu-GraphRAG
