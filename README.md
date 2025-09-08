@@ -174,7 +174,7 @@ We provide two approaches to run and experience the demo service.
 
 ### 💻 Web UI Experience
 
-This approach relies on Python 3.10 and the corresponding pip environment，you can install it according to the [official documentation](https://docs.python.org/3.10/installing/index.html).
+This approach relies on Python 3.10 and the corresponding pip environment，you can install it according to the [official documentation](https://docs.python.org/3.10/using/index.html).
 
 ```bash
 # 1. Clone Youtu-GraphRAG project

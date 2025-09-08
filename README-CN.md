@@ -170,7 +170,7 @@ youtu-graphrag/
 
 ### 💻 直接启动Web服务体验交互式界面
 
-本启动方式依赖Python 3.10和对应的pip环境，建议参照[官方文档](https://docs.python.org/3.10/installing/index.html)安装。
+本启动方式依赖Python 3.10和对应的pip环境，建议参照[官方文档](https://docs.python.org/3.10/using/index.html)安装。
 ```bash
 # 1. 克隆项目
 git clone https://github.com/TencentCloudADP/Youtu-GraphRAG
