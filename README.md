@@ -16,11 +16,8 @@
 ## 🎯 Brief Introduction
 **Youtu-GraphRAG** is a vertically unified agentic paradigm that jointly connects the entire framework as an intricate integration based on graph schema. We allow seamless domain transfer with minimal intervention on the graph schema, providing insights of the next evolutionary GraphRAG paradigm for real-world applications with remarkable adaptability.
 
-<img src="assets/logo.png" alt="Youtu-GrapHRAG Logo" width="150" align="left" style="margin-right:20px;">
+<img src="assets/logo.png" alt="Youtu-GrapHRAG Logo" width="100" align="left" style="margin-right:20px;">
 
-📊 <strong>Performance</strong>
-
-Extensive experiments across six challenging benchmarks demonstrate the robustness of Youtu-GraphRAG, remarkably moving the Pareto frontier with up to <strong>90.71% saving of token costs</strong> and <strong>16.62% higher accuracy</strong> over state-of-the-art baselines. The results indicate our adaptability, allowing seamless domain transfer with minimal intervention on schema.
 
 🎨 <strong>When and Why to use Youtu-GraphRAG</strong>
 
@@ -104,8 +101,9 @@ Based on our unified agentic paradigm for Graph Retrieval-Augmented Generation (
 - 🌍 **Multi-Environment Support**: Seamless domain transfer with minimal intervention on schema
 - 🔄 **Backward Compatibility**: Ensures existing code continues to function
 
-## 📈 Performance Comparisons
-<div align="center">
+## 📊 Performance Comparisons
+Extensive experiments across six challenging benchmarks demonstrate the robustness of Youtu-GraphRAG, remarkably moving the Pareto frontier with up to <strong>90.71% saving of token costs</strong> and <strong>16.62% higher accuracy</strong> over state-of-the-art baselines. The results indicate our adaptability, allowing seamless domain transfer with minimal intervention on schema.
+<div>
 <img src="assets/performance.png" alt="Cost/acc performance" width="80%"/>
 <img src="assets/pareto.png" alt="Moving Pareto Frontier" width="48%"/>
 <img src="assets/radar.png" alt="radar comparison" width="32%"/>
