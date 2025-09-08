@@ -153,6 +153,8 @@ youtu-graphrag/
 │
 ├── main.py                       # 🎯 Main program entry
 ├── requirements.txt              # Dependencies list
+├── setup_env.sh                  # install web dependency
+├── start.sh                      # start web service
 └── README.md                     # Project documentation
 ```
 
