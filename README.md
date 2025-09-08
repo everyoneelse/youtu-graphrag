@@ -16,7 +16,7 @@
 ## 🎯 Brief Introduction
 **Youtu-GraphRAG** is a vertically unified agentic paradigm that jointly connects the entire framework as an intricate integration based on graph schema. We allow seamless domain transfer with minimal intervention on the graph schema, providing insights of the next evolutionary GraphRAG paradigm for real-world applications with remarkable adaptability.
 
-<img src="assets/logo.png" alt="Youtu-GrapHRAG Logo" width="90" align="left" style="margin-right:20px;">
+<img src="assets/logo.png" alt="Youtu-GrapHRAG Logo" width="120" align="left" style="margin-right:20px;">
 
 
 🎨 <strong>When and Why to use Youtu-GraphRAG</strong>
