@@ -172,7 +172,7 @@ youtu-graphrag/
 <a id="quickstart"></a>
 
 ## 🚀 Quick Start
-We provide two approaches to run and experience the demo service. Considering the differences in the underlying environment, we recommend using Docker as the preferred deployment method.
+We provide two approaches to run and experience the demo service. Considering the differences in the underlying environment, we recommend using **Docker** as the preferred deployment method.
 
 ### 💻 Start with Dockerfile
 

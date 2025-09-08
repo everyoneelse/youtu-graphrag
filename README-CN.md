@@ -169,7 +169,7 @@ youtu-graphrag/
 <a id="quickstart"></a>
 
 ## 🚀 快速开始
-我们提供两种方式来运行并体验示例服务，考虑到基础环境差异的影响，我们推荐优先使用docker环境来启动。
+我们提供两种方式来运行并体验示例服务，考虑到基础环境差异的影响，我们推荐优先使用**docker**环境来启动。
 
 ### 💻 通过docker环境启动
 本启动方式依赖docker环境，建议参照[官方文档](https://docs.docker.com/get-started/)安装。
