@@ -1,7 +1,6 @@
 <div align="center">
-<img src="assets/logo.png" alt="Youtu-GraphRAG Logo" width="170"/>
 
-# 🌟 Youtu-GraphRAG：垂直统一的图增强复杂推理新范式
+#  <img src="assets/logo.svg" alt="Youtu-agent Logo" height="26px"> Youtu-GraphRAG：垂直统一的图增强复杂推理新范式
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Documentation](https://img.shields.io/badge/Paper-Latest-blue.svg)](Youtu-GraphRAG.pdf)
@@ -13,6 +12,17 @@
 [🔖 English](README.md) • [⭐ 核心贡献与创新](#contribution) • [📊 基准测试](https://huggingface.co/datasets/Youtu-Graph/AnonyRAG) • [🚀 快速开始](#quickstart)
 
 </div>
+
+## 🎯 项目简介
+**Youtu-GraphRAG** 是一个基于图本体模式实现垂直统一的图增强推理范式，将GraphRAG框架精巧地集成为一个以智能体为核心的有机整体。我们实现了通过在图本体模式上的最小化人为干预下进行跨领域的无缝迁移，为业界应用提供了泛化、鲁棒、可用的下一代GraphRAG范式。
+
+<img src="assets/logo.png" alt="Youtu-GrapHRAG Logo" width="90" align="left" style="margin-right:20px;">
+
+### 🎨 Youtu-GraphRAG三大落地场景
+
+🔗 **多跳推理与总结**：解决需要多步推理的复杂问题<br>
+📚 **知识密集型任务**：处理依赖大量结构化知识的问题<br>
+🌐 **跨域扩展**：轻松支持学术论文、个人知识库、私域/企业知识库等多个领域，本体模式人工干预最少化<br>
 
 ## 🏗️ 框架架构
 
@@ -29,32 +39,7 @@ Youtu-GraphRAG框架概览
 <img src="assets/retrieval_demo.png" alt="Retrieval" width="32%"/>
 </div>
 
-## 🎯 项目简介
-**Youtu-GraphRAG** 是一个基于图本体模式实现垂直统一的图增强推理范式，将GraphRAG框架精巧地集成为一个以智能体为核心的有机整体。我们实现了通过在图本体模式上的最小化人为干预下进行跨领域的无缝迁移，为业界应用提供了泛化、鲁棒、可用的下一代GraphRAG范式。
-<table>
-<tr>
-<td width="40%">
-<img src="assets/pareto.png" alt="帕累托前沿突破" width="100%"/>
-</td>
-<td width="70%">
 
-<span style="font-size: 12px;">
-📊 <strong>卓越表现</strong>：我们在六个权威跨领域多语言的基准数据集上进行了广泛实验，充分证明了Youtu-GraphRAG的企业级扩展性和泛化性。相比最先进的基线方法，Youtu-GraphRAG显著推动了帕累托前沿突破，实现了最高<strong>90.71%的Token成本节约</strong>和<strong>16.62%的精度提升</strong>。实验结果充分展现了我们框架的卓越泛化性，能够在本体模式干预最小化的前提下实现跨领域的无缝迁移。
-</span>
-</td>
-</tr>
-</table>
-
-<div align="center">
-<img src="assets/performance.png" alt="成本精度性能对比" width="64%"/>
-<img src="assets/radar.png" alt="雷达图对比" width="31%"/>
-</div>
-
-### 🎨 Youtu-GraphRAG三大落地场景
-
-🔗 **多跳推理与总结**：解决需要多步推理的复杂问题<br>
-📚 **知识密集型任务**：处理依赖大量结构化知识的问题<br>
-🌐 **跨域扩展**：轻松支持小说、百科全书、学术论文、个人知识库、私域/企业知识库等多个领域，本体模式人工干预最少化<br>
 
 <a id="contribution"></a>
 ## 🚀 核心贡献与创新亮点
@@ -113,6 +98,16 @@ Youtu-GraphRAG框架概览
 - 🔧 **运行时动态调整**：支持在程序执行过程中动态修改配置参数
 - 🌍 **多环境无缝支持**：在图本体模式最小人为干预的前提下，轻松实现跨领域迁移
 - 🔄 **完善向后兼容**：确保现有代码在框架升级后仍能正常运行
+
+
+## 📊实验表现
+我们在六个权威跨领域多语言的基准数据集上进行了广泛实验，充分证明了Youtu-GraphRAG的企业级扩展性和泛化性。相比最先进的基线方法，Youtu-GraphRAG显著推动了帕累托前沿突破，实现了最高<strong>90.71%的Token成本节约</strong>和<strong>16.62%的精度提升</strong>。实验结果充分展现了我们框架的卓越泛化性，能够在本体模式干预最小化的前提下实现跨领域的无缝迁移。
+
+<div>
+<img src="assets/performance.png" alt="Cost/acc performance" width="80%"/>
+<img src="assets/pareto.png" alt="Moving Pareto Frontier" width="48%"/>
+<img src="assets/radar.png" alt="radar comparison" width="32%"/>
+</div>
 
 
 ## 📁 项目结构
