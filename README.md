@@ -199,7 +199,7 @@ curl -v http://localhost:8000
 
 ### 💻 Start with Dockerfile
 
-This approach relies on the Docker environment, which could be installed according to [official documentation](https://docs.docker.com/engine/install).
+This approach relies on the Docker environment, which could be installed according to [official documentation](https://docs.docker.com/get-started/).
 
 ```bash
 # 1. Clone Youtu-GraphRAG project

@@ -193,7 +193,7 @@ curl -v http://localhost:8000
 ```
 
 ### 💻 通过docker环境启动
-本启动方式依赖docker环境，建议参照[官方文档](https://docs.docker.com/engine/install)安装。
+本启动方式依赖docker环境，建议参照[官方文档](https://docs.docker.com/get-started/)安装。
 ```bash
 # 1. 克隆项目
 git clone https://github.com/TencentCloudADP/Youtu-GraphRAG
