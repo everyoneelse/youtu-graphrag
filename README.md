@@ -175,10 +175,10 @@ We provide two approaches to run and experience the demo service.
 ### 💻 Web UI Experience
 ```bash
 # 1. Clone Youtu-GraphRAG project
-git clone https://github.com/TencentCloudADP/Youtu-GraphRAG
+git clone https://github.com/TencentCloudADP/youtu-graphRAG
 
 # 2. Create .env according to .env.example
-cd Youtu-GraphRAG && cp .env.example .env
+cd youtu-graphRAG && cp .env.example .env
 # Config your LLM api in .env as OpenAI API format
 # LLM_MODEL=deepseek-chat
 # LLM_BASE_URL=https://api.deepseek.com
@@ -194,13 +194,14 @@ cd Youtu-GraphRAG && cp .env.example .env
 curl -v http://localhost:8000
 ```
 
-### 💻 Start with dockerfile
+### 💻 Start with Dockerfile
+
 ```bash
 # 1. Clone Youtu-GraphRAG project
-git clone https://github.com/TencentCloudADP/Youtu-GraphRAG
+git clone https://github.com/TencentCloudADP/youtu-graphrag
 
 # 2. Create .env according to .env.example
-cd Youtu-GraphRAG && cp .env.example .env
+cd youtu-graphrag && cp .env.example .env
 # Config your LLM api in .env as OpenAI API format
 # LLM_MODEL=deepseek-chat
 # LLM_BASE_URL=https://api.deepseek.com
@@ -216,7 +217,6 @@ docker run -d -p 8000:8000 youtu_graphrag:v1
 curl -v http://localhost:8000
 ```
 
-
 ### 📖 Full Usage Guide
 For advanced config and usage：[**🚀 FullGuide**](FULLGUIDE.md)
 
@@ -228,6 +228,7 @@ For advanced config and usage：[**🚀 FullGuide**](FULLGUIDE.md)
 We welcome contributions from the community! Here's how you can help:
 
 ### 💻 Code Contribution
+
 1. 🍴 Fork the project
 2. 🌿 Create a feature branch (`git checkout -b feature/AmazingFeature`)
 3. 💾 Commit your changes (`git commit -m 'Add some AmazingFeature'`)
@@ -235,6 +236,7 @@ We welcome contributions from the community! Here's how you can help:
 5. 🔄 Create a Pull Request
 
 ### 🔧 Extension Guide
+
 - **🌱 New Seed Schemas**: Add high-quality seed schema and data processing
 - **📊 Custom Datasets**: Integrate new datasets with minimal schema intervention
 - **🎯 Domain-Specific Applications**: Extend framework for specialized use cases with 'Best Practice'
