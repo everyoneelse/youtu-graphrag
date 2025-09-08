@@ -23,7 +23,7 @@
 
 🔗 Multi-hop Reasoning/Summarization/Conclusion: Complex questions requiring multi-step reasoning<br>
 📚 Knowledge-Intensive Tasks: Questions dependent on large amounts of structured/private/domain knowledge<br>
-🌐 Domain Scalability: Easily support encyclopedias, academic papers, commercial/personal/private knowledge base and other domains with minimal intervention on the schema<br><br>
+🌐 Domain Scalability: Easily support encyclopedias, academic papers, commercial/private knowledge base and other domains with minimal intervention on the schema<br><br>
 
 
 ## 🏗️ Framework Architecture
