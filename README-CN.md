@@ -169,7 +169,30 @@ youtu-graphrag/
 <a id="quickstart"></a>
 
 ## 🚀 快速开始
-我们提供两种方式来运行并体验示例服务。
+我们提供两种方式来运行并体验示例服务，考虑到基础环境差异的影响，我们推荐优先使用docker环境来启动。
+
+### 💻 通过docker环境启动
+本启动方式依赖docker环境，建议参照[官方文档](https://docs.docker.com/get-started/)安装。
+```bash
+# 1. 克隆项目
+git clone https://github.com/TencentCloudADP/Youtu-GraphRAG
+
+# 2. 按照.env.example文件格式创建 .env
+cd Youtu-GraphRAG && cp .env.example .env
+# 按照如下格式在.env中配置OpenAI API 格式的 LLM API
+# LLM_MODEL=deepseek-chat
+# LLM_BASE_URL=https://api.deepseek.com
+# LLM_API_KEY=sk-xxxxxx
+
+# 3. 通过dockerfile文件构建镜像
+docker build -t youtu_graphrag:v1 .
+
+# 4. 启动docker容器
+docker run -d -p 8000:8000 youtu_graphrag:v1
+
+# 5. 访问 http://localhost:8000 体验Youtu-GraphRAG
+curl -v http://localhost:8000
+```
 
 ### 💻 直接启动Web服务体验交互式界面
 
@@ -190,29 +213,6 @@ cd Youtu-GraphRAG && touch .env
 
 # 4. 启动服务
 ./start.sh
-
-# 5. 访问 http://localhost:8000 体验Youtu-GraphRAG
-curl -v http://localhost:8000
-```
-
-### 💻 通过docker环境启动
-本启动方式依赖docker环境，建议参照[官方文档](https://docs.docker.com/get-started/)安装。
-```bash
-# 1. 克隆项目
-git clone https://github.com/TencentCloudADP/Youtu-GraphRAG
-
-# 2. 按照.env.example文件格式创建 .env
-cd Youtu-GraphRAG && cp .env.example .env
-# 按照如下格式在.env中配置OpenAI API 格式的 LLM API
-# LLM_MODEL=deepseek-chat
-# LLM_BASE_URL=https://api.deepseek.com
-# LLM_API_KEY=sk-xxxxxx
-
-# 3. 通过dockerfile文件构建镜像
-docker build -t youtu_graphrag:v1 .
-
-# 4. 启动docker容器
-docker run -d -p 8000:8000 youtu_graphrag:v1
 
 # 5. 访问 http://localhost:8000 体验Youtu-GraphRAG
 curl -v http://localhost:8000
