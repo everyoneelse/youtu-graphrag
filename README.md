@@ -175,10 +175,10 @@ We provide two approaches to run and experience the demo service.
 ### 💻 Web UI Experience
 ```bash
 # 1. Clone Youtu-GraphRAG project
-git clone https://github.com/TencentCloudADP/youtu-graphRAG
+git clone https://github.com/TencentCloudADP/youtu-graphrag
 
 # 2. Create .env according to .env.example
-cd youtu-graphRAG && cp .env.example .env
+cd youtu-graphrag && cp .env.example .env
 # Config your LLM api in .env as OpenAI API format
 # LLM_MODEL=deepseek-chat
 # LLM_BASE_URL=https://api.deepseek.com
