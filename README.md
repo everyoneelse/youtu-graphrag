@@ -19,11 +19,11 @@
 <img src="assets/logo.png" alt="Youtu-GrapHRAG Logo" width="140" align="left" style="margin-right:20px;">
 
 
-🎨 <strong>When and Why to use Youtu-GraphRAG</strong>
+### 🎨 When and Why to use Youtu-GraphRAG
 
 🔗 Multi-hop Reasoning/Summarization/Conclusion: Complex questions requiring multi-step reasoning<br>
-📚 Knowledge-Intensive Tasks: Questions dependent on large amounts of structured/<br>private/domain knowledge<br>
-🌐 Domain Scalability: Easily support encyclopedias, academic papers, commercial/<br>personal/private knowledge base and other domains with minimal intervention on the schema<br>
+📚 Knowledge-Intensive Tasks: Questions dependent on large amounts of structured/private/domain knowledge<br>
+🌐 Domain Scalability: Easily support encyclopedias, academic papers, commercial/personal/private knowledge base and other domains with minimal intervention on the schema<br>
 
 ## 🏗️ Framework Architecture
 
