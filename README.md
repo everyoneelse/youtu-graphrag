@@ -65,16 +65,18 @@ Based on our unified agentic paradigm for Graph Retrieval-Augmented Generation (
 - 📊 **Hierarchical Knowledge Tree**: Naturally yields a structure supporting both top-down filtering and bottom-up reasoning that performs better than traditional Leiden and Louvain algorithms
 - 📝 **Community Summaries**: LLM-enhanced community summarization for higher-level knowledge abstraction
 
-<img src="assets/comm.png" alt="Youtu-GraphRAG Community Detection" width="30%"/>
-
+<div align="center">
+<img src="assets/comm.png" alt="Youtu-GraphRAG Community Detection" width="60%"/>
+</div>
 
 <summary><strong>🤖 3. Agentic Retrieval</strong></summary>
 
 - 🎯 **Schema-Aware Decomposition**: Interprets the same graph schema to transform complex queries into tractable and parallel sub-queries
 - 🔄 **Iterative Reflection**: Performs reflection for more advanced reasoning through IRCoT (Iterative Retrieval Chain of Thought)
 
-<img src="assets/agent.png" alt="Youtu-GraphRAG Agentic Decomposer" width="30%"/>
-
+<div align="center">
+<img src="assets/agent.png" alt="Youtu-GraphRAG Agentic Decomposer" width="50%"/>
+</div>
 
 <!-- <details> -->
 <summary><strong>🧠 4. Advanced Construction and Reasoning Capabilities for real-world deployment</strong></summary>
@@ -104,10 +106,14 @@ Based on our unified agentic paradigm for Graph Retrieval-Augmented Generation (
 
 ## 📊 Performance Comparisons
 Extensive experiments across six challenging benchmarks demonstrate the robustness of Youtu-GraphRAG, remarkably moving the Pareto frontier with up to <strong>90.71% saving of token costs</strong> and <strong>16.62% higher accuracy</strong> over state-of-the-art baselines. The results indicate our adaptability, allowing seamless domain transfer with minimal intervention on schema.
-<div>
-<img src="assets/performance.png" alt="Cost/acc performance" width="80%"/>
-<img src="assets/pareto.png" alt="Moving Pareto Frontier" width="48%"/>
-<img src="assets/radar.png" alt="radar comparison" width="32%"/>
+
+[//]: # (<div>)
+<div align="center">
+<img src="assets/performance.png" alt="Cost/acc performance" width="90%"/>
+<img src="assets/pareto.png" alt="Moving Pareto Frontier" width="54%"/>
+<img src="assets/radar.png" alt="radar comparison" width="36%"/>
+
+[//]: # (<div align="center">)
 </div>
 
 
