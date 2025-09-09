@@ -5,7 +5,7 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Paper](https://img.shields.io/badge/Paper-Latest-blue.svg)](https://arxiv.org/abs/2508.19855)
 [![WeChat Community](https://img.shields.io/badge/Community-WeChat-32CD32)](assets/wechat_qr.png)
-[![Discord Community](https://img.shields.io/badge/Community-Discord-8A2BE2)](https://discord.gg/ntUqXJY9)
+[![Discord Community](https://img.shields.io/badge/Community-Discord-8A2BE2)](https://discord.gg/QjqhkHQVVM)
 
 *🚀 Revolutionary framework moving Pareto Frontier with 90.71% lower token cost and 16.62% higher accuracy over SOTA baselines*
 
@@ -106,7 +106,7 @@ Based on our unified agentic paradigm for Graph Retrieval-Augmented Generation (
 - 🔄 **Backward Compatibility**: Ensures existing code continues to function
 
 ## 📊 Performance Comparisons
-Extensive experiments across six challenging benchmarks demonstrate the robustness of Youtu-GraphRAG, remarkably moving the Pareto frontier with up to <strong>90.71% saving of token costs</strong> and <strong>16.62% higher accuracy</strong> over state-of-the-art baselines. The results indicate our adaptability, allowing seamless domain transfer with minimal intervention on schema.
+Extensive experiments across six challenging benchmarks, including GraphRAG-Bench, HotpotQA and MuSiQue, demonstrate the robustness of Youtu-GraphRAG, remarkably moving the Pareto frontier with up to <strong>90.71% saving of token costs</strong> and <strong>16.62% higher accuracy</strong> over state-of-the-art baselines. The results indicate our adaptability, allowing seamless domain transfer with minimal intervention on schema.
 
 <div align="center">
 <img src="assets/performance.png" alt="Cost/acc performance" width="90%"/>
@@ -172,7 +172,7 @@ youtu-graphrag/
 <a id="quickstart"></a>
 
 ## 🚀 Quick Start
-We provide two approaches to run and experience the demo service. Considering the differences in the underlying environment, we recommend using Docker as the preferred deployment method.
+We provide two approaches to run and experience the demo service. Considering the differences in the underlying environment, we recommend using **Docker** as the preferred deployment method.
 
 ### 💻 Start with Dockerfile
 

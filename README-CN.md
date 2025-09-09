@@ -5,7 +5,7 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Documentation](https://img.shields.io/badge/Paper-Latest-blue.svg)](Youtu-GraphRAG.pdf)
 [![WeChat Community](https://img.shields.io/badge/Community-WeChat-32CD32)](assets/wechat_qr.png)
-[![Discord](https://img.shields.io/badge/Community-Discord-8A2BE2)](https://discord.gg/ntUqXJY9)
+[![Discord](https://img.shields.io/badge/Community-Discord-8A2BE2)](https://discord.gg/QjqhkHQVVM)
 
 *🚀 重新定义图检索增强推理范式，以90.71%的Token成本节约和16.62%的精度提升实现帕累托改进*
 
@@ -103,7 +103,7 @@ Youtu-GraphRAG框架概览
 
 
 ## 📊实验表现
-我们在六个权威跨领域多语言的基准数据集上进行了广泛实验，充分证明了Youtu-GraphRAG的企业级扩展性和泛化性。相比最先进的基线方法，Youtu-GraphRAG显著推动了帕累托前沿突破，实现了最高<strong>90.71%的Token成本节约</strong>和<strong>16.62%的精度提升</strong>。实验结果充分展现了我们框架的卓越泛化性，能够在本体模式干预最小化的前提下实现跨领域的无缝迁移。
+我们在GraphRAG-Bench、HotpotQA和MuSiQue等六个专业跨领域多语言的基准数据集上进行了广泛实验，充分证明了Youtu-GraphRAG的企业级扩展性和泛化性。相比最先进的基线方法，Youtu-GraphRAG显著推动了帕累托前沿突破，实现了最高<strong>90.71%的Token成本节约</strong>和<strong>16.62%的精度提升</strong>。实验结果充分展现了我们框架的卓越泛化性，能够在本体模式干预最小化的前提下实现跨领域的无缝迁移。
 
 <div align="center">
 <img src="assets/performance.png" alt="Cost/acc performance" width="90%"/>
@@ -169,7 +169,7 @@ youtu-graphrag/
 <a id="quickstart"></a>
 
 ## 🚀 快速开始
-我们提供两种方式来运行并体验示例服务，考虑到基础环境差异的影响，我们推荐优先使用docker环境来启动。
+我们提供两种方式来运行并体验示例服务，考虑到基础环境差异的影响，我们推荐优先使用**docker**环境来启动。
 
 ### 💻 通过docker环境启动
 本启动方式依赖docker环境，建议参照[官方文档](https://docs.docker.com/get-started/)安装。
