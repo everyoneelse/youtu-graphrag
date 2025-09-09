@@ -30,7 +30,7 @@
 
 <div align="center">
 <img src="assets/framework.png" alt="Youtu-GraphRAG Framework Architecture" width="95%"/><br>
-A skeched overview of our proposed framework Youtu-GraphRAG.
+A sketched overview of our proposed framework Youtu-GraphRAG.
 </div>
 
 ## 📲 Interactive interface
@@ -48,7 +48,7 @@ A skeched overview of our proposed framework Youtu-GraphRAG.
 Based on our unified agentic paradigm for Graph Retrieval-Augmented Generation (GraphRAG), Youtu-GraphRAG introduces several key innovations that jointly connect the entire framework as an intricate integration:
 
 
-<summary><strong>🏗️ 1. Schema-Guided Hierarchical Knowledge Tree Construction</strong></summary>
+<strong>🏗️ 1. Schema-Guided Hierarchical Knowledge Tree Construction</strong>
 
 - 🌱 **Seed Graph Schema**: Introduces targeted entity types, relations, and attribute types to bound automatic extraction agents
 - 📈 **Scalable Schema Expansion**: Continuously expands schemas for adaptability over unseen domains
@@ -60,7 +60,7 @@ Based on our unified agentic paradigm for Graph Retrieval-Augmented Generation (
 - ⚡ **Quick Adaptation to industrial applications**: We allow seamless domain transfer with minimal intervention on the schema
 
 
-<summary><strong>🌳 2. Dually-Perceived Community Detection</strong></summary>
+<strong>🌳 2. Dually-Perceived Community Detection</strong>
 
 - 🔬 **Novel Community Detection Algorithm**: Fuses structural topology with subgraph semantics for comprehensive knowledge organization
 - 📊 **Hierarchical Knowledge Tree**: Naturally yields a structure supporting both top-down filtering and bottom-up reasoning that performs better than traditional Leiden and Louvain algorithms
@@ -70,7 +70,7 @@ Based on our unified agentic paradigm for Graph Retrieval-Augmented Generation (
 <img src="assets/comm.png" alt="Youtu-GraphRAG Community Detection" width="60%"/>
 </div>
 
-<summary><strong>🤖 3. Agentic Retrieval</strong></summary>
+<strong>🤖 3. Agentic Retrieval</strong>
 
 - 🎯 **Schema-Aware Decomposition**: Interprets the same graph schema to transform complex queries into tractable and parallel sub-queries
 - 🔄 **Iterative Reflection**: Performs reflection for more advanced reasoning through IRCoT (Iterative Retrieval Chain of Thought)
@@ -79,18 +79,15 @@ Based on our unified agentic paradigm for Graph Retrieval-Augmented Generation (
 <img src="assets/agent.png" alt="Youtu-GraphRAG Agentic Decomposer" width="50%"/>
 </div>
 
-<!-- <details> -->
-<summary><strong>🧠 4. Advanced Construction and Reasoning Capabilities for real-world deployment</strong></summary>
+<strong>🧠 4. Advanced Construction and Reasoning Capabilities for real-world deployment</strong>
 
 - 🎯 **Performance Enhancement**: Less token costs and higher accuracy with optimized prompting, indexing and retrieval strategies
 - 🤹‍♀️ **User friendly visualization**: In ```output/graphs/```, the four-level knowledge tree supports visualization with neo4j import，making reasoning paths and knowledge organization vividly visable to users
 - ⚡ **Parallel Sub-question Processing**: Concurrent handling of decomposed questions for efficiency and complex scenarios
 - 🤔 **Iterative Reasoning**: Step-by-step answer construction with reasoning traces
 - 📊 **Domain Scalability**: Designed for enterprise-scale deployment with minimal manual intervention for new domains
-<!-- </details> -->
 
-
-<summary><strong>📈 5. Fair Anonymous Dataset 'AnonyRAG'</strong></summary>
+<strong>📈 5. Fair Anonymous Dataset 'AnonyRAG'</strong>
 
 - Link: [Hugging Face AnonyRAG](https://huggingface.co/datasets/Youtu-Graph/AnonyRAG)
 - **Against knowledeg leakage in LLM/embedding model pretraining**
@@ -98,7 +95,7 @@ Based on our unified agentic paradigm for Graph Retrieval-Augmented Generation (
 - **Multi-lingual with Chinese and English versions**
 
 
-<summary><strong>⚙️ 6. Unified Configuration Management</strong></summary>
+<strong>⚙️ 6. Unified Configuration Management</strong>
 
 - 🎛️ **Centralized Parameter Management**: All components configured through a single YAML file
 - 🔧 **Runtime Parameter Override**: Dynamic configuration adjustment during execution
@@ -158,17 +155,6 @@ youtu-graphrag/
 └── README.md                     # Project documentation
 ```
 
-### 🔧 Key Configuration Points
-
-| Configuration Category | Key Parameters | Description |
-|------------------------|----------------|-------------|
-| **🤖 Mode** | `triggers.mode` | agent(intelligent)/noagent(basic) |
-| **🏗️ Construction** | `construction.max_workers` | Graph construction concurrency |
-| **🔍 Retrieval** | `retrieval.top_k_filter`, `recall_paths` | Retrieval parameters |
-| **🧠 Agentic CoT** | `retrieval.agent.max_steps` | Iterative retrieval steps |
-| **🌳 Community Detection** | `tree_comm.struct_weight` | Weight to control impacts from topology |
-| **⚡ Performance** | `embeddings.batch_size` | Batch processing size |
-
 <a id="quickstart"></a>
 
 ## 🚀 Quick Start
@@ -201,7 +187,7 @@ curl -v http://localhost:8000
 
 ### 💻 Web UI Experience
 
-This approach relies on Python 3.10 and the corresponding pip environment，you can install it according to the [official documentation](https://docs.python.org/3.10/using/index.html).
+This approach relies on Python 3.10 and the corresponding pip environment, you can install it according to the [official documentation](https://docs.python.org/3.10/using/index.html).
 
 ```bash
 # 1. Clone Youtu-GraphRAG project
