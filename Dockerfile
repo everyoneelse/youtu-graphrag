@@ -21,7 +21,7 @@ COPY . /youtu_graphrag/
 # 6. Make scripts executable
 RUN chmod +x start.sh
 
-# 7. Setup environment
+# 7. Setup environment. If using Chinese mode, the corresponding Chinese database should be used here.
 RUN pip install -r requirements.txt && python -m spacy download en_core_web_lg
 
 # 8. Expose application port
