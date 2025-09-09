@@ -14,6 +14,8 @@ from sklearn.cluster import KMeans
 from sklearn.metrics.pairwise import cosine_similarity
 
 from utils import call_llm_api
+from utils.logger import logger
+
 
 warnings.filterwarnings('ignore')
 

@@ -16,6 +16,7 @@ from sentence_transformers import SentenceTransformer
 from models.retriever.faiss_filter import DualFAISSRetriever
 from utils import graph_processor
 from utils import call_llm_api
+from utils.logger import logger
 
 try:
     from config import get_config
@@ -61,14 +62,13 @@ class KTRetriever:
         self.llm_client = call_llm_api.LLMCompletionCall()
         
         if device == "cuda" and not torch.cuda.is_available():
-            print("Warning: CUDA requested but not available, falling back to CPU")
+            logger.warning("Warning: CUDA requested but not available, falling back to CPU")
             self.device = "cpu"
         elif device == "cuda" and torch.cuda.is_available():
             self.device = "cuda"
         else:
             self.device = device
-        
-        print(f"Using device: {self.device}")
+        logger.info(f"Using device: {self.device}")
         self.cache_dir = cache_dir
         self.top_k = top_k
         self.dataset = dataset
@@ -115,12 +115,10 @@ class KTRetriever:
                                 chunk_id = parts[0][4:] 
                                 chunk_text = parts[1][7:]  
                                 self.chunk2id[chunk_id] = chunk_text
-                print(f"Loaded {len(self.chunk2id)} chunks from {chunk_file}")
+                logger.info(f"Loaded {len(self.chunk2id)} chunks from {chunk_file}")
             except Exception as e:
-                pass
+                logger.error(f"Error loading chunks from {chunk_file}: {e}")
                 self.chunk2id = {}
-        else:
-            pass
         
         self._node_text_index = None
         self.use_exact_keyword_matching = True  # Set to False for original substring matching
@@ -128,38 +126,25 @@ class KTRetriever:
         self._node_text_cache = {}
         
         if self.enable_performance_optimizations:
-            pass
             try:
-                pass
                 cache_loaded = self._load_node_embedding_cache()
-                
-                pass
                 self.faiss_retriever.build_indices()
                 self._precompute_node_texts()
                 self._build_node_text_index()
-                
-                pass
                 self._precompute_chunk_embeddings()
                 
                 if not cache_loaded:
-                    pass
                     self._precompute_node_embeddings()
                 else:
-                    pass
                     self.node_embeddings_precomputed = True
                     
                     if not hasattr(self.faiss_retriever, 'node_embedding_cache') or not self.faiss_retriever.node_embedding_cache:
-                        pass
                         self.faiss_retriever.node_embedding_cache = {}
                         for node, embed in self.node_embedding_cache.items():
                             self.faiss_retriever.node_embedding_cache[node] = embed.clone().detach()
                 
-                pass
             except Exception as e:
-                pass
                 self.enable_performance_optimizations = False
-        else:
-            pass
 
     def build_indices(self):
         """Build all FAISS indices for efficient retrieval."""
@@ -181,10 +166,8 @@ class KTRetriever:
         This is called during initialization to build the text cache.
         """
         if self._load_node_text_cache():
-            pass
             return
         
-        pass
         start_time = time.time()
         
         all_nodes = list(self.graph.nodes())
@@ -198,27 +181,22 @@ class KTRetriever:
                     self._node_text_cache[node] = node_text
                 processed_nodes += 1
                 
-                if processed_nodes % 1000 == 0:
-                    pass
-                    
             except Exception as e:
-                pass
                 continue
         
         end_time = time.time()
-        print(f"Node texts precomputed for {len(self._node_text_cache)} nodes in {end_time - start_time:.2f} seconds")
+        logger.info(f"Node texts precomputed for {len(self._node_text_cache)} nodes in {end_time - start_time:.2f} seconds")
         
         try:
             self._save_node_text_cache()
         except Exception as e:
-            pass
+            logger.warning(f"Failed to save node text cache: {type(e).__name__}: {e}")
 
     def _save_node_text_cache(self):
         """Save node text cache to disk"""
         cache_path = f"{self.cache_dir}/{self.dataset}/node_text_cache.pkl"
         try:
             if not self._node_text_cache:
-                pass
                 return False
                 
             os.makedirs(os.path.dirname(cache_path), exist_ok=True)
@@ -227,11 +205,10 @@ class KTRetriever:
                 pickle.dump(self._node_text_cache, f)
             
             file_size = os.path.getsize(cache_path)
-            print(f"Saved node text cache with {len(self._node_text_cache)} entries to {cache_path} (size: {file_size} bytes)")
+            logger.info(f"Saved node text cache with {len(self._node_text_cache)} entries to {cache_path} (size: {file_size} bytes)")
             return True
                 
         except Exception as e:
-            pass
             return False
 
     def _load_node_text_cache(self):
@@ -241,32 +218,32 @@ class KTRetriever:
             try:
                 file_size = os.path.getsize(cache_path)
                 if file_size < 1000:  # Less than 1KB likely empty or corrupted
-                    print(f"Warning: Cache file too small ({file_size} bytes), likely empty or corrupted")
+                    logger.warning(f"Warning: Cache file too small ({file_size} bytes), likely empty or corrupted")
                     return False
                 
                 with open(cache_path, 'rb') as f:
                     self._node_text_cache = pickle.load(f)
                 
                 if not self._node_text_cache:
-                    print("Warning: Loaded cache is empty")
+                    logger.warning("Warning: Loaded cache is empty")
                     return False
                 
                 if not self._check_text_cache_consistency():
-                    print("Text cache inconsistent with current graph, will rebuild")
+                    logger.warning("Text cache inconsistent with current graph, will rebuild")
                     return False
                 
-                print(f"Loaded node text cache with {len(self._node_text_cache)} entries from {cache_path} (file size: {file_size} bytes)")
+                logger.info(f"Loaded node text cache with {len(self._node_text_cache)} entries from {cache_path} (file size: {file_size} bytes)")
                 return True
                 
             except Exception as e:
-                print(f"Error loading node text cache: {e}")
+                logger.error(f"Error loading node text cache: {e}")
                 try:
                     os.remove(cache_path)
-                    print(f"Removed corrupted cache file: {cache_path}")
-                except:
-                    pass
+                    logger.info(f"Removed corrupted cache file: {cache_path}")
+                except Exception as e2:
+                    logger.warning(f"Failed to remove corrupted cache file {cache_path}: {type(e2).__name__}: {e2}")
         else:
-            print(f"Cache file not found: {cache_path}")
+            logger.warning(f"Cache file not found: {cache_path}")
         return False
 
     def _check_text_cache_consistency(self):
@@ -278,18 +255,18 @@ class KTRetriever:
             
             missing_nodes = current_nodes - cached_nodes
             if missing_nodes:
-                print(f"Text cache missing {len(missing_nodes)} nodes from current graph")
+                logger.info(f"Text cache missing {len(missing_nodes)} nodes from current graph")
                 return False
             
             extra_nodes = cached_nodes - current_nodes
-            if len(extra_nodes) > len(current_nodes) * 0.1: 
-                print(f"Text cache has too many extra nodes: {len(extra_nodes)} extra vs {len(current_nodes)} current")
+            if len(extra_nodes) > len(current_nodes) * 0.1:
+                logger.warning(f"Text cache has too many extra nodes: {len(extra_nodes)} extra vs {len(current_nodes)} current")
                 return False
             
             return True
             
         except Exception as e:
-            print(f"Error checking text cache consistency: {e}")
+            logger.error(f"Error checking text cache consistency: {e}")
             return False
 
     def _precompute_node_embeddings(self):
@@ -300,24 +277,20 @@ class KTRetriever:
             if self.node_embeddings_precomputed:
                 return
             
-            pass
-            
             if self._load_node_embedding_cache():
-                pass
                 self.node_embeddings_precomputed = True
                 return
             
             if hasattr(self.faiss_retriever, 'node_embedding_cache') and self.faiss_retriever.node_embedding_cache:
-                pass
                 for node, embed in self.faiss_retriever.node_embedding_cache.items():
                     self.node_embedding_cache[node] = embed.clone().detach()
                 self.node_embeddings_precomputed = True
-                print(f"Successfully loaded {len(self.node_embedding_cache)} node embeddings from faiss_retriever cache")
+                logger.info(f"Successfully loaded {len(self.node_embedding_cache)} node embeddings from faiss_retriever cache")
                 
                 self._save_node_embedding_cache()
                 return
             
-            print("No cache found, computing embeddings from scratch...")
+            logger.warning("No cache found, computing embeddings from scratch...")
             
             all_nodes = list(self.graph.nodes())
             batch_size = 100
@@ -337,7 +310,7 @@ class KTRetriever:
                             batch_texts.append(node_text)
                             valid_nodes.append(node)
                     except Exception as e:
-                        print(f"Error getting text for node {node}: {str(e)}")
+                        logger.error(f"Error getting text for node {node}: {str(e)}")
                         continue
                 
                 if batch_texts:
@@ -349,7 +322,7 @@ class KTRetriever:
                             total_processed += 1
                             
                     except Exception as e:
-                        print(f"Error encoding batch {i//batch_size}: {str(e)}")
+                        logger.error(f"Error encoding batch {i//batch_size}: {str(e)}")
                         for node in valid_nodes:
                             try:
                                 node_text = self._get_node_text(node)
@@ -358,19 +331,19 @@ class KTRetriever:
                                     self.node_embedding_cache[node] = embedding
                                     total_processed += 1
                             except Exception as e2:
-                                print(f"Error encoding node {node}: {str(e2)}")
+                                logger.error(f"Error encoding node {node}: {str(e2)}")
                                 continue
                 
             
             self.node_embeddings_precomputed = True
-            print(f"Node embeddings precomputed for {total_processed} nodes (cache size: {len(self.node_embedding_cache)})")
+            logger.info(f"Node embeddings precomputed for {total_processed} nodes (cache size: {len(self.node_embedding_cache)})")
             
             try:
                 self._save_node_embedding_cache()
             except Exception as e:
-                print(f"Warning: Failed to save node embedding cache: {e}")
-                print("Continuing without saving cache...")
-            
+                logger.warning(f"Failed to save node embedding cache: {e}")
+                logger.info("Continuing without saving cache...")
+
             self._cleanup_node_cache()
 
     def _save_node_embedding_cache(self):
@@ -378,7 +351,7 @@ class KTRetriever:
         cache_path = f"{self.cache_dir}/{self.dataset}/node_embedding_cache.pt"
         try:
             if not self.node_embedding_cache:
-                print("Warning: No node embeddings to save!")
+                logger.warning("Warning: No node embeddings to save!")
                 return False
                 
             os.makedirs(os.path.dirname(cache_path), exist_ok=True)
@@ -394,11 +367,11 @@ class KTRetriever:
                         else:
                             cpu_cache[node] = np.array(embed)
                     except Exception as e:
-                        print(f"Warning: Failed to convert embedding for node {node}: {e}")
+                        logger.warning(f"Warning: Failed to convert embedding for node {node}: {e}")
                         continue
             
             if not cpu_cache:
-                print("Warning: No valid embeddings to save!")
+                logger.warning("Warning: No valid embeddings to save!")
                 return False
             
             try:
@@ -410,20 +383,20 @@ class KTRetriever:
                         tensor_cache[node] = embed_array
                 
                 torch.save(tensor_cache, cache_path)
-                print(f"Saved node embedding cache using torch.save with tensor format")
+                logger.info(f"Saved node embedding cache using torch.save with tensor format")
             except Exception as torch_error:
-                print(f"torch.save failed: {torch_error}, using numpy.save")
+                logger.error(f"torch.save failed: {torch_error}, using numpy.save")
                 cache_path_npz = cache_path.replace('.pt', '.npz')
                 np.savez_compressed(cache_path_npz, **cpu_cache)
                 cache_path = cache_path_npz
-                print(f"Saved using numpy.savez_compressed format")
+                logger.error(f"Saved using numpy.savez_compressed format")
             
             file_size = os.path.getsize(cache_path)
-            print(f"Saved node embedding cache with {len(cpu_cache)} entries to {cache_path} (size: {file_size} bytes)")
+            logger.info(f"Saved node embedding cache with {len(cpu_cache)} entries to {cache_path} (size: {file_size} bytes)")
             return True
                 
         except Exception as e:
-            print(f"Error saving node embedding cache: {e}")
+            logger.error(f"Error saving node embedding cache: {e}")
             return False
 
     def _load_node_embedding_cache(self):
@@ -434,12 +407,12 @@ class KTRetriever:
         if os.path.exists(cache_path_npz):
             try:
                 file_size = os.path.getsize(cache_path_npz)
-                print(f"Loading node embedding cache from {cache_path_npz} (file size: {file_size} bytes)")
+                logger.info(f"Loading node embedding cache from {cache_path_npz} (file size: {file_size} bytes)")
                 
                 numpy_cache = np.load(cache_path_npz)
                 
                 if len(numpy_cache.files) == 0:
-                    print("Warning: Loaded cache is empty")
+                    logger.warning("Warning: Loaded cache is empty")
                     return False
                 
                 self.node_embedding_cache.clear()
@@ -450,27 +423,27 @@ class KTRetriever:
                         embed_tensor = torch.from_numpy(embed_array).float().to(self.device)
                         self.node_embedding_cache[node] = embed_tensor
                     except Exception as e:
-                        print(f"Warning: Failed to load embedding for node {node}: {e}")
+                        logger.warning(f"Warning: Failed to load embedding for node {node}: {e}")
                         continue
                 
                 numpy_cache.close()
                 
                 if not self._check_embedding_cache_consistency():
-                    print("Embedding cache inconsistent with current graph, will rebuild")
+                    logger.info("Embedding cache inconsistent with current graph, will rebuild")
                     return False
                 
-                print(f"Loaded node embedding cache with {len(self.node_embedding_cache)} entries from {cache_path_npz}")
+                logger.info(f"Loaded node embedding cache with {len(self.node_embedding_cache)} entries from {cache_path_npz}")
                 return True
                 
             except Exception as e:
-                print(f"Error loading numpy cache: {e}")
+                logger.error(f"Error loading numpy cache: {e}")
         
         # Fallback to torch format
         if os.path.exists(cache_path):
             try:
                 file_size = os.path.getsize(cache_path)
                 if file_size < 1000: 
-                    print(f"Warning: Cache file too small ({file_size} bytes), likely empty or corrupted")
+                    logger.warning(f"Warning: Cache file too small ({file_size} bytes), likely empty or corrupted")
                     return False
                 
                 try:
@@ -480,8 +453,9 @@ class KTRetriever:
                 except Exception as e:
                     if "numpy.core.multiarray._reconstruct" in str(e):
                         try:
-                            import torch.serialization
-                            torch.serialization.add_safe_globals(["numpy.core.multiarray._reconstruct"])
+                            import importlib
+                            torch_serialization = importlib.import_module('torch.serialization')
+                            torch_serialization.add_safe_globals(["numpy.core.multiarray._reconstruct"])
                             cpu_cache = torch.load(cache_path, map_location='cpu')
                         except:
                             raise e
@@ -489,7 +463,7 @@ class KTRetriever:
                         raise e
                 
                 if not cpu_cache:
-                    print("Warning: Loaded cache is empty")
+                    logger.warning("Warning: Loaded cache is empty")
                     return False
                 
                 self.node_embedding_cache.clear()
@@ -509,25 +483,25 @@ class KTRetriever:
                                 
                             self.node_embedding_cache[node] = embed_tensor
                         except Exception as e:
-                            print(f"Warning: Failed to load embedding for node {node}: {e}")
+                            logger.error(f"Warning: Failed to load embedding for node {node}: {e}")
                             continue
                 
                 if not self._check_embedding_cache_consistency():
-                    print("Embedding cache inconsistent with current graph, will rebuild")
+                    logger.info("Embedding cache inconsistent with current graph, will rebuild")
                     return False
-                
-                print(f"Loaded node embedding cache with {len(self.node_embedding_cache)} entries from {cache_path} (file size: {file_size} bytes)")
+
+                logger.info(f"Loaded node embedding cache with {len(self.node_embedding_cache)} entries from {cache_path} (file size: {file_size} bytes)")
                 return True
                 
             except Exception as e:
-                print(f"Error loading node embedding cache: {e}")
+                logger.error(f"Error loading node embedding cache: {e}")
                 try:
                     os.remove(cache_path)
-                    print(f"Removed corrupted cache file: {cache_path}")
-                except:
-                    pass
+                    logger.info(f"Removed corrupted cache file: {cache_path}")
+                except Exception as e3:
+                    logger.warning(f"Failed to remove corrupted cache file {cache_path}: {type(e3).__name__}: {e3}")
         else:
-            print(f"Cache file not found: {cache_path}")
+            logger.error(f"Cache file not found: {cache_path}")
         return False
 
     def _check_embedding_cache_consistency(self):
@@ -539,18 +513,18 @@ class KTRetriever:
             
             missing_nodes = current_nodes - cached_nodes
             if missing_nodes:
-                print(f"Embedding cache missing {len(missing_nodes)} nodes from current graph")
+                logger.info(f"Embedding cache missing {len(missing_nodes)} nodes from current graph")
                 return False
             
             extra_nodes = cached_nodes - current_nodes
             if len(extra_nodes) > len(current_nodes) * 0.1:  # Allow 10% tolerance
-                print(f"Embedding cache has too many extra nodes: {len(extra_nodes)} extra vs {len(current_nodes)} current")
+                logger.info(f"Embedding cache has too many extra nodes: {len(extra_nodes)} extra vs {len(current_nodes)} current")
                 return False
             
             return True
             
         except Exception as e:
-            print(f"Error checking embedding cache consistency: {e}")
+            logger.error(f"Error checking embedding cache consistency: {e}")
             return False
 
     def _cleanup_node_cache(self):
@@ -587,7 +561,7 @@ class KTRetriever:
             path_start = time.time()
             path1_results = self._node_relation_retrieval(question_embed, question)
             path1_time = time.time() - path_start
-            print(f"Query encoding: {query_time:.3f}s, Path1 retrieval: {path1_time:.3f}s")
+            logger.info(f"Query encoding: {query_time:.3f}s, Path1 retrieval: {path1_time:.3f}s")
             
             path1_chunk_ids = self._extract_chunk_ids_from_nodes(path1_results['top_nodes'])
             all_chunk_ids.update(path1_chunk_ids)
@@ -606,9 +580,7 @@ class KTRetriever:
             parallel_start = time.time()
             result = self._parallel_dual_path_retrieval(question_embed, question)
             parallel_time = time.time() - parallel_start
-            print(f"Query encoding: {query_time:.3f}s, Parallel retrieval: {parallel_time:.3f}s")
-        
-        total_time = time.time() - start_time
+            logger.info(f"Query encoding: {query_time:.3f}s, Parallel retrieval: {parallel_time:.3f}s")
         
         return question_embed, result
 
@@ -633,12 +605,12 @@ class KTRetriever:
             type_start = time.time()
             type_filtered_results = self._type_based_retrieval(question_embed, question, involved_types)
             type_filtering_time = time.time() - type_start
-            print(f"Query encoding: {query_time:.3f}s, Type-based retrieval: {type_filtering_time:.3f}s")
+            logger.info(f"Query encoding: {query_time:.3f}s, Type-based retrieval: {type_filtering_time:.3f}s")
             
             return question_embed, type_filtered_results
         else:
             original_results = self.retrieve(question)
-            print(f"Query encoding: {query_time:.3f}s, Fallback to original retrieval")
+            logger.info(f"Query encoding: {query_time:.3f}s, Fallback to original retrieval")
             return original_results
 
     def _type_based_retrieval(self, question_embed: torch.Tensor, question: str, involved_types: dict) -> Dict:
@@ -706,7 +678,7 @@ class KTRetriever:
             path1_results = self._node_relation_retrieval(question_embed, question)
         
         # Path 2: triple-only retrieval
-        path2_results = self._triple_only_retrieval(question_embed, question)
+        path2_results = self._triple_only_retrieval(question_embed)
         
         all_chunk_ids = set()
         path1_chunk_ids = self._extract_chunk_ids_from_nodes(path1_results['top_nodes'])
@@ -773,7 +745,6 @@ class KTRetriever:
         else:
             top_filtered_nodes = filtered_nodes[:self.top_k]
         
-        pass
         return {"top_nodes": top_filtered_nodes}
 
     def _get_one_hop_triples_from_nodes(self, node_list: list) -> list:
@@ -816,8 +787,7 @@ class KTRetriever:
             # Also include nodes without schema_type for backward compatibility
             elif not node_schema_type and node_data.get('label') == 'entity':
                 filtered_nodes.append(node_id)
-        
-        pass
+
         return filtered_nodes
 
     def _get_node_name(self, node_id: str) -> str:
@@ -856,7 +826,7 @@ class KTRetriever:
         limited_chunk_ids = list(all_chunk_ids)[:self.top_k]
         
         end_time = time.time()
-        print(f"Time taken to extract chunk IDs: {end_time - start_time} seconds")
+        logger.info(f"Time taken to extract chunk IDs: {end_time - start_time} seconds")
         return {
             "path1_results": path1_results,
             "path2_results": path2_results,
@@ -907,12 +877,12 @@ class KTRetriever:
             try:
                 results['faiss_nodes'] = faiss_node_future.result()
             except Exception as e:
-                print(f"FAISS node search failed: {e}")
+                logger.error(f"FAISS node search failed: {e}")
             
             try:
                 results['faiss_relations'] = faiss_relation_future.result()
             except Exception as e:
-                print(f"FAISS relation search failed: {e}")
+                logger.error(f"FAISS relation search failed: {e}")
             
             if keyword_future:
                 try:
@@ -920,13 +890,13 @@ class KTRetriever:
                     results['keyword_nodes'] = keyword_results.get('nodes', [])
                     results['keywords'] = keyword_results.get('keywords', [])
                 except Exception as e:
-                    print(f"Keyword strategy failed: {e}")
+                    logger.error(f"Keyword strategy failed: {e}")
             
             if path_future:
                 try:
                     results['path_triples'] = path_future.result()
                 except Exception as e:
-                    print(f"Path strategy failed: {e}")
+                    logger.error(f"Path strategy failed: {e}")
         
         return results
 
@@ -993,25 +963,21 @@ class KTRetriever:
             'nodes': keyword_nodes
         }
 
-    def _path_strategy(self, question: str, question_embed: torch.Tensor) -> List[Tuple[str, str, str]]:
+    def _path_strategy(self, question: str):
         """Execute path-based search strategy."""
-        keywords = self._extract_query_keywords(question)
-        return []
+        self._extract_query_keywords(question)
+        return
 
     def _node_relation_retrieval(self, question_embed: torch.Tensor, question: str = "") -> Dict:
         overall_start = time.time()
-        question_id = f"q{hash(question) % 1000:03d}" if question else "no_text"
 
         max_workers = 4
         if self.config:
             max_workers = self.config.retrieval.faiss.max_workers
         with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
-            init_start = time.time()
             q_embed = self.faiss_retriever.transform_vector(question_embed)
             search_k = min(self.top_k * 3, 50)
-            init_time = time.time() - init_start
             
-            faiss_nodes_start = time.time()
             future_faiss_nodes = executor.submit(
                 self._execute_faiss_node_search,
                 q_embed.cpu().numpy(),
@@ -1029,28 +995,20 @@ class KTRetriever:
                     self._get_keyword_based_nodes,
                     future_keywords
                 )
-                keywords_time = time.time() - keywords_start
 
-            faiss_relations_start = time.time()
             future_faiss_relations = executor.submit(
                 self._execute_faiss_relation_search,
                 q_embed.cpu().numpy()
             )
-            faiss_relations_time = time.time() - faiss_relations_start
 
-            chunk_retrieval_start = time.time()
             future_chunk_retrieval = executor.submit(
                 self._chunk_embedding_retrieval,
                 question_embed,
                 self.top_k
             )
-            chunk_retrieval_time = time.time() - chunk_retrieval_start
 
-            faiss_nodes_wait_start = time.time()
             faiss_candidate_nodes = future_faiss_nodes.result()
-            faiss_nodes_wait_time = time.time() - faiss_nodes_wait_start
 
-            faiss_sim_start = time.time()
             future_faiss_sim = executor.submit(
                 self._batch_calculate_entity_similarities,
                 question_embed,
@@ -1072,35 +1030,26 @@ class KTRetriever:
                 question_embed,
                 keyword_candidate_nodes
             ) if keyword_candidate_nodes else None
-            keyword_process_time = time.time() - keyword_process_start
 
-            sim_wait_start = time.time()
             candidate_nodes = []
             faiss_similarities = future_faiss_sim.result()
-            faiss_sim_wait_time = time.time() - sim_wait_start
             
             candidate_nodes.extend(
                 (node, sim) for node, sim in faiss_similarities.items()
             )
 
             if future_keyword_sim:
-                keyword_sim_wait_start = time.time()
                 keyword_similarities = future_keyword_sim.result()
-                keyword_sim_wait_time = time.time() - keyword_sim_wait_start
                 
                 candidate_nodes.extend(
                     (node, sim) for node, sim in keyword_similarities.items()
                     if sim > 0.05 
                 )
 
-            ranking_start = time.time()
             candidate_nodes.sort(key=lambda x: x[1], reverse=True)
             top_nodes = [node for node, score in candidate_nodes[:self.top_k] if score > 0.05]
-            ranking_time = time.time() - ranking_start
 
-            relations_wait_start = time.time()
             all_relations = future_faiss_relations.result()
-            relations_wait_time = time.time() - relations_wait_start
 
             expansion_start = time.time()
             future_path_triples = executor.submit(
@@ -1116,36 +1065,19 @@ class KTRetriever:
                 question_embed
             )
 
-            neighbor_wait_start = time.time()
             one_hop_triples = future_neighbor_triples.result()
-            neighbor_wait_time = time.time() - neighbor_wait_start
-
-            path_wait_start = time.time()
             path_triples = future_path_triples.result() if future_path_triples else []
-            path_wait_time = time.time() - path_wait_start
-
-            relation_match_start = time.time()
             relation_triples = self._get_relation_matched_triples(
                 top_nodes,
                 all_relations
             )
-            relation_match_time = time.time() - relation_match_start
 
-            merge_start = time.time()
             all_triples = list({
                 triple for triple in 
                 one_hop_triples + path_triples + relation_triples
             })
-            merge_time = time.time() - merge_start
-
-            expansion_time = time.time() - expansion_start
-
             # NEW: Get chunk retrieval results
-            chunk_wait_start = time.time()
             chunk_results = future_chunk_retrieval.result()
-            chunk_wait_time = time.time() - chunk_wait_start
-
-        overall_time = time.time() - overall_start
 
         return {
             "top_nodes": top_nodes,
@@ -1176,7 +1108,6 @@ class KTRetriever:
         ]
 
     def _get_keyword_based_nodes(self, future_keywords) -> List[str]:
-        start_time = time.time()
         keywords = future_keywords.result()
         return self._keyword_based_node_search(keywords)
 
@@ -1192,14 +1123,9 @@ class KTRetriever:
         edge_queries = set()
         for node in top_nodes:
             neighbors = self._get_cached_neighbors(node)
-            all_neighbors.update(
-                n for n in neighbors 
-                if self._is_relevant_neighbor(node, n, question_embed)
-            )
+            all_neighbors.update(n for n in neighbors)
             edge_queries.update((node, n) for n in all_neighbors)
             edge_queries.update((n, node) for n in all_neighbors)
-        neighbor_time = time.time() - neighbor_start
-
 
         triple_start = time.time()
         triples = []
@@ -1209,9 +1135,6 @@ class KTRetriever:
                 relation = list(edge_data.values())[0].get('relation', '')
                 if relation:
                     triples.append((u, relation, v))
-        triple_time = time.time() - triple_start
-        
-        overall_time = time.time() - overall_start
         return triples
 
     def _get_relation_matched_triples(self, top_nodes: List[str], relations: List[str]) -> List[Tuple]:
@@ -1225,9 +1148,6 @@ class KTRetriever:
             if data.get('relation') in relation_set and 
                (u in top_node_set or v in top_node_set)
         ]
-
-    def _is_relevant_neighbor(self, source: str, neighbor: str, question_embed: torch.Tensor) -> bool:
-        return True
 
     def _triple_only_retrieval(self, question_embed: torch.Tensor) -> Dict:
         """
@@ -1252,7 +1172,7 @@ class KTRetriever:
                 "scored_triples": scored_triples
             }
         except Exception as e:
-            print(f"Error in _triple_only_retrieval: {str(e)}")
+            logger.error(f"Error in _triple_only_retrieval: {str(e)}")
             return {
                 "scored_triples": []
             }
@@ -1305,7 +1225,7 @@ class KTRetriever:
             return result
             
         except Exception as e:
-            print(f"Error getting text for node {node}: {str(e)}")
+            logger.error(f"Error getting text for node {node}: {str(e)}")
             return f"[Error Node: {node}]"
 
     def _get_node_properties(self, node: str) -> str:
@@ -1361,9 +1281,9 @@ class KTRetriever:
                     triple_text = f"({head_text} {head_props}, {r}, {tail_text} {tail_props})"
                     triple_texts.append(triple_text)
                 else:
-                    print(f"Skipping triple with invalid nodes: ({h}, {r}, {t})")
+                    logger.info(f"Skipping triple with invalid nodes: ({h}, {r}, {t})")
             except Exception as e:
-                print(f"Warning: Error processing triple ({h}, {r}, {t}): {str(e)}")
+                logger.error(f"Warning: Error processing triple ({h}, {r}, {t}): {str(e)}")
                 continue
         
         return triple_texts
@@ -1391,9 +1311,9 @@ class KTRetriever:
                     triple_text = f"({head_text} {head_props}, {r}, {tail_text} {tail_props}) [score: {score:.3f}]"
                     triples.append(triple_text)
                 else:
-                    print(f"Skipping scored triple with invalid nodes: ({h}, {r}, {t})")
+                    logger.info(f"Skipping scored triple with invalid nodes: ({h}, {r}, {t})")
             except Exception as e:
-                print(f"Warning: Error processing scored triple ({h}, {r}, {t}): {str(e)}")
+                logger.error(f"Warning: Error processing scored triple ({h}, {r}, {t}): {str(e)}")
                 continue
         
         return triples
@@ -1495,7 +1415,7 @@ class KTRetriever:
                     entity_attributes[head_name][relation].append(tail + score_part)
                     
             except Exception as e:
-                print(f"Error processing triple {triple}: {str(e)}")
+                logger.error(f"Error processing triple {triple}: {str(e)}")
                 continue
         
         # Build merged triples using helper method
@@ -1506,7 +1426,7 @@ class KTRetriever:
         ]
         
         elapsed = time.time() - start_time
-        print(f"[StepTiming] step=_merge_entity_attributes time={elapsed:.4f}")
+        logger.info(f"[StepTiming] step=_merge_entity_attributes time={elapsed:.4f}")
         return merged_triples
 
     def _process_chunk_results(self, chunk_results: Dict, question_embed: torch.Tensor, top_k: int) -> Tuple[List[str], set]:
@@ -1602,18 +1522,18 @@ class KTRetriever:
         else:
             question_embed, results = self.retrieve(question)
         retrieval_time = time.time() - start_time
-        print(f"retrieval time: {retrieval_time:.4f}")
+        logger.info(f"retrieval time: {retrieval_time:.4f}")
 
-        path1_triples = self._extract_triple_based_info(results['path1_results']['one_hop_triples'])
+        # path1_triples = self._extract_triple_based_info(results['path1_results']['one_hop_triples'])
         
-        path2_triples = []
-        if results['path2_results'].get('scored_triples'):
-            path2_triples = self._extract_scored_triple_info(results['path2_results']['scored_triples'])
+        # path2_triples = []
+        # if results['path2_results'].get('scored_triples'):
+        #     path2_triples = self._extract_scored_triple_info(results['path2_results']['scored_triples'])
         
         # Merge entity attributes for both paths
-        merged_path1 = self._merge_entity_attributes(path1_triples)
-        merged_path2 = self._merge_entity_attributes(path2_triples)
-        all_triples = merged_path1 + merged_path2
+        # merged_path1 = self._merge_entity_attributes(path1_triples)
+        # merged_path2 = self._merge_entity_attributes(path2_triples)
+        # all_triples = merged_path1 + merged_path2
         
         chunk_results = results['path1_results'].get('chunk_results')
         chunk_retrieval_results, chunk_retrieval_ids = self._process_chunk_results(
@@ -1654,14 +1574,12 @@ class KTRetriever:
         if self.config:
             default_max_workers = self.config.retrieval.faiss.max_workers
         max_workers = min(len(sub_questions), default_max_workers)
-        
         with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
 
             future_to_subquestion = {
                 executor.submit(self._process_single_subquestion, sub_q, top_k, involved_types): sub_q 
                 for sub_q in sub_questions
             }
-            
             all_triples = set()
             all_chunk_ids = set()
             all_chunk_contents = {}
@@ -1682,7 +1600,7 @@ class KTRetriever:
                         all_sub_question_results.append(sub_result['sub_result'])
                         
                 except Exception as e:
-                    print(f"Error processing sub-question: {str(e)}")
+                    logger.error(f"Error processing sub-question: {str(e)}")
                     with threading.Lock():
                         all_sub_question_results.append({
                             'sub_question': sub_q.get('sub-question', ''),
@@ -1713,12 +1631,8 @@ class KTRetriever:
     def _process_single_subquestion(self, sub_question: Dict, top_k: int, involved_types: dict = None) -> Dict:
 
         sub_question_text = sub_question.get('sub-question', '')
-        
         try:
-            sub_start = time.time()
             retrieval_results, time_taken = self.process_retrieval_results(sub_question_text, top_k, involved_types)
-            sub_elapsed = time.time() - sub_start
-            
             triples = retrieval_results.get('triples', []) or []
             chunk_ids = retrieval_results.get('chunk_ids', []) or []
             chunk_contents = retrieval_results.get('chunk_contents', []) or []
@@ -1729,13 +1643,13 @@ class KTRetriever:
                 chunk_contents_list = chunk_contents
             
             if not isinstance(triples, (list, tuple)):
-                print(f"Warning: triples is not a list: {type(triples)}")
+                logger.warning(f"triples is not a list: {type(triples)}")
                 triples = []
             if not isinstance(chunk_ids, (list, tuple)):
-                print(f"Warning: chunk_ids is not a list: {type(chunk_ids)}")
+                logger.warning(f"chunk_ids is not a list: {type(chunk_ids)}")
                 chunk_ids = []
             if not isinstance(chunk_contents_list, (list, tuple)):
-                print(f"Warning: chunk_contents_list is not a list: {type(chunk_contents_list)}")
+                logger.warning(f"chunk_contents_list is not a list: {type(chunk_contents_list)}")
                 chunk_contents_list = []
             
             sub_result = {
@@ -1760,7 +1674,7 @@ class KTRetriever:
             }
             
         except Exception as e:
-            print(f"Error processing sub-question '{sub_question_text}': {str(e)}")
+            logger.error(f"Error processing sub-question '{sub_question_text}': {str(e)}")
             return {
                 'triples': set(),
                 'chunk_ids': set(),
@@ -1831,10 +1745,9 @@ class KTRetriever:
     
     def generate_answer(self, prompt: str) -> str:
         answer = self.llm_client.call_api(prompt)
-        print("Retrieved context:")
-        print(prompt)
-        print(f"Answer: {answer}")  
-        
+        logger.info("Retrieved context:")
+        logger.info(prompt)
+        logger.info(f"Answer: {answer}")  
         return answer
 
 
@@ -1862,11 +1775,11 @@ class KTRetriever:
                     if chunk_id:
                         chunk_ids.add(str(chunk_id))
                     else:
-                        print(f"Debug: No chunk ID found for node {node}")
+                        logger.warning(f"Debug: No chunk ID found for node {node}")
                 else:
-                    print(f"Debug: Node {node} not found in graph")
+                    logger.warning(f"Debug: Node {node} not found in graph")
             except Exception as e:
-                print(f"Debug: Error processing node {node}: {str(e)}")
+                logger.error(f"Debug: Error processing node {node}: {str(e)}")
                 continue
         
         return chunk_ids
@@ -1945,7 +1858,7 @@ class KTRetriever:
             return enhanced_query
             
         except Exception as e:
-            print(f"Error enhancing query: {str(e)}")
+            logger.error(f"Error enhancing query: {str(e)}")
             return question
 
     def _calculate_entity_similarity(self, query_embed: torch.Tensor, node: str) -> float:
@@ -1981,15 +1894,11 @@ class KTRetriever:
             return similarity
             
         except Exception as e:
-            print(f"Error calculating entity similarity for node {node}: {str(e)}")
+            logger.error(f"Error calculating entity similarity for node {node}: {str(e)}")
             return 0.0
 
     def _batch_calculate_entity_similarities(self, query_embed: torch.Tensor, nodes: List[str]) -> Dict[str, float]:
-        overall_start = time.time()        
-        
         similarities = {}
-        
-        cache_start = time.time()
         node_embeddings = []
         valid_nodes = []
         with self.cache_locks['node_embedding']:
@@ -1997,51 +1906,39 @@ class KTRetriever:
                 if node in self.node_embedding_cache:
                     node_embeddings.append(self.node_embedding_cache[node])
                     valid_nodes.append(node)
-        cache_time = time.time() - cache_start
         
         if node_embeddings:
 
             try:
-                stack_start = time.time()
                 node_embeddings_tensor = torch.stack(node_embeddings)
-                stack_time = time.time() - stack_start
                 
-                sim_calc_start = time.time()
                 batch_similarities = F.cosine_similarity(
                     query_embed.unsqueeze(0), 
                     node_embeddings_tensor, 
                     dim=1
                 )
-                sim_calc_time = time.time() - sim_calc_start
                 
-                result_start = time.time()
                 for i, node in enumerate(valid_nodes):
                     similarity = max(0.0, batch_similarities[i].item())
                     similarities[node] = similarity
-                result_time = time.time() - result_start
                         
             except Exception as e:
-                fallback_start = time.time()
                 for node in valid_nodes:
                     try:
                         similarity = self._calculate_entity_similarity(query_embed, node)
                         similarities[node] = similarity
                     except Exception as e2:
-                        print(f"Error calculating similarity for node {node}: {str(e2)}")
+                        logger.error(f"Error calculating similarity for node {node}: {str(e2)}")
                         continue
-                fallback_time = time.time() - fallback_start
         else:
-            individual_start = time.time()
             for node in nodes:
                 try:
                     similarity = self._calculate_entity_similarity(query_embed, node)
                     similarities[node] = similarity
                 except Exception as e:
-                    print(f"Error calculating similarity for node {node}: {str(e)}")
+                    logger.error(f"Error calculating similarity for node {node}: {str(e)}")
                     continue
-            individual_time = time.time() - individual_start
             
-        overall_time = time.time() - overall_start
         return similarities
 
     def _smart_neighbor_expansion(self, center_node: str, query_embed: torch.Tensor, max_neighbors: int = 5) -> List[str]:
@@ -2081,6 +1978,7 @@ class KTRetriever:
         triple_texts = []
         valid_triples = []
         
+        print("triples", triples)
         for h, r, t in triples:
             try:
                 head_text = self._get_node_text(h)
@@ -2094,7 +1992,7 @@ class KTRetriever:
                 valid_triples.append((h, r, t))
                 
             except Exception as e:
-                print(f"Error processing triple ({h}, {r}, {t}): {str(e)}")
+                logger.error(f"Error processing triple ({h}, {r}, {t}): {str(e)}")
                 continue
         
         if not valid_triples:
@@ -2104,7 +2002,7 @@ class KTRetriever:
             encode_start = time.time()
             triple_embeddings = self.qa_encoder.encode(triple_texts, convert_to_tensor=True).to(self.device)
             encode_elapsed = time.time() - encode_start
-            print(f"[StepTiming] step=batch_encode_triple_texts time={encode_elapsed:.4f}")
+            logger.info(f"[StepTiming] step=batch_encode_triple_texts time={encode_elapsed:.4f}")
             
             sim_calc_start = time.time()
             similarities = F.cosine_similarity(
@@ -2113,7 +2011,7 @@ class KTRetriever:
                 dim=1
             )
             sim_calc_elapsed = time.time() - sim_calc_start
-            print(f"[StepTiming] step=batch_calculate_similarities time={sim_calc_elapsed:.4f}")
+            logger.info(f"[StepTiming] step=batch_calculate_similarities time={sim_calc_elapsed:.4f}")
             
             for i, (h, r, t) in enumerate(valid_triples):
                 similarity = similarities[i].item()
@@ -2128,13 +2026,13 @@ class KTRetriever:
                     scored_triples.append((h, r, t, final_score))
                                         
         except Exception as e:
-            print(f"Error in batch triple encoding: {str(e)}")
+            logger.error(f"Error in batch triple encoding: {str(e)}")
             # Fallback to individual processing
             return self._rerank_triples_individual(triples, question_embed)
         
         scored_triples.sort(key=lambda x: x[3], reverse=True)
         elapsed = time.time() - start_time
-        print(f"[StepTiming] step=_rerank_triples_by_relevance time={elapsed:.4f}")
+        logger.info(f"[StepTiming] step=_rerank_triples_by_relevance time={elapsed:.4f}")
         return scored_triples
     
     def _rerank_triples_individual(self, triples: List[Tuple[str, str, str]], question_embed: torch.Tensor) -> List[Tuple[str, str, str, float]]:
@@ -2164,7 +2062,7 @@ class KTRetriever:
                     scored_triples.append((h, r, t, final_score))
                     
             except Exception as e:
-                print(f"Error reranking triple ({h}, {r}, {t}): {str(e)}")
+                logger.error(f"Error reranking triple ({h}, {r}, {t}): {str(e)}")
                 continue
         
         scored_triples.sort(key=lambda x: x[3], reverse=True)
@@ -2181,14 +2079,8 @@ class KTRetriever:
         Returns:
             List of automatically discovered keywords
         """
-        overall_start = time.time()
         try:
-
-            nlp_start = time.time()
             doc = self.nlp(question.lower())
-            nlp_time = time.time() - nlp_start
-
-            extract_start = time.time()
             keywords = []
             
             for token in doc:
@@ -2203,16 +2095,12 @@ class KTRetriever:
             for ent in doc.ents:
                 if len(ent.text) > 2:
                     keywords.append(ent.text.lower())
-            extract_time = time.time() - extract_start
             
-            dedup_start = time.time()
             unique_keywords = list(set(keywords))
-            dedup_time = time.time() - dedup_start
-            overall_time = time.time() - overall_start
             return unique_keywords
             
         except Exception as e:
-            print(f"Error extracting keywords: {str(e)}")
+            logger.error(f"Error extracting keywords: {str(e)}")
             return []
 
     def _keyword_based_node_search(self, keywords: List[str]) -> List[str]:
@@ -2229,10 +2117,9 @@ class KTRetriever:
         
         if use_exact_matching:
             if not hasattr(self, '_node_text_index') or self._node_text_index is None:
-                print("Warning: Node text index not found. This should be built during initialization.")
+                logger.warning("Node text index not found. This should be built during initialization.")
                 return []
             
-            search_start = time.time()
             relevant_nodes = set()
             max_nodes_per_keyword = 50  
             
@@ -2247,15 +2134,9 @@ class KTRetriever:
                 
                 if len(relevant_nodes) > 200: 
                     break
-            
-            search_time = time.time() - search_start
-            overall_time = time.time() - overall_start
             return list(relevant_nodes)
         else:
-
-            fallback_start = time.time()
             result = self._keyword_based_node_search_original(keywords)
-            fallback_time = time.time() - fallback_start
             return result
     
     def _keyword_based_node_search_original(self, keywords: List[str]) -> List[str]:
@@ -2287,7 +2168,7 @@ class KTRetriever:
             return
         
         start_time = time.time()
-        print("Building optimized node text index for keyword search...")
+        logger.info("Building optimized node text index for keyword search...")
         self._node_text_index = {}
         
         if hasattr(self, '_node_text_cache') and self._node_text_cache:
@@ -2320,7 +2201,7 @@ class KTRetriever:
                 continue
         
         end_time = time.time()
-        print(f"Time taken to build node text index: {end_time - start_time} seconds")
+        logger.info(f"Time taken to build node text index: {end_time - start_time} seconds")
 
         self._save_node_text_index()
 
@@ -2342,11 +2223,11 @@ class KTRetriever:
                 pickle.dump(serializable_index, f)
             
             file_size = os.path.getsize(cache_path)
-            print(f"Saved node text index with {len(serializable_index)} words to {cache_path} (size: {file_size} bytes)")
+            logger.info(f"Saved node text index with {len(serializable_index)} words to {cache_path} (size: {file_size} bytes)")
             return True
                 
         except Exception as e:
-            print(f"Error saving node text index: {e}")
+            logger.error(f"Error saving node text index: {e}")
             return False
 
     def _load_node_text_index(self):
@@ -2356,14 +2237,14 @@ class KTRetriever:
             try:
                 file_size = os.path.getsize(cache_path)
                 if file_size < 1000: 
-                    print(f"Warning: Cache file too small ({file_size} bytes), likely empty or corrupted")
+                    logger.warning(f"Cache file too small ({file_size} bytes), likely empty or corrupted")
                     return False
                 
                 with open(cache_path, 'rb') as f:
                     serializable_index = pickle.load(f)
                 
                 if not serializable_index:
-                    print("Warning: Loaded index is empty")
+                    logger.warning("Loaded index is empty")
                     return False
                 
                 self._node_text_index = {}
@@ -2371,21 +2252,21 @@ class KTRetriever:
                     self._node_text_index[word] = set(nodes)
                 
                 if not self._check_text_index_consistency():
-                    print("Text index inconsistent with current graph, will rebuild")
+                    logger.info("Text index inconsistent with current graph, will rebuild")
                     return False
                 
-                print(f"Loaded node text index with {len(self._node_text_index)} words from {cache_path} (file size: {file_size} bytes)")
+                logger.info(f"Loaded node text index with {len(self._node_text_index)} words from {cache_path} (file size: {file_size} bytes)")
                 return True
                 
             except Exception as e:
-                print(f"Error loading node text index: {e}")
+                logger.error(f"Error loading node text index: {e}")
                 try:
                     os.remove(cache_path)
-                    print(f"Removed corrupted cache file: {cache_path}")
-                except:
-                    pass
+                    logger.info(f"Removed corrupted cache file: {cache_path}")
+                except Exception as e2:
+                    logger.error(f"Failed to remove corrupted cache file {cache_path}: {type(e2).__name__}: {e2}")
         else:
-            print(f"Cache file not found: {cache_path}")
+            logger.info(f"Cache file not found: {cache_path}")
         return False
 
     def _check_text_index_consistency(self):
@@ -2398,18 +2279,18 @@ class KTRetriever:
             current_nodes = set(self.graph.nodes())
             missing_nodes = current_nodes - indexed_nodes
             if missing_nodes:
-                print(f"Text index missing {len(missing_nodes)} nodes from current graph")
+                logger.warning(f"Text index missing {len(missing_nodes)} nodes from current graph")
                 return False
             
             extra_nodes = indexed_nodes - current_nodes
             if len(extra_nodes) > len(current_nodes) * 0.1:  # Allow 10% tolerance
-                print(f"Text index has too many extra nodes: {len(extra_nodes)} extra vs {len(current_nodes)} current")
+                logger.warning(f"Text index has too many extra nodes: {len(extra_nodes)} extra vs {len(current_nodes)} current")
                 return False
             
             return True
             
         except Exception as e:
-            print(f"Error checking text index consistency: {e}")
+            logger.error(f"Error checking text index consistency: {e}")
             return False
 
     def _path_based_search(self, start_nodes: List[str], target_keywords: List[str], max_depth: int = 2) -> List[Tuple[str, str, str]]:
@@ -2444,18 +2325,16 @@ class KTRetriever:
                                 relation = list(edge_data.values())[0]['relation']
                                 found_triples.append((u, relation, v))
                         break
-            except:
-                pass
+            except Exception as e:
+                logger.warning(f"Error during DFS path search at node {start_node if 'start_node' in locals() else ''}: {type(e).__name__}: {e}")
             
             if depth < max_depth:
                 for neighbor in self.graph.neighbors(node):
                     if neighbor not in visited:
                         dfs_search(neighbor, depth + 1, path + [neighbor])
         
-        search_start = time.time()
         for start_node in start_nodes:
             dfs_search(start_node, 0, [start_node])
-        search_time = time.time() - search_start
 
         return found_triples
 
@@ -2467,17 +2346,17 @@ class KTRetriever:
             if self.chunk_embeddings_precomputed:
                 return
             
-            print("Precomputing chunk embeddings for direct chunk retrieval...")
+            logger.info("Precomputing chunk embeddings for direct chunk retrieval...")
             if self._load_chunk_embedding_cache():
-                print("Successfully loaded chunk embeddings from disk cache")
+                logger.info("Successfully loaded chunk embeddings from disk cache")
                 self.chunk_embeddings_precomputed = True
                 return
             
             if not self.chunk2id:
-                print("Warning: No chunks available for embedding computation")
+                logger.info("Warning: No chunks available for embedding computation")
                 return
             
-            print("Computing chunk embeddings from scratch...")
+            logger.info("Computing chunk embeddings from scratch...")
             
             chunk_ids = list(self.chunk2id.keys())
             chunk_texts = list(self.chunk2id.values())
@@ -2503,7 +2382,7 @@ class KTRetriever:
                         total_processed += 1
                         
                 except Exception as e:
-                    print(f"Error encoding chunk batch {i//batch_size}: {str(e)}")
+                    logger.error(f"Error encoding chunk batch {i//batch_size}: {str(e)}")
                     for j, chunk_id in enumerate(batch_chunk_ids):
                         try:
                             chunk_text = self.chunk2id[chunk_id]
@@ -2513,12 +2392,12 @@ class KTRetriever:
                             valid_chunk_ids.append(chunk_id)
                             total_processed += 1
                         except Exception as e2:
-                            print(f"Error encoding chunk {chunk_id}: {str(e2)}")
+                            logger.error(f"Error encoding chunk {chunk_id}: {str(e2)}")
                             continue
             
             if embeddings_list:
                 try:
-                    print("Building FAISS index for chunk embeddings...")
+                    logger.info("Building FAISS index for chunk embeddings...")
                     embeddings_array = np.array(embeddings_list)
                     dimension = embeddings_array.shape[1]
                     
@@ -2529,13 +2408,13 @@ class KTRetriever:
                         self.chunk_id_to_index[chunk_id] = i
                         self.index_to_chunk_id[i] = chunk_id
                     
-                    print(f"FAISS index built with {len(valid_chunk_ids)} chunks")
+                    logger.info(f"FAISS index built with {len(valid_chunk_ids)} chunks")
                     
                 except Exception as e:
-                    print(f"Error building FAISS index for chunks: {str(e)}")
-            
+                    logger.error(f"Error building FAISS index for chunks: {str(e)}")
+
             self.chunk_embeddings_precomputed = True
-            print(f"Chunk embeddings precomputed for {total_processed} chunks (cache size: {len(self.chunk_embedding_cache)})")
+            logger.info(f"Chunk embeddings precomputed for {total_processed} chunks (cache size: {len(self.chunk_embedding_cache)})")
             
             self._save_chunk_embedding_cache()
 
@@ -2544,7 +2423,6 @@ class KTRetriever:
         cache_path = f"{self.cache_dir}/{self.dataset}/chunk_embedding_cache.pt"
         try:
             if not self.chunk_embedding_cache:
-                pass
                 return False
                 
             os.makedirs(os.path.dirname(cache_path), exist_ok=True)
@@ -2560,11 +2438,9 @@ class KTRetriever:
                         else:
                             numpy_cache[chunk_id] = np.array(embed)
                     except Exception as e:
-                        pass
                         continue
             
             if not numpy_cache:
-                pass
                 return False
             
             try:
@@ -2576,20 +2452,16 @@ class KTRetriever:
                         tensor_cache[chunk_id] = embed_array
                 
                 torch.save(tensor_cache, cache_path)
-                pass
             except Exception as torch_error:
-                pass
                 cache_path_npz = cache_path.replace('.pt', '.npz')
                 np.savez_compressed(cache_path_npz, **numpy_cache)
                 cache_path = cache_path_npz
-                pass
             
             file_size = os.path.getsize(cache_path)
-            print(f"Saved chunk embedding cache with {len(numpy_cache)} entries to {cache_path} (size: {file_size} bytes)")
+            logger.info(f"Saved chunk embedding cache with {len(numpy_cache)} entries to {cache_path} (size: {file_size} bytes)")
             return True
                 
         except Exception as e:
-            pass
             return False
 
     def _load_chunk_embedding_cache(self):
@@ -2600,12 +2472,9 @@ class KTRetriever:
         if os.path.exists(cache_path_npz):
             try:
                 file_size = os.path.getsize(cache_path_npz)
-                pass
-                
                 numpy_cache = np.load(cache_path_npz)
                 
                 if len(numpy_cache.files) == 0:
-                    pass
                     return False
                 
                 self.chunk_embedding_cache.clear()
@@ -2616,22 +2485,21 @@ class KTRetriever:
                         embed_tensor = torch.from_numpy(embed_array).float().to(self.device)
                         self.chunk_embedding_cache[chunk_id] = embed_tensor
                     except Exception as e:
-                        pass
                         continue
                 
                 numpy_cache.close()
                 
-                print(f"Loaded chunk embedding cache with {len(self.chunk_embedding_cache)} entries from {cache_path_npz}")
+                logger.info(f"Loaded chunk embedding cache with {len(self.chunk_embedding_cache)} entries from {cache_path_npz}")
                 return True
                 
             except Exception as e:
-                pass
-        
+                logger.error(f"Failed to load chunk embedding cache from {cache_path_npz}: {e}")
+                return False
+
         if os.path.exists(cache_path):
             try:
                 file_size = os.path.getsize(cache_path)
                 if file_size < 1000:  
-                    pass
                     return False
                 
                 try:
@@ -2641,8 +2509,9 @@ class KTRetriever:
                 except Exception as e:
                     if "numpy.core.multiarray._reconstruct" in str(e):
                         try:
-                            import torch.serialization
-                            torch.serialization.add_safe_globals(["numpy.core.multiarray._reconstruct"])
+                            import importlib
+                            torch_serialization = importlib.import_module('torch.serialization')
+                            torch_serialization.add_safe_globals(["numpy.core.multiarray._reconstruct"])
                             cpu_cache = torch.load(cache_path, map_location='cpu')
                         except:
                             raise e
@@ -2650,7 +2519,7 @@ class KTRetriever:
                         raise e
                 
                 if not cpu_cache:
-                    pass
+                    logger.warning(f"Chunk embedding cache is empty from {cache_path}")
                     return False
 
                 self.chunk_embedding_cache.clear()
@@ -2670,7 +2539,7 @@ class KTRetriever:
                                 
                             self.chunk_embedding_cache[chunk_id] = embed_tensor
                         except Exception as e:
-                            print(f"Warning: Failed to load chunk embedding for {chunk_id}: {e}")
+                            logger.error(f"Warning: Failed to load chunk embedding for {chunk_id}: {e}")
                             continue
                 
                 if self.chunk_embedding_cache:
@@ -2694,28 +2563,24 @@ class KTRetriever:
                             self.chunk_id_to_index[chunk_id] = i
                             self.index_to_chunk_id[i] = chunk_id
                         
-                        pass
-                        
                     except Exception as e:
-                        pass
                         return False
                 
                 if not self._check_chunk_cache_consistency():
-                    pass
                     return False
                 
-                print(f"Loaded chunk embedding cache with {len(self.chunk_embedding_cache)} entries from {cache_path} (file size: {file_size} bytes)")
+                logger.info(f"Loaded chunk embedding cache with {len(self.chunk_embedding_cache)} entries from {cache_path} (file size: {file_size} bytes)")
                 return True
                 
             except Exception as e:
-                print(f"Error loading chunk embedding cache: {e}")
+                logger.error(f"Error loading chunk embedding cache: {e}")
                 try:
                     os.remove(cache_path)
-                    print(f"Removed corrupted chunk cache file: {cache_path}")
-                except:
-                    pass
+                    logger.info(f"Removed corrupted chunk cache file: {cache_path}")
+                except Exception as e:
+                    logger.error(f"Error removing corrupted chunk cache file: {cache_path}: {e}")
         else:
-            print(f"Chunk cache file not found: {cache_path}")
+            logger.warning(f"Chunk cache file not found: {cache_path}")
         return False
 
     def _check_chunk_cache_consistency(self):
@@ -2726,24 +2591,24 @@ class KTRetriever:
             
             missing_chunks = current_chunk_ids - cached_chunk_ids
             if missing_chunks:
-                print(f"Chunk cache missing {len(missing_chunks)} chunks from current chunks")
+                logger.info(f"Chunk cache missing {len(missing_chunks)} chunks from current chunks")
                 return False
             
             extra_chunks = cached_chunk_ids - current_chunk_ids
-            if len(extra_chunks) > len(current_chunk_ids) * 0.1:  
-                print(f"Chunk cache has too many extra chunks: {len(extra_chunks)} extra vs {len(current_chunk_ids)} current")
+            if len(extra_chunks) > len(current_chunk_ids) * 0.1:
+                logger.info(f"Chunk cache has too many extra chunks: {len(extra_chunks)} extra vs {len(current_chunk_ids)} current")
                 return False
             
             return True
             
         except Exception as e:
-            print(f"Error checking chunk cache consistency: {e}")
+            logger.error(f"Error checking chunk cache consistency: {e}")
             return False
 
     def _chunk_embedding_retrieval(self, question_embed: torch.Tensor, top_k: int = 20) -> Dict:
         try:
             if not self.chunk_embeddings_precomputed or self.chunk_faiss_index is None:
-                print("Warning: Chunk embeddings not precomputed, skipping chunk retrieval")
+                logger.info("Warning: Chunk embeddings not precomputed, skipping chunk retrieval")
                 return {
                     "chunk_ids": [],
                     "scores": [],
@@ -2775,7 +2640,7 @@ class KTRetriever:
             }
             
         except Exception as e:
-            print(f"Error in chunk embedding retrieval: {str(e)}")
+            logger.error(f"Error in chunk embedding retrieval: {str(e)}")
             return {
                 "chunk_ids": [],
                 "scores": [],
@@ -2816,7 +2681,7 @@ class KTRetriever:
                     chunk_similarities.append((chunk_id, content, combined_score, i))
                     
                 except Exception as e:
-                    print(f"Error calculating similarity for chunk {chunk_id}: {str(e)}")
+                    logger.error(f"Error calculating similarity for chunk {chunk_id}: {str(e)}")
                     faiss_score = original_scores[i] if i < len(original_scores) else 0.0
                     chunk_similarities.append((chunk_id, content, faiss_score, i))
             
@@ -2835,5 +2700,5 @@ class KTRetriever:
             }
             
         except Exception as e:
-            print(f"Error in chunk reranking: {str(e)}")
+            logger.error(f"Error in chunk reranking: {str(e)}")
             return chunk_results

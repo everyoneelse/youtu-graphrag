@@ -2,16 +2,17 @@
 - noagent: Basic retrieval and answer generation
 - agent: Question decomposition with parallel sub-question processing and Iterative Retrieval Chain of Thought with step-by-step reasoning
 """
+import json
+import json_repair
+import time
+import argparse
+from typing import List
+
 from models.constructor import kt_gen as constructor
 from models.retriever import agentic_decomposer as decomposer, enhanced_kt_retriever as retriever
 from utils.eval import Eval
 from config import get_config, ConfigManager
-import json
-import json_repair
-import time
-import logging
-import argparse
-from typing import List
+from utils.logger import logger
 
 
 def rerank_chunks_by_keywords(chunks: List[str], question: str, top_k: int) -> List[str]:
@@ -78,23 +79,22 @@ def parse_arguments():
 
 def setup_environment(config: ConfigManager):
     """Set up the environment based on configuration."""
-    config.setup_logging()
     config.create_output_directories()
     
-    logging.info("Youtu-GraphRAG initialized")
-    logging.info(f"Mode: {config.triggers.mode}")
-    logging.info(f"Constructor enabled: {config.triggers.constructor_trigger}")
-    logging.info(f"Retriever enabled: {config.triggers.retrieve_trigger}")
+    logger.info("Youtu-GraphRAG initialized")
+    logger.info(f"Mode: {config.triggers.mode}")
+    logger.info(f"Constructor enabled: {config.triggers.constructor_trigger}")
+    logger.info(f"Retriever enabled: {config.triggers.retrieve_trigger}")
 
 
 def graph_construction(datasets):
     if config.triggers.constructor_trigger:
-        logging.info("Starting knowledge graph construction...")
+        logger.info("Starting knowledge graph construction...")
         
         for dataset in datasets:
             try:
                 dataset_config = config.get_dataset_config(dataset)
-                logging.info(f"Building knowledge graph for dataset: {dataset}")
+                logger.info(f"Building knowledge graph for dataset: {dataset}")
                 
                 builder = constructor.KTBuilder(
                     dataset, 
@@ -104,10 +104,10 @@ def graph_construction(datasets):
                 )
 
                 builder.build_knowledge_graph(dataset_config.corpus_path)
-                logging.info(f"Successfully built knowledge graph for {dataset}")
+                logger.info(f"Successfully built knowledge graph for {dataset}")
             
             except Exception as e:
-                logging.error(f"Failed to build knowledge graph for {dataset}: {e}")
+                logger.error(f"Failed to build knowledge graph for {dataset}: {e}")
                 continue
     return
 
@@ -116,21 +116,14 @@ def retrieval(datasets):
     for dataset in datasets:
         dataset_config = config.get_dataset_config(dataset)
         
-        log_file = f"{config.output.logs_dir}/{dataset}_{config.triggers.mode}_recall_{config.retrieval.recall_paths}_{config.retrieval.top_k_filter}.log"
-        dataset_logger = logging.getLogger(f"{dataset}_logger")
-        dataset_handler = logging.FileHandler(log_file)
-        dataset_handler.setFormatter(logging.Formatter(config.logging_config.format))
-        dataset_logger.addHandler(dataset_handler)
-        dataset_logger.setLevel(getattr(logging, config.logging_config.level))
-        
         with open(dataset_config.qa_path, "r") as f:
             qa_pairs = json_repair.load(f)
         
         # evaluator = Eval(config.api.llm_api_key)
         graphq = decomposer.GraphQ(dataset, config=config)
         
-        logging.info("🚀 Initializing retriever 🚀")
-        logging.info("-"*30)
+        logger.info("🚀 Initializing retriever 🚀")
+        logger.info("-"*30)
         
         kt_retriever = retriever.KTRetriever(
             dataset, 
@@ -142,15 +135,15 @@ def retrieval(datasets):
             config=config
         )
         
-        logging.info("🚀 Building FAISS index 🚀")
-        logging.info("-"*30)
+        logger.info("🚀 Building FAISS index 🚀")
+        logger.info("-"*30)
         start_time = time.time()
         kt_retriever.build_indices()
-        logging.info(f"Time taken to build FAISS index: {time.time() - start_time} seconds")
-        logging.info("-"*30)
+        logger.info(f"Time taken to build FAISS index: {time.time() - start_time} seconds")
+        logger.info("-"*30)
         
-        logging.info(f"Start answering questions...")
-        logging.info("-"*30)
+        logger.info(f"Start answering questions...")
+        logger.info("-"*30)
     
         if config.triggers.mode == "noagent":
             no_agent_retrieval(graphq, kt_retriever, qa_pairs, dataset_config.schema_path)
@@ -182,16 +175,16 @@ def initial_question_decomposition(graphq, kt_retriever, question, schema_path):
         decomposition_result = graphq.decompose(question, schema_path)
         sub_questions = decomposition_result.get("sub_questions", [])
         involved_types = decomposition_result.get("involved_types", {})
-        logging.info(f"Original question: {question}")
-        logging.info(f"Decomposed into {len(sub_questions)} sub-questions")
-        logging.info(f"Involved types: {involved_types}")
+        logger.info(f"Original question: {question}")
+        logger.info(f"Decomposed into {len(sub_questions)} sub-questions")
+        logger.info(f"Involved types: {involved_types}")
     except Exception as e:
-        logging.error(f"Error decomposing question: {str(e)}")
+        logger.error(f"Error decomposing question: {str(e)}")
         sub_questions = [{"sub-question": question}]
         involved_types = {"nodes": [], "relations": [], "attributes": []}  
 
     if len(sub_questions) > 1:
-        logging.info("🚀 Using parallel sub-question processing...")
+        logger.info("🚀 Using parallel sub-question processing...")
         aggregated_results, parallel_time = kt_retriever.process_subquestions_parallel(
             sub_questions, top_k=config.retrieval.top_k_filter, involved_types=involved_types
         )
@@ -201,14 +194,14 @@ def initial_question_decomposition(graphq, kt_retriever, question, schema_path):
         for chunk_id, content in aggregated_results['chunk_contents'].items():
             all_chunk_contents[chunk_id] = content
         all_sub_question_results = aggregated_results['sub_question_results']
-        logging.info(f"✅ Parallel processing completed in {parallel_time:.2f}s")
+        logger.info(f"✅ Parallel processing completed in {parallel_time:.2f}s")
 
     else:
-        logging.info("📝 Using single sub-question processing...")
+        logger.info("📝 Using single sub-question processing...")
         for i, sub_question in enumerate(sub_questions):
             try:
                 sub_question_text = sub_question["sub-question"]
-                logging.info(f"Processing sub-question {i+1}: {sub_question_text}")
+                logger.info(f"Processing sub-question {i+1}: {sub_question_text}")
                 retrieval_results, time_taken = kt_retriever.process_retrieval_results(sub_question_text, top_k=config.retrieval.top_k_filter, involved_types=involved_types)
                 total_time += time_taken
                 triples = retrieval_results.get('triples', []) or []
@@ -231,12 +224,12 @@ def initial_question_decomposition(graphq, kt_retriever, question, schema_path):
                         if i < len(chunk_contents):
                             all_chunk_contents[chunk_id] = chunk_contents[i]
                         else:
-                            print(f"Debug: Missing chunk content for chunk_id {chunk_id}")
+                            logger.debug(f"Missing chunk content for chunk_id {chunk_id}")
 
-                logging.info(f"Sub-question {i+1} results: {len(retrieval_results['triples'])} triples, {len(retrieval_results['chunk_ids'])} chunks")
+                logger.info(f"Sub-question {i+1} results: {len(retrieval_results['triples'])} triples, {len(retrieval_results['chunk_ids'])} chunks")
 
             except Exception as e:
-                logging.error(f"Error processing sub-question {i+1}: {str(e)}")
+                logger.error(f"Error processing sub-question {i+1}: {str(e)}")
                 sub_result = {
                     'sub_question': sub_question_text,
                     'triples_count': 0,
@@ -251,7 +244,7 @@ def initial_question_decomposition(graphq, kt_retriever, question, schema_path):
     dedup_chunk_contents = merge_chunk_contents(dedup_chunk_ids, all_chunk_contents)
 
     if not dedup_triples and not dedup_chunk_contents:
-        logging.warning(f"No triples or chunks retrieved for question: {question}")
+        logger.warning(f"No triples or chunks retrieved for question: {question}")
         dedup_triples = ["No relevant information found"]
         dedup_chunk_contents = ["No relevant chunks found"]
 
@@ -273,7 +266,7 @@ def initial_question_decomposition(graphq, kt_retriever, question, schema_path):
     context += "\n=== Chunks ===\n" + "\n".join(dedup_chunk_contents)
 
     for i, sub_result in enumerate(all_sub_question_results):
-        logging.info(f"  Sub-{i+1}: {sub_result['sub_question']} -> {sub_result['triples_count']} triples, {sub_result['chunk_ids_count']} chunks ({sub_result['time_taken']:.2f}s)")
+        logger.info(f"  Sub-{i+1}: {sub_result['sub_question']} -> {sub_result['triples_count']} triples, {sub_result['chunk_ids_count']} chunks ({sub_result['time_taken']:.2f}s)")
 
     prompt = kt_retriever.generate_prompt(question, context)
 
@@ -285,7 +278,7 @@ def initial_question_decomposition(graphq, kt_retriever, question, schema_path):
             if initial_answer and initial_answer.strip():
                 break
         except Exception as e:
-            logging.error(f"Error generating answer (attempt {retry + 1}): {str(e)}")
+            logger.error(f"Error generating answer (attempt {retry + 1}): {str(e)}")
             if retry == max_retries - 1:
                 initial_answer = "Error: Unable to generate answer"
             time.sleep(1)
@@ -312,19 +305,19 @@ def no_agent_retrieval(graphq, kt_retriever, qa_pairs, schema_path):
         result = initial_question_decomposition(graphq, kt_retriever, qa["question"], schema_path)
         total_time += result['total_time']
 
-        logging.info(f"========== Original Question: {qa['question']} ==========") 
-        logging.info(f"Gold Answer: {qa['answer']}")
-        logging.info(f"Generated Answer: {result['initial_answer']}")
-        logging.info("-"*30)
+        logger.info(f"========== Original Question: {qa['question']} ==========") 
+        logger.info(f"Gold Answer: {qa['answer']}")
+        logger.info(f"Generated Answer: {result['initial_answer']}")
+        logger.info("-"*30)
 
 
         eval_result = evaluator.eval(qa["question"], qa["answer"], result['initial_answer'])
-        print(f"Eval result: {eval_result}")
+        print(f"No agent mode eval result: {eval_result}")
         if eval_result == "1":
             accuracy += 1
-    logging.info(f"Eval result: {'Correct' if eval_result == '1' else 'Wrong'}")
-    logging.info(f"Overall Accuracy: {accuracy/total_questions*100}%")     
-    logging.info(f"Average time taken: {total_time/total_questions} seconds")
+    logger.info(f"Eval result: {'Correct' if eval_result == '1' else 'Wrong'}")
+    logger.info(f"Overall Accuracy: {accuracy/total_questions*100}%")     
+    logger.info(f"Average time taken: {total_time/total_questions} seconds")
 
 
 def agent_retrieval(graphq, kt_retriever, qa_pairs, schema_path):
@@ -343,10 +336,10 @@ def agent_retrieval(graphq, kt_retriever, qa_pairs, schema_path):
         all_chunk_contents = dict()
         logs = []
         
-        logging.info(f"🚀 Starting Agent mode for question: {current_query}")
+        logger.info(f"🚀 Starting Agent mode for question: {current_query}")
         
         # First, run noagent mode to get initial results and answer
-        logging.info("📝 Step 0: Running noagent mode for initial analysis...")
+        logger.info("📝 Step 0: Running noagent mode for initial analysis...")
         initial_result = initial_question_decomposition(graphq, kt_retriever, current_query, schema_path)
         total_time += initial_result['total_time']
         
@@ -360,13 +353,13 @@ def agent_retrieval(graphq, kt_retriever, qa_pairs, schema_path):
         initial_thought = f"Initial analysis (noagent mode): {initial_result['initial_answer']}"
         thoughts.append(initial_thought)
         
-        logging.info(f"✅ Noagent analysis completed. Initial answer: {initial_result['initial_answer'][:100]}...")
-        logging.info(f"📊 Retrieved {len(initial_result['triples'])} triples and {len(initial_result['chunk_ids'])} chunks from noagent")
+        logger.info(f"✅ Noagent analysis completed. Initial answer: {initial_result['initial_answer'][:100]}...")
+        logger.info(f"📊 Retrieved {len(initial_result['triples'])} triples and {len(initial_result['chunk_ids'])} chunks from noagent")
         
-        logging.info(f"🚀 Starting IRCoT for question: {current_query}")
+        logger.info(f"🚀 Starting IRCoT for question: {current_query}")
     
         while step <= max_steps:
-            logging.info(f"📝 IRCoT Step {step}/{max_steps}")
+            logger.info(f"📝 IRCoT Step {step}/{max_steps}")
             
             dedup_triples = deduplicate_triples(list(all_triples))
             dedup_chunk_ids = list(set(all_chunk_ids))
@@ -406,7 +399,7 @@ def agent_retrieval(graphq, kt_retriever, qa_pairs, schema_path):
                     if response and response.strip():
                         break
                 except Exception as e:
-                    logging.error(f"Error generating IRCoT response (attempt {retry + 1}): {str(e)}")
+                    logger.error(f"Error generating IRCoT response (attempt {retry + 1}): {str(e)}")
                     if retry == max_retries - 1:
                         response = "Error: Unable to generate reasoning"
                     time.sleep(1)
@@ -422,10 +415,10 @@ def agent_retrieval(graphq, kt_retriever, qa_pairs, schema_path):
                 "thoughts": thoughts.copy()
             })
             
-            logging.info(f"Step {step} response: {response[:100]}...")
+            logger.info(f"Step {step} response: {response[:100]}...")
             
             if "So the answer is:" in response:
-                logging.info("✅ Final answer found, stopping IRCoT")
+                logger.info("✅ Final answer found, stopping IRCoT")
                 break
 
             if "The new query is:" in response:
@@ -435,7 +428,7 @@ def agent_retrieval(graphq, kt_retriever, qa_pairs, schema_path):
             
             if new_query and new_query != current_query:
                 current_query = new_query
-                logging.info(f"🔄 New query for next iteration: {current_query}")
+                logger.info(f"🔄 New query for next iteration: {current_query}")
                 
                 retrieval_results, time_taken = kt_retriever.process_retrieval_results(current_query, top_k=config.retrieval.top_k_filter)
                 total_time += time_taken
@@ -458,9 +451,9 @@ def agent_retrieval(graphq, kt_retriever, qa_pairs, schema_path):
                 all_chunk_ids.update(new_chunk_ids)
                 all_chunk_contents.update(new_chunk_contents_dict)
                 
-                logging.info(f"Retrieved {len(new_triples)} new triples, {len(new_chunk_ids)} new chunks")
+                logger.info(f"Retrieved {len(new_triples)} new triples, {len(new_chunk_ids)} new chunks")
             else:
-                logging.info("No new query generated, stopping IRCoT")
+                logger.info("No new query generated, stopping IRCoT")
                 break
             
             step += 1
@@ -478,28 +471,28 @@ def agent_retrieval(graphq, kt_retriever, qa_pairs, schema_path):
                 if answer and answer.strip():
                     break
             except Exception as e:
-                logging.error(f"Error generating final answer (attempt {retry + 1}): {str(e)}")
+                logger.error(f"Error generating final answer (attempt {retry + 1}): {str(e)}")
                 if retry == max_retries - 1:
                     answer = "Error: Unable to generate answer"
                 time.sleep(1)
         
-        logging.info(f"========== Original Question: {qa['question']} ==========") 
-        logging.info(f"Noagent Initial Answer: {initial_result['initial_answer']}")
-        logging.info(f"IRCoT Steps: {len(thoughts)}")
-        logging.info(f"Final Triples: {len(deduplicate_triples(list(all_triples)))}")
-        logging.info(f"Final Chunks: {len(merge_chunk_contents(list(set(all_chunk_ids)), all_chunk_contents))}")
-        logging.info(f"Gold Answer: {qa['answer']}")
-        logging.info(f"Generated Answer: {answer}")
-        logging.info(f"Thought Process: {' | '.join(thoughts)}")
-        logging.info("-"*30)
+        logger.info(f"========== Original Question: {qa['question']} ==========") 
+        logger.info(f"Noagent Initial Answer: {initial_result['initial_answer']}")
+        logger.info(f"IRCoT Steps: {len(thoughts)}")
+        logger.info(f"Final Triples: {len(deduplicate_triples(list(all_triples)))}")
+        logger.info(f"Final Chunks: {len(merge_chunk_contents(list(set(all_chunk_ids)), all_chunk_contents))}")
+        logger.info(f"Gold Answer: {qa['answer']}")
+        logger.info(f"Generated Answer: {answer}")
+        logger.info(f"Thought Process: {' | '.join(thoughts)}")
+        logger.info("-"*30)
         
         eval_result = evaluator.eval(qa["question"], qa["answer"], answer)
-        print(f"Eval result: {eval_result}")
+        print(f"Agent mode eval result: {eval_result}")
         if eval_result == "1":
             accuracy += 1
-    logging.info(f"Eval result: {'Correct' if eval_result == '1' else 'Wrong'}")
-    logging.info(f"Overall Accuracy: {accuracy/total_questions*100}%")     
-    logging.info(f"Average time taken: {total_time/total_questions} seconds")
+    logger.info(f"Eval result: {'Correct' if eval_result == '1' else 'Wrong'}")
+    logger.info(f"Overall Accuracy: {accuracy/total_questions*100}%")
+    logger.info(f"Average time taken: {total_time/total_questions} seconds")
 
 
 if __name__ == "__main__":
@@ -511,9 +504,9 @@ if __name__ == "__main__":
         try:
             overrides = json.loads(args.override)
             config.override_config(overrides)
-            logging.info("Applied configuration overrides")
+            logger.info("Applied configuration overrides")
         except json.JSONDecodeError as e:
-            logging.error(f"Invalid JSON in override parameter: {e}")
+            logger.error(f"Invalid JSON in override parameter: {e}")
             exit(1)
     
     setup_environment(config)
@@ -522,10 +515,10 @@ if __name__ == "__main__":
     
     # ########### Construction ###########
     if config.triggers.constructor_trigger:
-        logging.info("Starting knowledge graph construction...")
+        logger.info("Starting knowledge graph construction...")
         graph_construction(datasets)
 
     # ########### Retriever ###########
     if config.triggers.retrieve_trigger:
-        logging.info("Starting knowledge retrieval and QA...")
+        logger.info("Starting knowledge retrieval and QA...")
         retrieval(datasets)

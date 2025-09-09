@@ -2,8 +2,11 @@ import os
 import time
 import json
 import requests
+
 from openai import OpenAI
 from dotenv import load_dotenv
+
+from utils.logger import logger
 
 load_dotenv()
 
@@ -37,5 +40,5 @@ class LLMCompletionCall:
             return clean_completion
             
         except Exception as e:
-            print(f"LLM api calling failed. Error: {e}")
+            logger.error(f"LLM api calling failed. Error: {e}")
             raise e 

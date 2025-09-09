@@ -1,8 +1,3 @@
-import time
-from collections import Counter
-
-from openai import OpenAI
-
 from utils import call_llm_api
 
 class Eval:

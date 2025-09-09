@@ -11,7 +11,7 @@ import tiktoken
 import json_repair
 
 from config import get_config
-from utils import call_llm_api, graph_processor, tree_comm
+from utils import call_llm_api, graph_processor, tree_comm, logger
 
 class KTBuilder:
     def __init__(self, dataset_name, schema_path=None, mode=None, config=None):
@@ -36,7 +36,6 @@ class KTBuilder:
                 schema = json.load(f)
                 return schema
         except FileNotFoundError:
-            pass
             return dict()
 
 
@@ -53,7 +52,7 @@ class KTBuilder:
                 chunk_id = nanoid.generate(size=8)
                 chunk2id[chunk_id] = chunk
             except Exception as e:
-                pass
+                logger.logger.warning(f"Failed to generate chunk id with nanoid: {type(e).__name__}: {e}")
 
         with self.lock:
             self.all_chunks.update(chunk2id)
@@ -101,7 +100,7 @@ class KTBuilder:
                                 chunk_text = parts[1][7:] 
                                 existing_data[chunk_id] = chunk_text
             except Exception as e:
-                pass
+                logger.logger.warning(f"Failed to parse existing chunks from {chunk_file}: {type(e).__name__}: {e}")
         
         all_data = {**existing_data, **self.all_chunks}
         
@@ -136,7 +135,6 @@ class KTBuilder:
     def _validate_and_parse_llm_response(self, prompt: str, llm_response: str) -> dict:
         """Validate and parse LLM response, returning None if invalid."""
         if llm_response is None:
-            pass
             return None
             
         try:
@@ -144,7 +142,6 @@ class KTBuilder:
             return json_repair.loads(llm_response)
         except Exception as e:
             llm_response_str = str(llm_response) if llm_response is not None else "None"
-            pass
             return None
     
     def _find_or_create_entity(self, entity_name: str, chunk_id: int, nodes_to_add: list, entity_type: str = None) -> str:
@@ -181,15 +178,12 @@ class KTBuilder:
         """Validate and normalize triple format, returning (subject, predicate, object) or None."""
         try:
             if len(triple) > 3:
-                pass
                 triple = triple[:3]
             elif len(triple) < 3:
-                pass
                 return None
             
             return tuple(triple)
         except Exception as e:
-            pass
             return None
     
     def _process_attributes(self, extracted_attr: dict, chunk_id: int, entity_types: dict = None) -> tuple[list, list]:
@@ -369,7 +363,6 @@ class KTBuilder:
             
             schema_path = schema_paths.get(self.dataset_name)
             if not schema_path:
-                pass
                 return
                 
             with open(schema_path, 'r', encoding='utf-8') as f:
@@ -382,21 +375,18 @@ class KTBuilder:
                     if new_node not in current_schema.get("Nodes", []):
                         current_schema.setdefault("Nodes", []).append(new_node)
                         updated = True
-                        pass
             
             if "relations" in new_schema_types:
                 for new_relation in new_schema_types["relations"]:
                     if new_relation not in current_schema.get("Relations", []):
                         current_schema.setdefault("Relations", []).append(new_relation)
                         updated = True
-                        pass
 
             if "attributes" in new_schema_types:
                 for new_attribute in new_schema_types["attributes"]:
                     if new_attribute not in current_schema.get("Attributes", []):
                         current_schema.setdefault("Attributes", []).append(new_attribute)
                         updated = True
-                        pass
             
             # Save updated schema back to file
             if updated:
@@ -405,12 +395,9 @@ class KTBuilder:
                 
                 # Update the in-memory schema
                 self.schema = current_schema
-                pass
-            else:
-                pass
                 
         except Exception as e:
-            pass
+            logger.logger.error(f"Failed to update schema for dataset '{self.dataset_name}': {type(e).__name__}: {e}")
 
     def process_level4(self):
         """Process communities using Tree-Comm algorithm"""
@@ -435,7 +422,6 @@ class KTBuilder:
         """Connect relevant keywords to communities"""
         # comm_names = [self.graph.nodes[n]['properties']['name'] for n, d in self.graph.nodes(data=True) if d['level'] == 4]
         comm_nodes = [n for n, d in self.graph.nodes(data=True) if d['level'] == 4]
-        pass
         kw_nodes = [n for n, d in self.graph.nodes(data=True) if d['label'] == 'keyword']
         with self.lock:
             for comm in comm_nodes:
@@ -460,10 +446,8 @@ class KTBuilder:
                 try:
                     id = next(key for key, value in chunk2id.items() if value == chunk)
                 except StopIteration:
-                    pass
                     id = nanoid.generate(size=8)
                     chunk2id[id] = chunk
-                    pass
                 
                 if self.mode == "agent":
                     self.process_level1_level2_agent(chunk, id)
@@ -472,7 +456,6 @@ class KTBuilder:
                 
         except Exception as e:
             error_msg = f"Error processing document: {type(e).__name__}: {str(e)}"
-            pass
             raise Exception(error_msg) from e
 
     def process_all_documents(self, documents: List[Dict[str, Any]]) -> None:
@@ -511,14 +494,8 @@ class KTBuilder:
                         
                     except Exception as e:
                         failed_count += 1
-                        error_msg = str(e) if e else "Unknown error (empty exception)"
-                        error_type = type(e).__name__ if e else "Unknown"
-                        pass
-                        
-                        if not error_msg or error_msg == "Unknown error (empty exception)":
-                            pass
+
         except Exception as e:
-            pass
             return
 
         end_construct = time.time()

@@ -12,6 +12,8 @@ import torch
 import torch.nn.functional as F
 from sentence_transformers import SentenceTransformer
 
+from utils.logger import logger
+
 class DualFAISSRetriever:
     def __init__(self, dataset, graph: nx.MultiDiGraph, model_name: str = "all-MiniLM-L6-v2", cache_dir: str = "retriever/faiss_cache_new", device: str = None):
         """
@@ -34,14 +36,14 @@ class DualFAISSRetriever:
         
         if device is not None:
             if device == "cuda" and not torch.cuda.is_available():
-                print("Warning: CUDA requested but not available in DualFAISSRetriever, falling back to CPU")
+                logger.warning("Warning: CUDA requested but not available in DualFAISSRetriever, falling back to CPU")
                 self.device = torch.device("cpu")
             else:
                 self.device = torch.device(device)
         else:
             self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         
-        print(f"DualFAISSRetriever using device: {self.device}")
+        logger.info(f"DualFAISSRetriever using device: {self.device}")
         
         # Add attributes for storing embeddings and maps
         self.node_embeddings = None
@@ -98,49 +100,45 @@ class DualFAISSRetriever:
     def _preload_faiss_indices(self):
         if self.index_loaded:
             return
-            
-        pass
         
         # Initialize GPU resources if available
         if torch.cuda.is_available():
             try:
                 self.gpu_resources = faiss.StandardGpuResources()
-                pass
             except Exception as e:
-                pass
                 self.gpu_resources = None
         
         # Preload indices to GPU if possible
         if self.gpu_resources and self.node_index:
             try:
                 self.node_index = faiss.index_cpu_to_gpu(self.gpu_resources, 0, self.node_index)
-                print("Node index moved to GPU")
+                logger.info("Node index moved to GPU")
             except Exception as e:
-                print(f"Warning: Failed to move node index to GPU: {e}")
+                logger.warning(f"Warning: Failed to move node index to GPU: {e}")
         
         if self.gpu_resources and self.relation_index:
             try:
                 self.relation_index = faiss.index_cpu_to_gpu(self.gpu_resources, 0, self.relation_index)
-                print("Relation index moved to GPU")
+                logger.info("Relation index moved to GPU")
             except Exception as e:
-                print(f"Warning: Failed to move relation index to GPU: {e}")
+                logger.warning(f"Warning: Failed to move relation index to GPU: {e}")
         
         if self.gpu_resources and self.triple_index:
             try:
                 self.triple_index = faiss.index_cpu_to_gpu(self.gpu_resources, 0, self.triple_index)
-                print("Triple index moved to GPU")
+                logger.info("Triple index moved to GPU")
             except Exception as e:
-                print(f"Warning: Failed to move triple index to GPU: {e}")
+                logger.warning(f"Warning: Failed to move triple index to GPU: {e}")
         
         if self.gpu_resources and self.comm_index:
             try:
                 self.comm_index = faiss.index_cpu_to_gpu(self.gpu_resources, 0, self.comm_index)
-                print("Community index moved to GPU")
+                logger.info("Community index moved to GPU")
             except Exception as e:
-                print(f"Warning: Failed to move community index to GPU: {e}")
+                logger.warning(f"Warning: Failed to move community index to GPU: {e}")
         
         self.index_loaded = True
-        print("FAISS indices preloaded successfully")
+        logger.info("FAISS indices preloaded successfully")
 
     def _cached_faiss_search(self, index, query_embed, top_k: int, cache_key: str):
         if cache_key in self.faiss_search_cache:
@@ -184,7 +182,7 @@ class DualFAISSRetriever:
         triple_nodes = [node for node in triple_nodes if node in self.graph.nodes]
                     
         end_time = time.time()
-        print(f"Time taken to get triple nodes: {end_time - start_time} seconds")
+        logger.info(f"Time taken to get triple nodes: {end_time - start_time} seconds")
         
         start_time = time.time()
         comm_nodes = self.retrieve_via_communities(query_emb, top_k)
@@ -198,7 +196,7 @@ class DualFAISSRetriever:
 
         node_scores = self._calculate_node_scores_optimized(query_emb, merged_nodes)
         end_time = time.time()
-        print(f"Time taken to calculate node scores: {end_time - start_time} seconds")
+        logger.info(f"Time taken to calculate node scores: {end_time - start_time} seconds")
         
         result = {
             "triple_nodes": triple_nodes,
@@ -243,7 +241,7 @@ class DualFAISSRetriever:
             return triples
             
         except (KeyError, ValueError) as e:
-            print(f"Warning: Error processing triple index {idx}: {str(e)}")
+            logger.error(f"Warning: Error processing triple index {idx}: {str(e)}")
             return []
     
     def _deduplicate_triples(self, triples: List[Tuple[str, str, str]]) -> List[Tuple[str, str, str]]:
@@ -286,11 +284,11 @@ class DualFAISSRetriever:
         # Remove duplicates
         unique_triples = self._deduplicate_triples(all_triples)
         
-        print(f"Debug: Calling _calculate_triple_relevance_scores with {len(unique_triples)} unique triples")
+        logger.info(f"Calling _calculate_triple_relevance_scores with {len(unique_triples)} unique triples")
         scored_triples = self._calculate_triple_relevance_scores(query_embed, unique_triples, threshold=0.1, top_k=top_k)
-        
-        print(f"Debug: _calculate_triple_relevance_scores returned {len(scored_triples)} scored triples")
-        return scored_triples 
+
+        logger.info(f"_calculate_triple_relevance_scores returned {len(scored_triples)} scored triples")
+        return scored_triples
 
     def retrieve_via_communities(self, query_embed, top_k: int = 3) -> List[str]:
         """
@@ -324,7 +322,7 @@ class DualFAISSRetriever:
                     community_nodes = self._get_community_nodes(community)
                     nodes.extend(community_nodes)
                 except (KeyError, ValueError) as e:
-                    print(f"Warning: Error processing community index {idx}: {str(e)}")
+                    logger.error(f"Warning: Error processing community index {idx}: {str(e)}")
                     continue
         
         # Remove duplicates while preserving order
@@ -343,11 +341,11 @@ class DualFAISSRetriever:
         """
         # Check if center node exists in both embedding map and graph
         if center not in self.node_id_to_embedding:
-            print(f"Warning: Node {center} not found in embedding map")
+            logger.warning(f"Warning: Node {center} not found in embedding map")
             return set()
         
         if center not in self.graph.nodes:
-            print(f"Warning: Node {center} not found in graph")
+            logger.warning(f"Warning: Node {center} not found in graph")
             return set()
         
         # Check cache first
@@ -381,10 +379,10 @@ class DualFAISSRetriever:
                         if depth < 2:  # Only add to queue if we can go deeper
                             queue.append((neighbor, depth + 1))
                     elif neighbor not in self.node_id_to_embedding:
-                        print(f"Warning: Neighbor {neighbor} of {current_node} not found in embedding map")
+                        logger.warning(f"Warning: Neighbor {neighbor} of {current_node} not found in embedding map")
                             
         except Exception as e:
-            print(f"Error getting neighbors for node {center}: {str(e)}")
+            logger.error(f"Error getting neighbors for node {center}: {str(e)}")
         
         # Cache the result
         if not hasattr(self, '_3hop_cache'):
@@ -427,7 +425,7 @@ class DualFAISSRetriever:
                 if name in self.name_to_id:
                     member_ids.append(self.name_to_id[name])
                 else:
-                    print(f"Warning: Member name '{name}' not found in graph nodes")
+                    logger.warning(f"Warning: Member name '{name}' not found in graph nodes")
             return member_ids
         return []
 
@@ -536,7 +534,7 @@ class DualFAISSRetriever:
                         self.node_embedding_cache[node] = embeddings[i].detach()
                         
                 except Exception as e:
-                    print(f"Error encoding nodes: {e}")
+                    logger.warning(f"Error encoding nodes: {e}")
                     for node in nodes_to_encode:
                         if node not in scores:
                             scores[node] = 0.0
@@ -550,14 +548,12 @@ class DualFAISSRetriever:
             oldest_keys = list(self.node_embedding_cache.keys())[:items_to_remove]
             for key in oldest_keys:
                 del self.node_embedding_cache[key]
-            pass
 
     def save_embedding_cache(self):
         """Save embedding cache to disk using numpy format to avoid pickle issues"""
         cache_path = f"{self.cache_dir}/{self.dataset}/node_embedding_cache.pt"
         try:
             if not self.node_embedding_cache:
-                pass
                 return False
                 
             os.makedirs(os.path.dirname(cache_path), exist_ok=True)
@@ -575,11 +571,9 @@ class DualFAISSRetriever:
                         else:
                             numpy_cache[node] = np.array(embed)
                     except Exception as e:
-                        pass
                         continue
             
             if not numpy_cache:
-                pass
                 return False
             
             # Save using torch.save with tensor format for better compatibility
@@ -592,21 +586,17 @@ class DualFAISSRetriever:
                         tensor_cache[node] = embed_array
                 
                 torch.save(tensor_cache, cache_path)
-                pass
             except Exception as torch_error:
-                pass
                 # Fallback to numpy format to avoid pickle tensor issues
                 cache_path_npz = cache_path.replace('.pt', '.npz')
                 np.savez_compressed(cache_path_npz, **numpy_cache)
                 cache_path = cache_path_npz
-                pass
             
             file_size = os.path.getsize(cache_path)
-            print(f"Saved embedding cache with {len(numpy_cache)} entries to {cache_path} (size: {file_size} bytes)")
+            logger.info(f"Saved embedding cache with {len(numpy_cache)} entries to {cache_path} (size: {file_size} bytes)")
             return True
                 
         except Exception as e:
-            pass
             return False
 
     def load_embedding_cache(self):
@@ -616,7 +606,7 @@ class DualFAISSRetriever:
             try:
                 file_size = os.path.getsize(cache_path)
                 if file_size < 1000:  
-                    print(f"Warning: Cache file too small ({file_size} bytes), likely empty or corrupted")
+                    logger.warning(f"Warning: Cache file too small ({file_size} bytes), likely empty or corrupted")
                     return False
                 
                 # 兼容PyTorch 2.6+的weights_only参数
@@ -627,8 +617,9 @@ class DualFAISSRetriever:
                 except Exception as e:
                     if "numpy.core.multiarray._reconstruct" in str(e):
                         try:
-                            import torch.serialization
-                            torch.serialization.add_safe_globals(["numpy.core.multiarray._reconstruct"])
+                            import importlib
+                            torch_serialization = importlib.import_module('torch.serialization')
+                            torch_serialization.add_safe_globals(["numpy.core.multiarray._reconstruct"])
                             cpu_cache = torch.load(cache_path, map_location='cpu')
                         except:
                             raise e
@@ -636,7 +627,7 @@ class DualFAISSRetriever:
                         raise e
                 
                 if not cpu_cache:
-                    print("Warning: Loaded cache is empty")
+                    logger.warning("Warning: Loaded cache is empty")
                     return False
                 
 
@@ -659,21 +650,21 @@ class DualFAISSRetriever:
                             
                             self.node_embedding_cache[node] = embed_tensor
                         except Exception as e:
-                            print(f"Warning: Failed to load embedding for node {node}: {e}")
+                            logger.warning(f"Warning: Failed to load embedding for node {node}: {e}")
                             continue
-                
-                print(f"Loaded embedding cache with {len(self.node_embedding_cache)} entries from {cache_path} (file size: {file_size} bytes)")
+
+                logger.info(f"Loaded embedding cache with {len(self.node_embedding_cache)} entries from {cache_path} (file size: {file_size} bytes)")
                 return True
                 
             except Exception as e:
-                print(f"Error loading embedding cache: {e}")
+                logger.error(f"Error loading embedding cache: {e}")
                 try:
                     os.remove(cache_path)
-                    print(f"Removed corrupted cache file: {cache_path}")
-                except:
-                    pass
+                    logger.info(f"Removed corrupted cache file: {cache_path}")
+                except Exception as e2:
+                    logger.warning(f"Failed to remove corrupted cache file {cache_path}: {type(e2).__name__}: {e2}")
         else:
-            print(f"Cache file not found: {cache_path}")
+            logger.info(f"Cache file not found: {cache_path}")
         return False
 
     def _is_valid_node_text(self, text: str) -> bool:
@@ -692,9 +683,9 @@ class DualFAISSRetriever:
                     batch_texts.append(text)
                     valid_nodes.append(node)
                 else:
-                    print(f"Warning: Invalid text for node {node}: {text}")
+                    logger.warning(f"Warning: Invalid text for node {node}: {text}")
             except Exception as e:
-                print(f"Error getting text for node {node}: {e}")
+                logger.error(f"Error getting text for node {node}: {e}")
                 continue
                 
         return batch_texts, valid_nodes
@@ -724,7 +715,7 @@ class DualFAISSRetriever:
             return True
             
         except Exception as e:
-            print(f"Error encoding individual node {node}: {e}")
+            logger.error(f"Error encoding individual node {node}: {e}")
             return False
     
     def _process_batch(self, batch_nodes: list, batch_num: int, total_batches: int) -> int:
@@ -732,7 +723,7 @@ class DualFAISSRetriever:
         batch_texts, valid_nodes = self._prepare_batch_data(batch_nodes)
         
         if not batch_texts:
-            print(f"Warning: No valid texts in batch {batch_num}")
+            logger.info(f"Warning: No valid texts in batch {batch_num}")
             return 0
         
         try:
@@ -742,12 +733,12 @@ class DualFAISSRetriever:
             for j, node in enumerate(valid_nodes):
                 self.node_embedding_cache[node] = embeddings[j].detach()
             
-            print(f"Encoded batch {batch_num}/{total_batches} ({len(valid_nodes)} nodes)")
+            logger.info(f"Encoded batch {batch_num}/{total_batches} ({len(valid_nodes)} nodes)")
             return len(valid_nodes)
             
         except Exception as e:
-            print(f"Error encoding batch {batch_num}: {e}")
-            print("Falling back to individual node processing...")
+            logger.error(f"Error encoding batch {batch_num}: {e}")
+            logger.info("Falling back to individual node processing...")
             
             # Fallback to individual processing
             success_count = 0
@@ -755,19 +746,18 @@ class DualFAISSRetriever:
                 if self._process_single_node_fallback(node):
                     success_count += 1
                     
-            pass
             return success_count
 
     def _precompute_node_embeddings(self, batch_size: int = 100, force_recompute: bool = False):
         """Precompute embeddings for all graph nodes with optimized batch processing."""
         # Try to load from cache if not forcing recomputation
         if not force_recompute:
-            print("Attempting to load node embeddings from disk cache...")
+            logger.info("Attempting to load node embeddings from disk cache...")
             if self.load_embedding_cache():
-                print("Successfully loaded node embeddings from disk cache")
+                logger.info("Successfully loaded node embeddings from disk cache")
                 return
-        
-        print("Precomputing node embeddings...")
+
+        logger.info("Precomputing node embeddings...")
         self.node_embedding_cache.clear()
         
         # Prepare batch processing
@@ -775,8 +765,8 @@ class DualFAISSRetriever:
         total_nodes = len(all_nodes)
         total_batches = (total_nodes + batch_size - 1) // batch_size
         
-        print(f"Total nodes to process: {total_nodes}")
-        print(f"Processing in {total_batches} batches of size {batch_size}")
+        logger.info(f"Total nodes to process: {total_nodes}")
+        logger.info(f"Processing in {total_batches} batches of size {batch_size}")
         
         # Process nodes in batches
         total_processed = 0
@@ -788,14 +778,11 @@ class DualFAISSRetriever:
             total_processed += processed_count
         
         # Final summary and cache saving
-        print(f"Successfully precomputed embeddings for {len(self.node_embedding_cache)} nodes")
-        print(f"Processing success rate: {len(self.node_embedding_cache)}/{total_nodes} ({len(self.node_embedding_cache)/total_nodes*100:.1f}%)")
+        logger.info(f"Successfully precomputed embeddings for {len(self.node_embedding_cache)} nodes")
+        logger.info(f"Processing success rate: {len(self.node_embedding_cache)}/{total_nodes} ({len(self.node_embedding_cache)/total_nodes*100:.1f}%)")
         
         if self.node_embedding_cache:
             self.save_embedding_cache()
-            pass
-        else:
-            pass
 
     def build_indices(self):
         """Build FAISS Index only if they don't already exist and are consistent with current graph"""
@@ -826,29 +813,29 @@ class DualFAISSRetriever:
                 
                 if current_nodes == cached_nodes:
                     indices_consistent = True
-                    print("Cached FAISS indices are consistent with current graph")
+                    logger.info("Cached FAISS indices are consistent with current graph")
                 else:
-                    print(f"Graph inconsistency detected: current nodes {len(current_nodes)}, cached nodes {len(cached_nodes)}")
-                    print(f"Missing in cache: {current_nodes - cached_nodes}")
-                    print(f"Extra in cache: {cached_nodes - current_nodes}")
+                    logger.info(f"Graph inconsistency detected: current nodes {len(current_nodes)}, cached nodes {len(cached_nodes)}")
+                    logger.info(f"Missing in cache: {current_nodes - cached_nodes}")
+                    logger.info(f"Extra in cache: {cached_nodes - current_nodes}")
             except Exception as e:
-                print(f"Error checking index consistency: {e}")
+                logger.error(f"Error checking index consistency: {e}")
         
         if all_exist and indices_consistent:
-            print("All FAISS indices and embeddings already exist, loading from cache...")
+            logger.info("All FAISS indices and embeddings already exist, loading from cache...")
             if not hasattr(self, 'node_index') or self.node_index is None:
                 self._load_indices()
             
-            print("Attempting to load node embedding cache from disk...")
+            logger.info("Attempting to load node embedding cache from disk...")
             if not self.load_embedding_cache():
-                print("Disk cache not available, rebuilding node embedding cache...")
+                logger.info("Disk cache not available, rebuilding node embedding cache...")
                 self._precompute_node_embeddings(force_recompute=True)
             else:
-                print("Successfully loaded node embedding cache from disk")
+                logger.info("Successfully loaded node embedding cache from disk")
         else:
-            print("Building FAISS indices and embeddings...")
+            logger.info("Building FAISS indices and embeddings...")
             if all_exist and not indices_consistent:
-                print("Clearing inconsistent cache files...")
+                logger.info("Clearing inconsistent cache files...")
                 for path in [node_path, relation_path, triple_path, comm_path, node_embed_path, relation_embed_path, node_map_path]:
                     if os.path.exists(path):
                         os.remove(path)
@@ -857,7 +844,7 @@ class DualFAISSRetriever:
             self._build_relation_index()
             self._build_triple_index()
             self._build_community_index()
-            print("FAISS indices and embeddings built successfully!")
+            logger.info("FAISS indices and embeddings built successfully!")
             self._populate_embedding_maps()
             
             self._precompute_node_embeddings(force_recompute=True)
@@ -942,7 +929,6 @@ class DualFAISSRetriever:
 
     def _build_community_index(self):
         """Build FAISS Community Index"""
-        # Find all community nodes
         communities = {
             n for n, d in self.graph.nodes(data=True) 
             if d.get('label') == 'community'
@@ -978,7 +964,7 @@ class DualFAISSRetriever:
         self.comm_map = {str(i): n for i, n in enumerate(valid_communities)}
 
     def _load_indices(self):
-        # print("Debug: Starting _load_indices...")
+        logger.info("Starting _load_indices...")
         triple_path = f"{self.cache_dir}/{self.dataset}/triple.index"
         comm_path = f"{self.cache_dir}/{self.dataset}/comm.index"
         node_path = f"{self.cache_dir}/{self.dataset}/node.index"
@@ -986,16 +972,16 @@ class DualFAISSRetriever:
         node_embed_path = f"{self.cache_dir}/{self.dataset}/node_embeddings.pt"
         relation_embed_path = f"{self.cache_dir}/{self.dataset}/relation_embeddings.pt"
         
-        # print(f"Debug: Checking cache files...")
-        # print(f"Debug: node_path exists: {os.path.exists(node_path)}")
-        # print(f"Debug: relation_path exists: {os.path.exists(relation_path)}")
-        # print(f"Debug: triple_path exists: {os.path.exists(triple_path)}")
-        # print(f"Debug: comm_path exists: {os.path.exists(comm_path)}")
-        # print(f"Debug: node_embed_path exists: {os.path.exists(node_embed_path)}")
-        # print(f"Debug: relation_embed_path exists: {os.path.exists(relation_embed_path)}")
+        logger.debug(f"Checking cache files...")
+        logger.debug(f"node_path exists: {os.path.exists(node_path)}")
+        logger.debug(f"relation_path exists: {os.path.exists(relation_path)}")
+        logger.debug(f"triple_path exists: {os.path.exists(triple_path)}")
+        logger.debug(f"comm_path exists: {os.path.exists(comm_path)}")
+        logger.debug(f"node_embed_path exists: {os.path.exists(node_embed_path)}")
+        logger.debug(f"relation_embed_path exists: {os.path.exists(relation_embed_path)}")
         
         if os.path.exists(node_path):
-            print("Debug: Loading node index...")
+            logger.debug("Loading node index...")
             self.node_index = faiss.read_index(node_path)
             with open(f"{self.cache_dir}/{self.dataset}/node_map.json", 'r') as f:
                 self.node_map = json.load(f)
@@ -1021,10 +1007,9 @@ class DualFAISSRetriever:
                 try:
                     self.node_embeddings = torch.load(node_embed_path, weights_only=False)
                 except TypeError:
-                    # 如果PyTorch版本不支持weights_only参数
                     self.node_embeddings = torch.load(node_embed_path)
             except Exception as e:
-                print(f"Warning: Failed to load node embeddings: {e}")
+                logger.warning(f"Warning: Failed to load node embeddings: {e}")
                 
         if os.path.exists(relation_embed_path):
             try:
@@ -1032,18 +1017,17 @@ class DualFAISSRetriever:
                 try:
                     self.relation_embeddings = torch.load(relation_embed_path, weights_only=False)
                 except TypeError:
-                    # 如果PyTorch版本不支持weights_only参数
                     self.relation_embeddings = torch.load(relation_embed_path)
             except Exception as e:
-                print(f"Warning: Failed to load relation embeddings: {e}")
+                logger.warning(f"Warning: Failed to load relation embeddings: {e}")
 
         # Populate maps if all necessary data is loaded
         if self.node_map and self.node_embeddings is not None:
             self._populate_embedding_maps()
         else:
-            print("Debug: Cannot populate embedding maps - missing node_map or node_embeddings")
-            print(f"Debug: node_map exists: {self.node_map is not None}")
-            print(f"Debug: node_embeddings exists: {self.node_embeddings is not None}")
+            logger.debug("Cannot populate embedding maps - missing node_map or node_embeddings")
+            logger.debug(f"node_map exists: {self.node_map is not None}")
+            logger.debug(f"node_embeddings exists: {self.node_embeddings is not None}")
 
     def _populate_embedding_maps(self):
         """Populate the node_id and relation to embedding maps."""
@@ -1060,7 +1044,7 @@ class DualFAISSRetriever:
 
     def _verify_data_consistency(self):
         """Verify that graph nodes and embedding maps are consistent"""
-        print("Verifying data consistency...")
+        logger.debug("Verifying data consistency...")
         
         graph_nodes = set(self.graph.nodes())
         embedding_nodes = set(self.node_id_to_embedding.keys())
@@ -1069,15 +1053,15 @@ class DualFAISSRetriever:
         extra_in_embeddings = embedding_nodes - graph_nodes
         
         if missing_in_embeddings:
-            print(f"Warning: {len(missing_in_embeddings)} nodes in graph but not in embeddings: {list(missing_in_embeddings)[:5]}...")
+            logger.warning(f"Warning: {len(missing_in_embeddings)} nodes in graph but not in embeddings: {list(missing_in_embeddings)[:5]}...")
         
         if extra_in_embeddings:
-            print(f"Warning: {len(extra_in_embeddings)} nodes in embeddings but not in graph: {list(extra_in_embeddings)[:5]}...")
+            logger.warning(f"Warning: {len(extra_in_embeddings)} nodes in embeddings but not in graph: {list(extra_in_embeddings)[:5]}...")
         
         if not missing_in_embeddings and not extra_in_embeddings:
-            print("✓ Data consistency verified: all graph nodes have embeddings")
+            logger.info("✓ Data consistency verified: all graph nodes have embeddings")
         else:
-            print(f"✗ Data inconsistency detected: {len(missing_in_embeddings)} missing, {len(extra_in_embeddings)} extra")
+            logger.info(f"✗ Data inconsistency detected: {len(missing_in_embeddings)} missing, {len(extra_in_embeddings)} extra")
 
     def _get_node_text(self, node: str) -> str:
         data = self.graph.nodes[node]
@@ -1271,7 +1255,7 @@ class DualFAISSRetriever:
         scored_triples = []
         
         if not triples:
-            print("Debug: No triples to process")
+            logger.debug("No triples to process")
             return []
         
         # Transform query embedding for FAISS search
@@ -1283,28 +1267,24 @@ class DualFAISSRetriever:
         
         # Create a set of input triples for fast lookup
         input_triples_set = set(triples)
-        # print(f"Debug: Input triples set size: {len(input_triples_set)}")
-        # print(f"Debug: First few input triples: {list(input_triples_set)[:3]}")
+        logger.debug(f"Input triples set size: {len(input_triples_set)}")
+        logger.debug(f"First few input triples: {list(input_triples_set)[:3]}")
         
         # Check if triple_index exists and is valid
         if not hasattr(self, 'triple_index') or self.triple_index is None:
-            print("Debug: triple_index is None or doesn't exist")
+            logger.debug("triple_index is None or doesn't exist")
             # Fallback: return all triples with default scores
             for h, r, t in triples:
                 scored_triples.append((h, r, t, 0.5))  # Default score
-            print(f"Debug: Using fallback method, returning {len(scored_triples)} triples")
+            logger.debug(f"Using fallback method, returning {len(scored_triples)} triples")
             return scored_triples[:top_k]
-        
-        # print(f"Debug: triple_index exists, size: {self.triple_index.ntotal}")
-        
+        logger.debug(f"triple_index exists, size: {self.triple_index.ntotal}")
         # Use FAISS to search for similar triples in the index
         try:
             # Search for top similar triples in the index
             search_k = min(len(triples) * 2, 50)  # Search more than needed to get good matches
-            # print(f"Debug: Searching for {search_k} similar triples")
+            logger.debug(f"Searching for {search_k} similar triples")
             D, I = self.triple_index.search(query_embed_np, search_k)
-
-            
             # Process results from FAISS search
             for i, (distance, idx) in enumerate(zip(D[0], I[0])):
                 if idx >= 0:  # Valid index
@@ -1312,37 +1292,31 @@ class DualFAISSRetriever:
                         # Get the triple from the index
                         indexed_triple = self.triple_map[str(idx)]
                         h, r, t = indexed_triple  # This is (head, tail, relation) format
-                        
                         # Check if this triple is in our input triples
                         if (h, r, t) in input_triples_set:
                             # Convert distance to similarity score (FAISS returns distances, we need similarities)
                             # For normalized vectors, similarity = 1 - distance^2 / 2
                             similarity_score = 1.0 - (distance ** 2) / 2.0
-                            
-                            # print(f"Debug: Found matching triple ({h}, {t}, {r}) with score {similarity_score:.3f}")
-                            
                             # Only keep triples above threshold
                             if similarity_score >= threshold:
                                 scored_triples.append((h, r, t, similarity_score))  # Return as (head, tail, relation, score)
                             else:
-                                print(f"Debug: Triple ({h}, {t}, {r}) below threshold {threshold}")
+                                logger.debug(f"Triple ({h}, {t}, {r}) below threshold {threshold}")
                                 
                     except (KeyError, ValueError) as e:
-                        print(f"Warning: Error processing indexed triple {idx}: {str(e)}")
+                        logger.error(f"Warning: Error processing indexed triple {idx}: {str(e)}")
                         continue
         except Exception as e:
-
             for h, r, t in triples:
                 scored_triples.append((h, r, t, 0.5))  # Default score
         
-        print(f"Debug: Found {len(scored_triples)} triples above threshold")
+        logger.debug(f"Found {len(scored_triples)} triples above threshold")
         
         # Sort by score in descending order
         scored_triples.sort(key=lambda x: x[3], reverse=True)
         
         # Return only top_k triples
         result = scored_triples[:top_k]
-        # print(f"Debug: Returning {len(result)} triples")
         return result
 
     def __del__(self):
@@ -1350,5 +1324,5 @@ class DualFAISSRetriever:
             if hasattr(self, 'node_embedding_cache') and self.node_embedding_cache:
                 self.save_embedding_cache()
         except Exception as e:
-            pass
+            logger.warning(f"Error during __del__ saving embedding cache: {type(e).__name__}: {e}")
 

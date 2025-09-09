@@ -1,6 +1,7 @@
 import networkx as nx
 import json
-from typing import Dict, List, Any
+
+from utils.logger import logger
 
 
 def load_graph_from_json(input_path: str) -> nx.MultiDiGraph:
@@ -178,7 +179,7 @@ def load_graph_from_graphml(input_path: str) -> nx.MultiDiGraph:
                 data["properties"] = json.loads(data["d1"])
                 del data["d1"]
             except json.JSONDecodeError:
-                print(f"Warning: Could not parse properties for node {node_id}")
+                logger.warning(f"Warning: Could not parse properties for node {node_id}")
                 data["properties"] = {"name": str(data["d1"])}
                 del data["d1"]
         

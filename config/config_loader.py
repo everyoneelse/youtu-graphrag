@@ -3,13 +3,13 @@ Configuration loader and manager for KT-RAG framework.
 Handles loading, validation, and access to configuration parameters.
 """
 
-import logging
 import os
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, Dict, Optional
-
 import yaml
+
+from utils.logger import logger
 
 
 @dataclass
@@ -90,14 +90,6 @@ class EmbeddingsConfig:
     batch_size: int = 32
     max_length: int = 512
 
-@dataclass
-class LoggingConfig:
-    """Logging configuration"""
-    level: str = "INFO"
-    format: str = "%(asctime)s - %(levelname)s - %(message)s"
-    output_dir: str = "output/logs"
-    enable_file_logging: bool = True
-    enable_console_logging: bool = True
 
 @dataclass
 class OutputConfig:
@@ -150,7 +142,6 @@ class ConfigManager:
         self.retrieval: Optional[RetrievalConfig] = None
         self.embeddings: Optional[EmbeddingsConfig] = None
         self.prompts: Dict[str, Any] = {}
-        self.logging_config: Optional[LoggingConfig] = None
         self.output: Optional[OutputConfig] = None
         self.performance: Optional[PerformanceConfig] = None
         self.evaluation: Optional[EvaluationConfig] = None
@@ -171,7 +162,7 @@ class ConfigManager:
             self._parse_config()
             self._validate_config()
             
-            logging.info(f"Configuration loaded successfully from {self.config_path}")
+            logger.info(f"Configuration loaded successfully from {self.config_path}")
             
         except FileNotFoundError:
             raise FileNotFoundError(f"Configuration file not found: {self.config_path}")
@@ -208,9 +199,6 @@ class ConfigManager:
         
         self.prompts = self.config_data.get("prompts", {})
         
-        logging_data = self.config_data.get("logging", {})
-        self.logging_config = LoggingConfig(**logging_data)
-        
         output_data = self.config_data.get("output", {})
         self.output = OutputConfig(**output_data)
         
@@ -224,9 +212,9 @@ class ConfigManager:
         """Validate the loaded configuration."""
         for dataset_name, dataset_config in self.datasets.items():
             if not os.path.exists(dataset_config.corpus_path):
-                logging.warning(f"Corpus path not found for {dataset_name}: {dataset_config.corpus_path}")
+                logger.warning(f"Corpus path not found for {dataset_name}: {dataset_config.corpus_path}")
             if not os.path.exists(dataset_config.schema_path):
-                logging.warning(f"Schema path not found for {dataset_name}: {dataset_config.schema_path}")
+                logger.warning(f"Schema path not found for {dataset_name}: {dataset_config.schema_path}")
         
         valid_modes = ["agent", "noagent"]
         if self.triggers.mode not in valid_modes:
@@ -292,30 +280,10 @@ class ConfigManager:
             "retrieval": asdict(self.retrieval),
             "embeddings": asdict(self.embeddings),
             "prompts": self.prompts,
-            "logging": asdict(self.logging_config),
             "output": asdict(self.output),
             "performance": asdict(self.performance),
             "evaluation": asdict(self.evaluation),
         }
-    
-    def setup_logging(self) -> None:
-        """Set up logging based on configuration."""
-        os.makedirs(self.logging_config.output_dir, exist_ok=True)
-        
-        handlers = []
-        
-        if self.logging_config.enable_console_logging:
-            handlers.append(logging.StreamHandler())
-        
-        if self.logging_config.enable_file_logging:
-            log_file = os.path.join(self.logging_config.output_dir, "kt_rag.log")
-            handlers.append(logging.FileHandler(log_file))
-        
-        logging.basicConfig(
-            level=getattr(logging, self.logging_config.level),
-            format=self.logging_config.format,
-            handlers=handlers
-        )
     
     def create_output_directories(self) -> None:
         """Create necessary output directories."""

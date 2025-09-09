@@ -58,12 +58,7 @@ embeddings:
   device: cpu
   max_length: 512
   model_name: all-MiniLM-L6-v2
-logging:
-  enable_console_logging: true
-  enable_file_logging: true
-  format: '%(asctime)s - %(levelname)s - %(message)s'
-  level: INFO
-  output_dir: output/logs
+
 output:
   base_dir: output
   chunks_dir: output/chunks
@@ -257,6 +252,6 @@ retrieval:
   top_k: 20
   top_k_filter: 20
 triggers:
-  constructor_trigger: true
+  constructor_trigger: false
   mode: agent
   retrieve_trigger: true
