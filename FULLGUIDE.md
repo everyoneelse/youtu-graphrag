@@ -1,4 +1,4 @@
-# 🚀 Youtu-GraphRAG Quick Start
+# 🚀 Youtu-GraphRAG Full Guide
 
 <div align="center">
   <img src="assets/logo.png" alt="Logo" width="100">
@@ -18,16 +18,28 @@
 ---
 
 <a id="web-interface-quick-experience"></a>
-## 💻 Web Interface Quick Experience
+This approach relies on the Docker environment, which could be installed according to [official documentation](https://docs.docker.com/get-started/).
 
 ```bash
-# One-command installation of all dependencies
-./setup_env.sh
+# 1. Clone Youtu-GraphRAG project
+git clone https://github.com/TencentCloudADP/youtu-graphrag
 
-# Launch Web Service
-./start.sh
+# 2. Create .env according to .env.example
+cd youtu-graphrag && cp .env.example .env
+# Config your LLM api in .env as OpenAI API format
+# LLM_MODEL=deepseek-chat
+# LLM_BASE_URL=https://api.deepseek.com
+# LLM_API_KEY=sk-xxxxxx
+
+# 3. Build with dockerfile 
+docker build -t youtu_graphrag:v1 .
+
+# 4. Docker run
+docker run -d -p 8000:8000 youtu_graphrag:v1
+
+# 5. Visit http://localhost:8000
+curl -v http://localhost:8000
 ```
-**Visit URL:** http://localhost:8000
 
 ### 3-Minute Experience Process
 
@@ -60,15 +72,21 @@
 
 ### Environment Preparation
 ```bash
-# 1. Clone project
-git clone https://github.com/TencentCloudADP/Youtu-GraphRAG
-cd Youtu-Graphrag
+# 1. Clone Youtu-GraphRAG project
+git clone https://github.com/TencentCloudADP/youtu-graphrag
 
-# 2. Install dependencies
-pip install -r requirements.txt
+# 2. Create .env according to .env.example
+cd youtu-graphrag && cp .env.example .env
+# Config your LLM api in .env as OpenAI API format
+# LLM_MODEL=deepseek-chat
+# LLM_BASE_URL=https://api.deepseek.com
+# LLM_API_KEY=sk-xxxxxx
 
-# 3. Configure API key
-# create .env according to .env.example to set your API key
+# 3. Build with dockerfile
+docker build -t youtu_graphrag:v1 .
+
+# 4. Docker run
+docker run -d -p 8000:8000 youtu_graphrag:v1
 ```
 
 ### Basic Usage
@@ -102,6 +120,17 @@ python main.py --override '{"construction": {"max_workers": 64}, "embeddings": {
 
 <a id="advanced-configuration"></a>
 ## ⚙️ Advanced Configuration
+
+### 🔧 Key Configuration Points
+
+| Configuration Category | Key Parameters | Description |
+|------------------------|----------------|-------------|
+| **🤖 Mode** | `triggers.mode` | agent(intelligent)/noagent(basic) |
+| **🏗️ Construction** | `construction.max_workers` | Graph construction concurrency |
+| **🔍 Retrieval** | `retrieval.top_k_filter`, `recall_paths` | Retrieval parameters |
+| **🧠 Agentic CoT** | `retrieval.agent.max_steps` | Iterative retrieval steps |
+| **🌳 Community Detection** | `tree_comm.struct_weight` | Weight to control impacts from topology |
+| **⚡ Performance** | `embeddings.batch_size` | Batch processing size |
 
 ### 🎛️ Configuration Parameter Override Examples
 
@@ -188,8 +217,6 @@ python kt_rag.py --override '{
 | 💻 **Batch Processing** | <a href="#command-line-usage">Command Line</a> | Scriptable, efficient processing |
 | 🔧 **Custom Development** | <a href="#advanced-configuration">Advanced Configuration</a> | Flexible configuration, performance tuning |
 
-
----
 ---
 
 
@@ -197,6 +224,7 @@ python kt_rag.py --override '{
   
   **🌟 We sincerely welcome STAR/PR/ISSUE 🌟**
   
-  [⬅️ Back to Home](README.md) • [📖 Project Documentation](README-CN.md) • [🌐 Web Usage](WEB_USAGE.md)
+  <!-- [⬅️ Back to Home](README.md) • [📖 Project Documentation](README-CN.md) • [🌐 Web Usage](WEB_USAGE.md) -->
+  [⬅️ Back to Home](README.md) | [🌐 返回中文主页](README-CN.md)
   
 </div>
