@@ -10,7 +10,7 @@ pip install -r requirements.txt
 
 # Download spaCy model
 echo "🧠 Downloading spaCy English model..."
-python -m spacy download en_core_web_sm # If using Chinese mode, the corresponding Chinese database should be used here.
+python -m spacy download en_core_web_lg # If using Chinese mode, the corresponding Chinese database should be used here.
 
 # Verify installation
 echo "✅ Verifying installation..."
