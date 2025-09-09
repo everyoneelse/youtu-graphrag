@@ -13,7 +13,6 @@
     <script src="https://cdn.jsdelivr.net/npm/axios@1.6.2/dist/axios.min.js"></script>
     
     <style>
-        @import url('https://fonts.googleapis.com/css2?family=Comic+Neue:ital,wght@0,300;0,400;0,700;1,400&display=swap');
         
         * {
             margin: 0;
@@ -22,7 +21,7 @@
         }
 
         body {
-            font-family: 'Comic Neue', 'Comic Sans MS', cursive, sans-serif;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
             background: 
                 linear-gradient(135deg, #a8c8ec 0%, #e6f3ff 25%, #e6f3ff 75%, #b8d4f0 100%),
                 linear-gradient(45deg, #4a90e2 0%, #6b73ff 50%, #9bb5ff 100%);
@@ -34,7 +33,6 @@
             position: relative;
         }
 
-        /* 动态背景装饰 */
         body::before {
             content: '';
             position: fixed;
@@ -218,7 +216,7 @@
             cursor: pointer;
             transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1);
             font-weight: 600;
-            font-family: 'Comic Neue', 'Comic Sans MS', cursive, sans-serif;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
             color: rgba(255, 255, 255, 0.7);
             position: relative;
             overflow: hidden;
@@ -277,7 +275,7 @@
             backdrop-filter: blur(10px);
             position: relative;
             overflow: hidden;
-            font-family: 'Comic Neue', 'Comic Sans MS', cursive, sans-serif;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
         }
 
         .upload-area::before {
@@ -340,7 +338,7 @@
             cursor: pointer;
             font-weight: 600;
             font-size: 14px;
-            font-family: 'Comic Neue', 'Comic Sans MS', cursive, sans-serif;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
             transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1);
             margin: 4px 6px;
             display: inline-flex;
@@ -445,7 +443,7 @@
             margin-bottom: 12px;
             color: rgba(255, 255, 255, 0.95);
             font-weight: 600;
-            font-family: 'Comic Neue', 'Comic Sans MS', cursive, sans-serif;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
             font-size: 16px;
             text-shadow: 0 1px 2px rgba(0, 0, 0, 0.3);
         }
@@ -459,7 +457,7 @@
             backdrop-filter: blur(10px);
             color: white;
             font-size: 15px;
-            font-family: 'Comic Neue', 'Comic Sans MS', cursive, sans-serif;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
             transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
             box-shadow: 
                 0 4px 15px rgba(0, 0, 0, 0.1),
@@ -677,7 +675,7 @@
         .triples-preview li {
             color: rgba(255, 255, 255, 0.8);
             margin-bottom: 4px;
-            font-family: monospace;
+            font-family: 'SF Mono', Monaco, 'Cascadia Code', 'Roboto Mono', Consolas, 'Courier New', monospace;
             font-size: 13px;
         }
 
@@ -714,7 +712,7 @@
 
         .triple-content {
             color: rgba(255, 255, 255, 0.85);
-            font-family: monospace;
+            font-family: 'SF Mono', Monaco, 'Cascadia Code', 'Roboto Mono', Consolas, 'Courier New', monospace;
             font-size: 13px;
             line-height: 1.4;
         }
@@ -950,7 +948,7 @@
                     </p>
                     <div style="margin-top: 20px; padding: 15px; background: rgba(255,255,255,0.1); border-radius: 10px; text-align: left; font-size: 11px; color: rgba(255,255,255,0.8);">
                         <div style="font-weight: 600; margin-bottom: 8px;">📄 Sample Format (.json):</div>
-                        <pre style="margin: 0; font-family: 'Courier New', monospace; background: rgba(0,0,0,0.3); padding: 8px; border-radius: 5px; overflow-x: auto;">
+                        <pre style="margin: 0; font-family: 'JetBrains Mono', 'Monaco', 'Menlo', 'Ubuntu Mono', monospace; background: rgba(0,0,0,0.3); padding: 8px; border-radius: 5px; overflow-x: auto;">
   [
     {
       "title": "Sample doc1",
