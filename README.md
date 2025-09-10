@@ -38,8 +38,8 @@ A sketched overview of our proposed framework Youtu-GraphRAG.
 <div align="center">
 
 [//]: # (<img src="assets/dashboard_demo.png" alt="Dashboard" width="32%"/>)
-<img src="assets/graph_demo.png" alt="Graph Construction" width="49%"/>
-<img src="assets/retrieval_demo.png" alt="Retrieval" width="50.5%"/>
+<img src="assets/graph_demo.png" alt="Graph Construction" width="48%"/>
+<img src="assets/retrieval_demo.png" alt="Retrieval" width="49.5%"/>
 </div>
 
 <a id="contributions"></a>
