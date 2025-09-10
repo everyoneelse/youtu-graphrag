@@ -1282,11 +1282,11 @@
                             ''
                         }
                         ${dataset.status === 'ready' ? 
-                            `<button class="btn btn-secondary" onclick="reconstructGraph('${dataset.name}')" title="重新构图">🔄 Reconstruct</button>` : 
+                            `<button class="btn btn-secondary" onclick="reconstructGraph('${dataset.name}')" title="Reconstruct Graph">🔄 Reconstruct</button>` : 
                             ''
                         }
                         ${dataset.type !== 'demo' ? 
-                            `<button class="btn btn-danger" onclick="deleteDataset('${dataset.name}')" title="删除数据集">🗑️ Delete</button>` : 
+                            `<button class="btn btn-danger" onclick="deleteDataset('${dataset.name}')" title="Delete Dataset">🗑️ Delete</button>` : 
                             ''
                         }
                     </div>
@@ -1311,7 +1311,7 @@
                         const data = JSON.parse(event.data);
                         if (data.type === 'progress') {
                             progressMessages.push(data.message);
-                            showMessage(`[构建 ${progressMessages.length}] ${data.message}`, 'info');
+                            showMessage(`[Construct ${progressMessages.length}] ${data.message}`, 'info');
                         } else if (data.type === 'complete') {
                             showMessage('Graph construction completed!', 'success');
                             ws.close();
@@ -1332,13 +1332,13 @@
                     console.log('WebSocket connection closed');
                 };
                 
-                // 发送构图请求
+                // Send construct request
                 const response = await axios.post(`${API_BASE}/api/construct-graph`, {
                     dataset_name: datasetName,
                     client_id: 'web_client'
                 });
                 
-                // 如果没有WebSocket消息，等待一段时间后关闭连接
+                // If no WebSocket messages, close after timeout
                 setTimeout(() => {
                     if (ws.readyState === WebSocket.OPEN) {
                         ws.close();
@@ -1346,7 +1346,7 @@
                             showMessage('Graph construction completed!', 'success');
                         }
                     }
-                }, 30000); // 30秒超时
+                }, 30000); // 30s timeout
                 
                 refreshData();
             } catch (error) {
@@ -1356,14 +1356,14 @@
         }
 
         async function reconstructGraph(datasetName) {
-            if (!confirm(`确定要重新构建数据集 "${datasetName}" 的图谱吗？这将删除现有的图谱和缓存文件。`)) {
+            if (!confirm(`Are you sure you want to reconstruct the graph for dataset "${datasetName}"? This will delete the existing graph and cache files.`)) {
                 return;
             }
             
             try {
-                showMessage('正在重新构建图谱...', 'info');
+                showMessage('Reconstructing graph...', 'info');
                 
-                // 建立WebSocket连接来接收实时进展
+                // Open WebSocket for real-time progress
                 const ws = new WebSocket(`ws://${window.location.host}/ws/web_client`);
                 let progressMessages = [];
                 
@@ -1376,12 +1376,12 @@
                         const data = JSON.parse(event.data);
                         if (data.type === 'progress') {
                             progressMessages.push(data.message);
-                            showMessage(`[重构 ${progressMessages.length}] ${data.message}`, 'info');
+                            showMessage(`[Reconstruct ${progressMessages.length}] ${data.message}`, 'info');
                         } else if (data.type === 'complete') {
-                            showMessage('图谱重构完成!', 'success');
+                            showMessage('Graph reconstruction completed!', 'success');
                             ws.close();
                         } else if (data.type === 'error') {
-                            showMessage(`重构错误: ${data.message}`, 'error');
+                            showMessage(`Reconstruction error: ${data.message}`, 'error');
                             ws.close();
                         }
                     } catch (e) {
@@ -1401,32 +1401,32 @@
                     params: { client_id: 'web_client' }
                 });
                 
-                // 如果没有WebSocket消息，等待一段时间后关闭连接
+                // If no WebSocket messages, close after timeout
                 setTimeout(() => {
                     if (ws.readyState === WebSocket.OPEN) {
                         ws.close();
                         if (progressMessages.length === 0) {
-                            showMessage('图谱重构完成!', 'success');
+                            showMessage('Graph reconstruction completed!', 'success');
                         }
                     }
-                }, 30000); // 30秒超时
+                }, 30000); // 30s timeout
                 
                 refreshData();
             } catch (error) {
                 console.error('Reconstruction failed:', error);
-                showMessage('图谱重构失败: ' + (error.response?.data?.detail || error.message), 'error');
+                showMessage('Graph reconstruction failed: ' + (error.response?.data?.detail || error.message), 'error');
             }
         }
 
         async function deleteDataset(datasetName) {
-            if (!confirm(`确定要删除数据集 "${datasetName}" 吗？此操作将删除所有相关文件且无法恢复。`)) {
+            if (!confirm(`Are you sure you want to delete dataset "${datasetName}"? This action will remove all related files and cannot be undone.`)) {
                 return;
             }
             
             try {
-                showMessage('正在删除数据集...', 'info');
+                showMessage('Deleting dataset...', 'info');
                 const response = await axios.delete(`${API_BASE}/api/datasets/${datasetName}`);
-                showMessage(`数据集 "${datasetName}" 删除成功!`, 'success');
+                showMessage(`Dataset "${datasetName}" deleted successfully!`, 'success');
                 refreshData();
                 
                 // If the deleted dataset was selected, clear selections
@@ -1440,7 +1440,7 @@
                 }
             } catch (error) {
                 console.error('Deletion failed:', error);
-                showMessage('数据集删除失败: ' + (error.response?.data?.detail || error.message), 'error');
+                showMessage('Dataset deletion failed: ' + (error.response?.data?.detail || error.message), 'error');
             }
         }
 
@@ -1629,25 +1629,25 @@
             
             let detailsHtml = `
                 <div class="retrieval-summary">
-                    <h4>🔍 检索统计</h4>
+            <h4>🔍 Retrieval Stats</h4>
                     <div class="stats-grid">
                         <div class="stat-item">
-                            <span class="stat-label">子问题数量:</span>
+                <span class="stat-label">Sub-questions:</span>
                             <span class="stat-value">${result.sub_questions?.length || 0}</span>
                         </div>
                         <div class="stat-item">
-                            <span class="stat-label">检索三元组:</span>
+                <span class="stat-label">Retrieved Triples:</span>
                             <span class="stat-value">${result.retrieved_triples?.length || 0}</span>
                         </div>
                         <div class="stat-item">
-                            <span class="stat-label">相关文档块:</span>
+                <span class="stat-label">Relevant Chunks:</span>
                             <span class="stat-value">${result.retrieved_chunks?.length || 0}</span>
                         </div>
                     </div>
                 </div>
                 
                 <div class="subquestions-section">
-                    <h4>📝 问题分解</h4>
+            <h4>📝 Question Decomposition</h4>
                     <div class="subquestions-list">
             `;
             
@@ -1662,24 +1662,24 @@
                                 <span class="subquestion-text">${sq['sub-question'] || sq.question}</span>
                             </div>
                             <div class="subquestion-stats">
-                                <span>三元组: ${stepTriples.length}</span>
-                                <span>文档块: ${step.chunks_count || 0}</span>
-                                <span>耗时: ${(step.processing_time || 0).toFixed(2)}s</span>
+                                <span>Triples: ${stepTriples.length}</span>
+                                <span>Chunks: ${step.chunks_count || 0}</span>
+                                <span>Time: ${(step.processing_time || 0).toFixed(2)}s</span>
                             </div>
                             ${stepTriples.length > 0 ? `
                                 <div class="triples-preview">
-                                    <strong>检索到的三元组:</strong>
+                                    <strong>Retrieved Triples:</strong>
                                     <ul>
                                         ${stepTriples.slice(0, 3).map(triple => `<li>${triple}</li>`).join('')}
                                     </ul>
-                                    ${stepTriples.length > 3 ? `<span class="more-indicator">...还有 ${stepTriples.length - 3} 个</span>` : ''}
+                                    ${stepTriples.length > 3 ? `<span class="more-indicator">...and ${stepTriples.length - 3} more</span>` : ''}
                                 </div>
                             ` : ''}
                         </div>
                     `;
                 });
             } else {
-                detailsHtml += '<p class="no-data">没有子问题信息</p>';
+                detailsHtml += '<p class="no-data">No sub-question data</p>';
             }
             
             detailsHtml += `
@@ -1687,12 +1687,12 @@
                 </div>
                 
                 <div class="triples-section">
-                    <h4>🔗 子图可视化</h4>
+                    <h4>🔗 Subgraph Visualization</h4>
                     <div class="triples-chart-container">
                         <div id="triplesChart" class="chart-container" style="height: 400px;"></div>
                     </div>
                     <div class="triples-summary">
-                        <p>检索到 <strong>${result.retrieved_triples?.length || 0}</strong> 个相关三元组</p>
+                        <p>Retrieved <strong>${result.retrieved_triples?.length || 0}</strong> related triples</p>
                     </div>
                 </div>
             `;
@@ -1854,7 +1854,7 @@
                     formatter: function(params) {
                         if (params.dataType === 'node') {
                             const rawFull = (params.data.rawName || params.data.id || '').toString().replace(/\s+/g,' ').trim();
-                            return `<strong>${rawFull}</strong><br/>类型: ${params.data.category}`;
+                            return `<strong>${rawFull}</strong><br/>Type: ${params.data.category}`;
                         } else if (params.dataType === 'edge') {
                             const fullRel = (params.data.rawName || params.data.name || '').toString().replace(/\s+/g,' ').trim();
                             return `<strong>${fullRel}</strong><br/>${params.data.source} → ${params.data.target}`;
@@ -1917,7 +1917,7 @@
             
             if (nodesList.length === 0) {
                 console.warn('No nodes to display, showing empty message');
-                chartContainer.innerHTML = '<div style="color: #ffb347; text-align: center; padding: 50px;">没有找到可解析的实体关系</div>';
+                chartContainer.innerHTML = '<div style="color: #ffb347; text-align: center; padding: 50px;">No entity relationships found</div>';
                 return;
             }
             
@@ -1940,7 +1940,7 @@
                 console.log('Triples chart rendered successfully!');
             } catch (e) {
                 console.error('Error setting chart option:', e);
-                chartContainer.innerHTML = '<div style="color: red; text-align: center; padding: 50px;">图表渲染错误: ' + e.message + '</div>';
+                chartContainer.innerHTML = '<div style="color: red; text-align: center; padding: 50px;">Chart rendering error: ' + e.message + '</div>';
             }
         }
         
