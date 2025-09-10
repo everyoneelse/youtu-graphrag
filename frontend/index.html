@@ -1554,6 +1554,24 @@
 
         function displayRetrievalDetails(result) {
             console.log('displayRetrievalDetails called with:', result);
+
+            // Helper: deduplicate triples array of strings '(s, r, o)' retaining order
+            function dedupTriples(arr) {
+                if (!Array.isArray(arr)) return [];
+                const seen = new Set();
+                const out = [];
+                for (const t of arr) {
+                    if (typeof t !== 'string') continue;
+                    const m = t.match(/\(([^,]+),\s*([^,]+),\s*([^\)]+)\)/);
+                    if (!m) continue;
+                    const key = m.slice(1).map(x => x.trim().toLowerCase()).join('|');
+                    if (!seen.has(key)) {
+                        seen.add(key);
+                        out.push(`(${m[1].trim()}, ${m[2].trim()}, ${m[3].trim()})`);
+                    }
+                }
+                return out;
+            }
             
             const detailsContainer = document.getElementById('retrievalDetails');
             if (!detailsContainer) {
@@ -1593,6 +1611,7 @@
             if (result.sub_questions && result.sub_questions.length > 0) {
                 result.sub_questions.forEach((sq, index) => {
                     const step = result.reasoning_steps?.[index] || {};
+                    const stepTriples = dedupTriples(step.triples || []);
                     detailsHtml += `
                         <div class="subquestion-item">
                             <div class="subquestion-header">
@@ -1600,17 +1619,17 @@
                                 <span class="subquestion-text">${sq['sub-question'] || sq.question}</span>
                             </div>
                             <div class="subquestion-stats">
-                                <span>三元组: ${step.triples_count || 0}</span>
+                                <span>三元组: ${stepTriples.length}</span>
                                 <span>文档块: ${step.chunks_count || 0}</span>
                                 <span>耗时: ${(step.processing_time || 0).toFixed(2)}s</span>
                             </div>
-                            ${step.triples && step.triples.length > 0 ? `
+                            ${stepTriples.length > 0 ? `
                                 <div class="triples-preview">
                                     <strong>检索到的三元组:</strong>
                                     <ul>
-                                        ${step.triples.slice(0, 3).map(triple => `<li>${triple}</li>`).join('')}
+                                        ${stepTriples.slice(0, 3).map(triple => `<li>${triple}</li>`).join('')}
                                     </ul>
-                                    ${step.triples.length > 3 ? `<span class="more-indicator">...还有 ${step.triples.length - 3} 个</span>` : ''}
+                                    ${stepTriples.length > 3 ? `<span class="more-indicator">...还有 ${stepTriples.length - 3} 个</span>` : ''}
                                 </div>
                             ` : ''}
                         </div>

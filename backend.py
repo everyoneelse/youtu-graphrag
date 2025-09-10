@@ -23,6 +23,7 @@ from pydantic import BaseModel
 import uvicorn
 
 from utils.logger import logger
+import re
 
 # Try to import GraphRAG components
 try:
@@ -582,8 +583,26 @@ async def ask_question(request: QuestionRequest, client_id: str = "default"):
         decomposition_result = graphq.decompose(question, schema_path)
         sub_questions = decomposition_result.get("sub_questions", [])
         
-        # Process retrieval
-        all_triples = set()
+        # Helpers for triple normalization
+        def _normalize_triple_str(t: str):
+            """Extract (s,r,o) ignoring score / extra annotations, lowercase for stable key."""
+            if not isinstance(t, str):
+                return None
+            m = re.search(r"\(([^,]+),\s*([^,]+),\s*([^\)]+)\)", t)
+            if not m:
+                return None
+            s, r, o = [x.strip().lower() for x in m.groups()]
+            return s, r, o
+
+        def _format_triple_key(key):
+            if not key:
+                return None
+            s, r, o = key
+            return f"({s}, {r}, {o})"
+
+        # Process retrieval (deduplicating across sub-questions)
+        all_triple_keys = set()
+        all_triples_formatted = []  # keep ordered unique formatted triples
         all_chunk_contents = {}
         reasoning_steps = []
         
@@ -595,8 +614,23 @@ async def ask_question(request: QuestionRequest, client_id: str = "default"):
             
             triples = retrieval_results.get('triples', []) or []
             chunk_contents = retrieval_results.get('chunk_contents', {}) or {}
-            
-            all_triples.update(triples)
+            # Per-step dedup
+            step_seen = set()
+            step_triples_dedup = []
+            for t in triples:
+                key = _normalize_triple_str(t)
+                if not key:
+                    continue
+                if key not in step_seen:
+                    step_seen.add(key)
+                    # Global accumulation
+                    if key not in all_triple_keys:
+                        all_triple_keys.add(key)
+                        formatted = _format_triple_key(key)
+                        if formatted:
+                            all_triples_formatted.append(formatted)
+                    step_triples_dedup.append(_format_triple_key(key))
+
             if isinstance(chunk_contents, dict):
                 all_chunk_contents.update(chunk_contents)
             
@@ -604,25 +638,25 @@ async def ask_question(request: QuestionRequest, client_id: str = "default"):
             reasoning_steps.append({
                 "type": "sub_question",
                 "question": sub_question_text,
-                "triples": list(triples)[:10],  # First 10 triples for better visual effects​​ 
-                "triples_count": len(triples),
+                "triples": step_triples_dedup[:10],  # Already deduplicated
+                "triples_count": len(step_triples_dedup),
                 "chunks_count": len(chunk_contents) if isinstance(chunk_contents, dict) else 0,
                 "processing_time": time_taken,
                 "chunk_contents": list(chunk_contents.values())[:3] if isinstance(chunk_contents, dict) else []
             })
-        
+
         await send_progress_update(client_id, "retrieval", 90, "生成答案...")
-        
+
         # Generate answer
-        dedup_triples = list(set(all_triples))
+        dedup_triples = all_triples_formatted  # already in insertion order and deduped
         dedup_chunk_contents = list(all_chunk_contents.values())
-        
+
         context = "=== Triples ===\n" + "\n".join(dedup_triples[:20])
         context += "\n=== Chunks ===\n" + "\n".join(dedup_chunk_contents[:10])
-        
+
         prompt = kt_retriever.generate_prompt(question, context)
         answer = kt_retriever.generate_answer(prompt)
-        
+
         await send_progress_update(client_id, "retrieval", 100, "答案生成完成!")
         
         # Prepare enhanced visualization data
