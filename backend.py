@@ -8,6 +8,8 @@ import os
 import sys
 import json
 import asyncio
+import glob
+import shutil
 from typing import List, Dict, Optional
 from datetime import datetime
 
@@ -115,6 +117,52 @@ async def send_progress_update(client_id: str, stage: str, progress: int, messag
         "message": message,
         "timestamp": datetime.now().isoformat()
     }, client_id)
+
+async def clear_cache_files(dataset_name: str):
+    """Clear all cache files for a dataset before graph construction"""
+    try:
+        # Clear FAISS cache files
+        faiss_cache_dir = f"retriever/faiss_cache_new/{dataset_name}"
+        if os.path.exists(faiss_cache_dir):
+            shutil.rmtree(faiss_cache_dir)
+            logger.info(f"Cleared FAISS cache directory: {faiss_cache_dir}")
+        
+        # Clear output chunks
+        chunk_file = f"output/chunks/{dataset_name}.txt"
+        if os.path.exists(chunk_file):
+            os.remove(chunk_file)
+            logger.info(f"Cleared chunk file: {chunk_file}")
+        
+        # Clear output graphs
+        graph_file = f"output/graphs/{dataset_name}_new.json"
+        if os.path.exists(graph_file):
+            os.remove(graph_file)
+            logger.info(f"Cleared graph file: {graph_file}")
+        
+        # Clear any other cache files with dataset name pattern
+        cache_patterns = [
+            f"output/logs/{dataset_name}_*.log",
+            f"output/chunks/{dataset_name}_*",
+            f"output/graphs/{dataset_name}_*"
+        ]
+        
+        for pattern in cache_patterns:
+            for file_path in glob.glob(pattern):
+                try:
+                    if os.path.isfile(file_path):
+                        os.remove(file_path)
+                        logger.info(f"Cleared cache file: {file_path}")
+                    elif os.path.isdir(file_path):
+                        shutil.rmtree(file_path)
+                        logger.info(f"Cleared cache directory: {file_path}")
+                except Exception as e:
+                    logger.warning(f"Failed to clear {file_path}: {e}")
+        
+        logger.info(f"Cache cleanup completed for dataset: {dataset_name}")
+        
+    except Exception as e:
+        logger.error(f"Error clearing cache files for {dataset_name}: {e}")
+        # Don't raise exception, just log the error
 
 # Serve frontend HTML
 @app.get("/")
@@ -258,6 +306,11 @@ async def construct_graph(request: GraphConstructionRequest, client_id: str = "d
         if not GRAPHRAG_AVAILABLE:
             # Fallback to demo mode
             return await construct_demo_graph(dataset_name, client_id)
+        
+        await send_progress_update(client_id, "construction", 2, "清理旧缓存文件...")
+        
+        # Clear all cache files before construction
+        await clear_cache_files(dataset_name)
         
         await send_progress_update(client_id, "construction", 5, "初始化图构建器...")
         

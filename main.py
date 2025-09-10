@@ -6,6 +6,9 @@ import json
 import json_repair
 import time
 import argparse
+import os
+import glob
+import shutil
 from typing import List
 
 from models.constructor import kt_gen as constructor
@@ -87,14 +90,58 @@ def setup_environment(config: ConfigManager):
     logger.info(f"Retriever enabled: {config.triggers.retrieve_trigger}")
 
 
+def clear_cache_files(dataset_name: str) -> None:
+    """Clear cache files for a dataset before graph construction (CLI path)."""
+    try:
+        faiss_cache_dir = f"retriever/faiss_cache_new/{dataset_name}"
+        if os.path.exists(faiss_cache_dir):
+            shutil.rmtree(faiss_cache_dir)
+            logger.info(f"Cleared FAISS cache directory: {faiss_cache_dir}")
+
+        chunk_file = f"output/chunks/{dataset_name}.txt"
+        if os.path.exists(chunk_file):
+            os.remove(chunk_file)
+            logger.info(f"Cleared chunk file: {chunk_file}")
+
+        graph_file = f"output/graphs/{dataset_name}_new.json"
+        if os.path.exists(graph_file):
+            os.remove(graph_file)
+            logger.info(f"Cleared graph file: {graph_file}")
+
+        cache_patterns = [
+            f"output/logs/{dataset_name}_*.log",
+            f"output/chunks/{dataset_name}_*",
+            f"output/graphs/{dataset_name}_*",
+        ]
+        for pattern in cache_patterns:
+            for file_path in glob.glob(pattern):
+                try:
+                    if os.path.isfile(file_path):
+                        os.remove(file_path)
+                        logger.info(f"Cleared cache file: {file_path}")
+                    elif os.path.isdir(file_path):
+                        shutil.rmtree(file_path)
+                        logger.info(f"Cleared cache directory: {file_path}")
+                except Exception as e:
+                    logger.warning(f"Failed to clear {file_path}: {e}")
+
+        logger.info(f"Cache cleanup completed for dataset: {dataset_name}")
+
+    except Exception as e:
+        logger.error(f"Error clearing cache files for {dataset_name}: {e}")
+
+
 def graph_construction(datasets):
     if config.triggers.constructor_trigger:
         logger.info("Starting knowledge graph construction...")
         
         for dataset in datasets:
+            
             try:
                 dataset_config = config.get_dataset_config(dataset)
                 logger.info(f"Building knowledge graph for dataset: {dataset}")
+                logger.info("Clearing caches before construction...")
+                clear_cache_files(dataset)
                 
                 builder = constructor.KTBuilder(
                     dataset, 
