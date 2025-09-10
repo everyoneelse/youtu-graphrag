@@ -1066,7 +1066,6 @@ async def reconstruct_dataset(dataset_name: str, client_id: str = "default"):
         # Initialize KTBuilder
         builder = constructor.KTBuilder(
             dataset_name,
-            config.api.llm_api_key,
             schema_path,
             mode=config.construction.mode,
             config=config

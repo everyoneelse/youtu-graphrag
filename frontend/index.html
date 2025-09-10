@@ -451,28 +451,28 @@
         .input, .textarea, .select {
             width: 100%;
             padding: 16px 20px;
-            border: 2px solid rgba(255, 255, 255, 0.4);
+            border: 2px solid rgba(255, 255, 255, 0.18);
             border-radius: 15px;
-            background: rgba(255, 255, 255, 0.35);
-            backdrop-filter: blur(5px);
-            color: white;
+            background: rgba(25, 25, 25, 0.65); /* darker background */
+            backdrop-filter: blur(4px);
+            color: rgba(255,255,255,0.92);
             font-size: 15px;
             font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
             transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
-            box-shadow: 
-                0 4px 15px rgba(0, 0, 0, 0.2),
-                inset 0 1px 0 rgba(255, 255, 255, 0.4);
+            box-shadow:
+                0 4px 18px rgba(0, 0, 0, 0.35),
+                inset 0 1px 0 rgba(255, 255, 255, 0.06);
         }
 
         .input:focus, .textarea:focus, .select:focus {
             outline: none;
-            border-color: rgba(255, 182, 193, 0.8);
-            background: rgba(255, 255, 255, 0.45);
+            border-color: rgba(120, 200, 255, 0.55);
+            background: rgba(35, 35, 35, 0.85);
             backdrop-filter: blur(3px);
-            box-shadow: 
-                0 8px 25px rgba(0, 0, 0, 0.25),
-                0 0 0 3px rgba(255, 182, 193, 0.5),
-                inset 0 1px 0 rgba(255, 255, 255, 0.5);
+            box-shadow:
+                0 0 0 3px rgba(120, 200, 255, 0.15),
+                0 8px 28px rgba(0, 0, 0, 0.45),
+                inset 0 1px 0 rgba(255, 255, 255, 0.08);
             transform: translateY(-2px);
         }
 
@@ -511,9 +511,10 @@
         }
 
         .status-ready {
-            background: rgba(82, 196, 26, 0.2);
-            color: #52c41a;
-            border: 1px solid rgba(82, 196, 26, 0.4);
+            /* Darker, more saturated green */
+            background: rgba(20, 138, 46, 0.22);
+            color: #148A2E;
+            border: 1px solid rgba(20, 138, 46, 0.55);
         }
 
         .status-processing {
@@ -526,6 +527,27 @@
             background: rgba(255, 77, 79, 0.2);
             color: #ff4d4f;
             border: 1px solid rgba(255, 77, 79, 0.4);
+        }
+
+        /* Quick Actions uniform layout */
+        .quick-actions {
+            display: flex;
+            flex-wrap: nowrap;
+            gap: 16px;
+            width: 100%;
+        }
+        .quick-actions .btn {
+            flex: 1 1 0;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            white-space: nowrap;
+            font-size: 14px;
+            min-height: 48px;
+        }
+        @media (max-width: 900px) {
+            .quick-actions { flex-wrap: wrap; }
+            .quick-actions .btn { flex: 1 1 calc(50% - 16px); }
         }
 
         .chart-container {
@@ -826,9 +848,11 @@
         }
 
         .message.info {
-            background: rgba(24, 144, 255, 0.2);
-            border: 1px solid rgba(24, 144, 255, 0.4);
-            color: #1890ff;
+            /* Bright green theme for info messages */
+            background: rgba(82, 242, 107, 0.18);
+            border: 1px solid rgba(82, 242, 107, 0.55);
+            color: #52f26b; /* bright green text */
+            text-shadow: 0 0 2px rgba(82,242,107,0.4);
         }
 
         .answer-content {
@@ -927,7 +951,7 @@
 
             <div class="card">
                 <h2>Quick Actions</h2>
-                <div style="display: flex; gap: 16px; flex-wrap: wrap;">
+                <div class="quick-actions">
                     <button class="btn" onclick="switchTab('upload')">📤 Upload Documents</button>
                     <button class="btn" onclick="switchTab('graph')">🕸️ View Graph</button>
                     <button class="btn" onclick="switchTab('qa')">🤖 Query</button>
@@ -1287,7 +1311,7 @@
                         const data = JSON.parse(event.data);
                         if (data.type === 'progress') {
                             progressMessages.push(data.message);
-                            showMessage(`[${progressMessages.length}] ${data.message}`, 'info');
+                            showMessage(`[构建 ${progressMessages.length}] ${data.message}`, 'info');
                         } else if (data.type === 'complete') {
                             showMessage('Graph construction completed!', 'success');
                             ws.close();
@@ -1467,13 +1491,25 @@
                 tooltip: {
                     trigger: 'item',
                     backgroundColor: 'rgba(0, 0, 0, 0.8)',
-                    textStyle: { color: '#ffffff' }
+                    textStyle: { color: '#ffffff' },
+                    formatter: function (params) {
+                        if (params.dataType === 'node') {
+                            const d = params.data || {};
+                            let name = (d.name || '').toString().replace(/\s+/g,' ').trim();
+                            if (name.length > 20) name = name.slice(0,20) + '...';
+                            const category = d.category || d.type || '';
+                            return name ? name : category || 'node';
+                        } else if (params.dataType === 'edge') {
+                            return params.data && params.data.name ? params.data.name : '';
+                        }
+                        return '';
+                    }
                 },
                 legend: {
                     type: 'scroll',
                     bottom: 10,
                     textStyle: { color: 'rgba(255, 255, 255, 0.85)' },
-                    data: data.categories?.map(c => c.name) || []
+                    data: (data.categories && data.categories.map(function(c){return c.name;})) || []
                 },
                 series: [{
                     type: 'graph',
@@ -1484,7 +1520,13 @@
                     roam: true,
                     label: {
                         show: true,
-                        color: 'rgba(255, 255, 255, 0.9)'
+                        color: 'rgba(255, 255, 255, 0.9)',
+                        formatter: function(p){
+                            const d = p.data || {};
+                            let name = (d.name || '').toString().replace(/\s+/g,' ').trim();
+                            if (name.length > 20) name = name.slice(0,20) + '...';
+                            return name || '';
+                        }
                     },
                     force: {
                         repulsion: 1000,
@@ -1674,6 +1716,14 @@
         function renderTriplesChart(triples) {
             console.log('renderTriplesChart called with:', triples.length, 'triples');
             console.log('First triple example:', triples[0]);
+
+            // Helper: truncate by words. If more than 3 words, keep first 2 then ellipsis.
+            function truncateWords(str){
+                if(!str) return '';
+                const words = str.split(/\s+/).filter(Boolean);
+                if(words.length <= 3) return words.join(' ');
+                return words.slice(0,2).join(' ') + '...';
+            }
             
             const chartContainer = document.getElementById('triplesChart');
             if (!chartContainer) {
@@ -1745,10 +1795,11 @@
                     if (!nodes.has(subject)) {
                         nodes.set(subject, {
                             id: subject,
-                            name: subject.length > 20 ? subject.substring(0, 20) + '...' : subject,
+                            name: truncateWords(subject),
                             category: subjectType,
                             symbolSize: Math.min(30 + subject.length * 0.5, 50),
-                            itemStyle: { color: getCategoryColor(subjectType) }
+                            itemStyle: { color: getCategoryColor(subjectType) },
+                            rawName: subject
                         });
                         categories.add(subjectType);
                     }
@@ -1756,27 +1807,24 @@
                     if (!nodes.has(object)) {
                         nodes.set(object, {
                             id: object,
-                            name: object.length > 20 ? object.substring(0, 20) + '...' : object,
+                            name: truncateWords(object),
                             category: objectType,
                             symbolSize: Math.min(30 + object.length * 0.5, 50),
-                            itemStyle: { color: getCategoryColor(objectType) }
+                            itemStyle: { color: getCategoryColor(objectType) },
+                            rawName: object
                         });
                         categories.add(objectType);
                     }
                     
-                    // Add link
+                    // Add link with truncated display name and rawName preserved
                     links.push({
                         source: subject,
                         target: object,
-                        name: relation,
+                        name: truncateWords(relation),
+                        rawName: relation,
                         lineStyle: { 
                             color: '#6b73ff',
                             width: 2
-                        },
-                        label: {
-                            show: true,
-                            fontSize: 10,
-                            color: 'rgba(255, 255, 255, 0.8)'
                         }
                     });
                 }
@@ -1805,10 +1853,13 @@
                     textStyle: { color: '#ffffff' },
                     formatter: function(params) {
                         if (params.dataType === 'node') {
-                            return `<strong>${params.data.id}</strong><br/>类型: ${params.data.category}`;
+                            const rawFull = (params.data.rawName || params.data.id || '').toString().replace(/\s+/g,' ').trim();
+                            return `<strong>${rawFull}</strong><br/>类型: ${params.data.category}`;
                         } else if (params.dataType === 'edge') {
-                            return `<strong>${params.data.name}</strong><br/>${params.data.source} → ${params.data.target}`;
+                            const fullRel = (params.data.rawName || params.data.name || '').toString().replace(/\s+/g,' ').trim();
+                            return `<strong>${fullRel}</strong><br/>${params.data.source} → ${params.data.target}`;
                         }
+                        return '';
                     }
                 },
                 legend: {
@@ -1829,7 +1880,11 @@
                         show: true,
                         position: 'right',
                         color: 'rgba(255, 255, 255, 0.9)',
-                        fontSize: 10
+                        fontSize: 10,
+                        formatter: function(p){
+                            let name = (p.data && (p.data.rawName || p.data.name || p.data.id) || '').toString().replace(/\s+/g,' ').trim();
+                            return truncateWords(name);
+                        }
                     },
                     force: {
                         repulsion: 1000,
@@ -1840,6 +1895,14 @@
                     lineStyle: {
                         opacity: 0.8,
                         curveness: 0.1
+                    },
+                    edgeLabel: {
+                        show: true,
+                        color: 'rgba(255,255,255,0.75)',
+                        fontSize: 10,
+                        formatter: function(p){
+                            return truncateWords(p.data && (p.data.rawName || p.data.name) || '');
+                        }
                     },
                     emphasis: {
                         focus: 'adjacency',
