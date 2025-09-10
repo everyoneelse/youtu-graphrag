@@ -3,6 +3,8 @@ import sys
 from datetime import datetime
 from typing import Optional
 
+__all__ = ["logger", "setup_logger", "progress"]
+
 # ANSI color codes for colored output
 COLORS = {
     'DEBUG': '\033[0;36m',    # Cyan
@@ -74,6 +76,20 @@ def setup_logger(name: str = "youtu-graphrag",
 
 # Create default logger instance
 logger = setup_logger()
+
+def progress(stage: str, message: str, *, done: bool | None = None):
+    """Unified progress logging helper.
+    Args:
+        stage: Short stage/category name
+        message: Detail message
+        done: Optional flag mark completion (prints ✅/❌)
+    """
+    suffix = ""
+    if done is True:
+        suffix = " ✅"
+    elif done is False:
+        suffix = " ❌"
+    logger.info(f"[{stage}] {message}{suffix}")
 
 # Usage example:
 if __name__ == "__main__":

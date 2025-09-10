@@ -11,7 +11,8 @@ import tiktoken
 import json_repair
 
 from config import get_config
-from utils import call_llm_api, graph_processor, tree_comm, logger
+from utils import call_llm_api, graph_processor, tree_comm
+from utils.logger import logger
 
 class KTBuilder:
     def __init__(self, dataset_name, schema_path=None, mode=None, config=None):
@@ -52,7 +53,7 @@ class KTBuilder:
                 chunk_id = nanoid.generate(size=8)
                 chunk2id[chunk_id] = chunk
             except Exception as e:
-                logger.logger.warning(f"Failed to generate chunk id with nanoid: {type(e).__name__}: {e}")
+                logger.warning(f"Failed to generate chunk id with nanoid: {type(e).__name__}: {e}")
 
         with self.lock:
             self.all_chunks.update(chunk2id)
@@ -100,7 +101,7 @@ class KTBuilder:
                                 chunk_text = parts[1][7:] 
                                 existing_data[chunk_id] = chunk_text
             except Exception as e:
-                logger.logger.warning(f"Failed to parse existing chunks from {chunk_file}: {type(e).__name__}: {e}")
+                logger.warning(f"Failed to parse existing chunks from {chunk_file}: {type(e).__name__}: {e}")
         
         all_data = {**existing_data, **self.all_chunks}
         
@@ -397,7 +398,7 @@ class KTBuilder:
                 self.schema = current_schema
                 
         except Exception as e:
-            logger.logger.error(f"Failed to update schema for dataset '{self.dataset_name}': {type(e).__name__}: {e}")
+            logger.error(f"Failed to update schema for dataset '{self.dataset_name}': {type(e).__name__}: {e}")
 
     def process_level4(self):
         """Process communities using Tree-Comm algorithm"""
@@ -503,7 +504,7 @@ class KTBuilder:
         logger.info(f"Successfully processed: {processed_count}/{total_docs} documents")
         logger.info(f"Failed: {failed_count} documents")
         
-        logger.info(f"\n🚀🚀🚀🚀 {'Processing Level 3 and 4':^20} 🚀🚀🚀🚀")
+        logger.info(f"🚀🚀🚀🚀 {'Processing Level 3 and 4':^20} 🚀🚀🚀🚀")
         logger.info(f"{'➖' * 20}")
         self.triple_deduplicate()
         self.process_level4()
@@ -551,16 +552,15 @@ class KTBuilder:
         graph_processor.save_graph(self.graph, output_path)
     
     def build_knowledge_graph(self, corpus):
-        print(f"\n===={'Start Building':^20}====")
-        print(f"{'➖' * 30}")
+        logger.info(f"========{'Start Building':^20}========")
+        logger.info(f"{'➖' * 30}")
         
         with open(corpus, 'r', encoding='utf-8') as f:
             documents = json_repair.load(f)
         
         self.process_all_documents(documents)
         
-        print(f"\n***** {'All processed, token costs':^20} *****")
-        print(f"Token cost: {self.token_len}")
+        logger.info(f"All Process finished, token cost: {self.token_len}")
         
         self.save_chunks_to_file()
         
@@ -570,6 +570,6 @@ class KTBuilder:
         os.makedirs("output/graphs", exist_ok=True)
         with open(json_output_path, 'w', encoding='utf-8') as f:
             json.dump(output, f, ensure_ascii=False, indent=2)
-        print(f"Graph saved to {json_output_path}")
+        logger.info(f"Graph saved to {json_output_path}")
         
         return output
