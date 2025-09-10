@@ -748,9 +748,7 @@ class KTRetriever:
         return {"top_nodes": top_filtered_nodes}
 
     def _get_one_hop_triples_from_nodes(self, node_list: list) -> list:
-        """
-        Get 1-hop triples from given nodes without relation filtering.
-        """
+
         one_hop_triples = []
         node_set = set(node_list)
         
@@ -759,8 +757,7 @@ class KTRetriever:
                 relation = data.get('relation', '')
                 u_name = self._get_node_name(u)
                 v_name = self._get_node_name(v)
-                triple_text = f"{u_name} {relation} {v_name}"
-                one_hop_triples.append(triple_text)
+                one_hop_triples.append((u_name, relation, v_name))
         
         return one_hop_triples[:self.top_k]
 
@@ -1076,7 +1073,6 @@ class KTRetriever:
                 triple for triple in 
                 one_hop_triples + path_triples + relation_triples
             })
-            # NEW: Get chunk retrieval results
             chunk_results = future_chunk_retrieval.result()
 
         return {
