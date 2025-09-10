@@ -22,6 +22,8 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 import uvicorn
 
+from utils.logger import logger
+
 # Try to import GraphRAG components
 try:
     from models.constructor import kt_gen as constructor
@@ -29,11 +31,10 @@ try:
     from utils.eval import Eval
     from config import get_config, ConfigManager
     GRAPHRAG_AVAILABLE = True
-    print("✅ GraphRAG components loaded successfully")
+    logger.info("✅ GraphRAG components loaded successfully")
 except ImportError as e:
     GRAPHRAG_AVAILABLE = False
-    print(f"⚠️  GraphRAG components not available: {e}")
-    print("⚠️  Running in demo mode")
+    logger.error(f"⚠️  GraphRAG components not available: {e}")
 
 app = FastAPI(title="Youtu-GraphRAG Unified Interface", version="1.0.0")
 
@@ -72,7 +73,7 @@ class ConnectionManager:
             try:
                 await self.active_connections[client_id].send_text(json.dumps(message))
             except Exception as e:
-                print(f"Error sending message to {client_id}: {e}")
+                logger.error(f"Error sending message to {client_id}: {e}")
                 self.disconnect(client_id)
 
 manager = ConnectionManager()
@@ -399,7 +400,7 @@ async def prepare_graph_visualization(graph_path: str) -> Dict:
             return {"nodes": [], "links": [], "categories": [], "stats": {}}
     
     except Exception as e:
-        print(f"Error preparing visualization: {e}")
+        logger.error(f"Error preparing visualization: {e}")
         return {"nodes": [], "links": [], "categories": [], "stats": {}}
 
 def convert_graphrag_format(graph_data: List) -> Dict:
@@ -1006,8 +1007,8 @@ async def startup_event():
     os.makedirs("output/logs", exist_ok=True)
     os.makedirs("schemas", exist_ok=True)
     
-    print("🚀 Youtu-GraphRAG Unified Interface initialized")
-    print(f"📊 GraphRAG components: {'Available' if GRAPHRAG_AVAILABLE else 'Demo mode'}")
+    logger.info("🚀 Youtu-GraphRAG Unified Interface initialized")
+    logger.info(f"📊 GraphRAG components: {'Available' if GRAPHRAG_AVAILABLE else 'Demo mode'}")
 
 if __name__ == "__main__":
     uvicorn.run(app, host="0.0.0.0", port=8000)

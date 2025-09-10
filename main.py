@@ -312,7 +312,7 @@ def no_agent_retrieval(graphq, kt_retriever, qa_pairs, schema_path):
 
 
         eval_result = evaluator.eval(qa["question"], qa["answer"], result['initial_answer'])
-        print(f"No agent mode eval result: {eval_result}")
+        logger.info(f"No agent mode eval result: {eval_result}")
         if eval_result == "1":
             accuracy += 1
     logger.info(f"Eval result: {'Correct' if eval_result == '1' else 'Wrong'}")
@@ -487,7 +487,7 @@ def agent_retrieval(graphq, kt_retriever, qa_pairs, schema_path):
         logger.info("-"*30)
         
         eval_result = evaluator.eval(qa["question"], qa["answer"], answer)
-        print(f"Agent mode eval result: {eval_result}")
+        logger.info(f"Agent mode eval result: {eval_result}")
         if eval_result == "1":
             accuracy += 1
     logger.info(f"Eval result: {'Correct' if eval_result == '1' else 'Wrong'}")

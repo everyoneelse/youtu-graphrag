@@ -501,7 +501,7 @@ class KTRetriever:
                 except Exception as e3:
                     logger.warning(f"Failed to remove corrupted cache file {cache_path}: {type(e3).__name__}: {e3}")
         else:
-            logger.error(f"Cache file not found: {cache_path}")
+            logger.info(f"Cache file not found: {cache_path}")
         return False
 
     def _check_embedding_cache_consistency(self):
@@ -671,7 +671,7 @@ class KTRetriever:
         if target_node_types:
             type_filtered_nodes = self._filter_nodes_by_schema_type(target_node_types)
             if type_filtered_nodes:
-                path1_results = self._type_filtered_node_relation_path(question_embed, question, type_filtered_nodes)
+                path1_results = self._type_filtered_node_relation_path(question_embed, type_filtered_nodes)
             else:
                 path1_results = self._node_relation_retrieval(question_embed, question)
         else:
@@ -696,7 +696,7 @@ class KTRetriever:
         
         return result
 
-    def _type_filtered_node_relation_path(self, question_embed: torch.Tensor, question: str, filtered_nodes: list) -> Dict:
+    def _type_filtered_node_relation_path(self, question_embed: torch.Tensor, filtered_nodes: list) -> Dict:
         """
         Execute type-filtered node_relation path.
         """
@@ -1521,6 +1521,7 @@ class KTRetriever:
             question_embed, results = self.retrieve_with_type_filtering(question, involved_types)
         else:
             question_embed, results = self.retrieve(question)
+
         retrieval_time = time.time() - start_time
         logger.info(f"retrieval time: {retrieval_time:.4f}")
 
@@ -1587,27 +1588,27 @@ class KTRetriever:
             
             for future in concurrent.futures.as_completed(future_to_subquestion):
                 sub_q = future_to_subquestion[future]
-                try:
-                    sub_result = future.result()
+                # try:
+                sub_result = future.result()
+                
+                with threading.Lock():
+                    all_triples.update(sub_result['triples'])
+                    all_chunk_ids.update(sub_result['chunk_ids'])
                     
-                    with threading.Lock():
-                        all_triples.update(sub_result['triples'])
-                        all_chunk_ids.update(sub_result['chunk_ids'])
+                    for chunk_id, content in sub_result['chunk_contents'].items():
+                        all_chunk_contents[chunk_id] = content
+                    
+                    all_sub_question_results.append(sub_result['sub_result'])
                         
-                        for chunk_id, content in sub_result['chunk_contents'].items():
-                            all_chunk_contents[chunk_id] = content
-                        
-                        all_sub_question_results.append(sub_result['sub_result'])
-                        
-                except Exception as e:
-                    logger.error(f"Error processing sub-question: {str(e)}")
-                    with threading.Lock():
-                        all_sub_question_results.append({
-                            'sub_question': sub_q.get('sub-question', ''),
-                            'triples_count': 0,
-                            'chunk_ids_count': 0,
-                            'time_taken': 0.0
-                        })
+                # except Exception as e:
+                #     logger.error(f"Error processing sub-question: {str(e)}")
+                #     with threading.Lock():
+                #         all_sub_question_results.append({
+                #             'sub_question': sub_q.get('sub-question', ''),
+                #             'triples_count': 0,
+                #             'chunk_ids_count': 0,
+                #             'time_taken': 0.0
+                #         })
 
         dedup_triples = list(all_triples) 
         dedup_chunk_ids = list(all_chunk_ids)  
@@ -1631,61 +1632,61 @@ class KTRetriever:
     def _process_single_subquestion(self, sub_question: Dict, top_k: int, involved_types: dict = None) -> Dict:
 
         sub_question_text = sub_question.get('sub-question', '')
-        try:
-            retrieval_results, time_taken = self.process_retrieval_results(sub_question_text, top_k, involved_types)
-            triples = retrieval_results.get('triples', []) or []
-            chunk_ids = retrieval_results.get('chunk_ids', []) or []
-            chunk_contents = retrieval_results.get('chunk_contents', []) or []
-            
-            if isinstance(chunk_contents, dict):
-                chunk_contents_list = list(chunk_contents.values())
+        # try:
+        retrieval_results, time_taken = self.process_retrieval_results(sub_question_text, top_k, involved_types)
+        triples = retrieval_results.get('triples', []) or []
+        chunk_ids = retrieval_results.get('chunk_ids', []) or []
+        chunk_contents = retrieval_results.get('chunk_contents', []) or []
+        
+        if isinstance(chunk_contents, dict):
+            chunk_contents_list = list(chunk_contents.values())
+        else:
+            chunk_contents_list = chunk_contents
+        
+        if not isinstance(triples, (list, tuple)):
+            logger.warning(f"triples is not a list: {type(triples)}")
+            triples = []
+        if not isinstance(chunk_ids, (list, tuple)):
+            logger.warning(f"chunk_ids is not a list: {type(chunk_ids)}")
+            chunk_ids = []
+        if not isinstance(chunk_contents_list, (list, tuple)):
+            logger.warning(f"chunk_contents_list is not a list: {type(chunk_contents_list)}")
+            chunk_contents_list = []
+        
+        sub_result = {
+            'sub_question': sub_question_text,
+            'triples_count': len(triples),
+            'chunk_ids_count': len(chunk_ids),
+            'time_taken': time_taken
+        }
+        
+        chunk_contents_dict = {}
+        for i, chunk_id in enumerate(chunk_ids):
+            if i < len(chunk_contents_list):
+                chunk_contents_dict[chunk_id] = chunk_contents_list[i]
             else:
-                chunk_contents_list = chunk_contents
+                chunk_contents_dict[chunk_id] = f"[Missing content for chunk {chunk_id}]"
+        
+        return {
+            'triples': set(triples),
+            'chunk_ids': set(chunk_ids),
+            'chunk_contents': chunk_contents_dict,
+            'sub_result': sub_result
+        }
             
-            if not isinstance(triples, (list, tuple)):
-                logger.warning(f"triples is not a list: {type(triples)}")
-                triples = []
-            if not isinstance(chunk_ids, (list, tuple)):
-                logger.warning(f"chunk_ids is not a list: {type(chunk_ids)}")
-                chunk_ids = []
-            if not isinstance(chunk_contents_list, (list, tuple)):
-                logger.warning(f"chunk_contents_list is not a list: {type(chunk_contents_list)}")
-                chunk_contents_list = []
-            
-            sub_result = {
-                'sub_question': sub_question_text,
-                'triples_count': len(triples),
-                'chunk_ids_count': len(chunk_ids),
-                'time_taken': time_taken
-            }
-            
-            chunk_contents_dict = {}
-            for i, chunk_id in enumerate(chunk_ids):
-                if i < len(chunk_contents_list):
-                    chunk_contents_dict[chunk_id] = chunk_contents_list[i]
-                else:
-                    chunk_contents_dict[chunk_id] = f"[Missing content for chunk {chunk_id}]"
-            
-            return {
-                'triples': set(triples),
-                'chunk_ids': set(chunk_ids),
-                'chunk_contents': chunk_contents_dict,
-                'sub_result': sub_result
-            }
-            
-        except Exception as e:
-            logger.error(f"Error processing sub-question '{sub_question_text}': {str(e)}")
-            return {
-                'triples': set(),
-                'chunk_ids': set(),
-                'chunk_contents': {},
-                'sub_result': {
-                    'sub_question': sub_question_text,
-                    'triples_count': 0,
-                    'chunk_ids_count': 0,
-                    'time_taken': 0.0
-                }
-            }
+        # except Exception as e:
+        #     logger.error(f"Error processing sub-question '{sub_question_text}': {str(e)}")
+        #     return {
+        #         'triples': set(),
+        #         'chunk_ids': set(),
+        #         'chunk_contents': {},
+        #         'sub_result': {
+        #             'sub_question': sub_question_text,
+        #             'triples_count': 0,
+        #             'chunk_ids_count': 0,
+        #             'time_taken': 0.0
+        #         }
+        #     }
 
     def generate_prompt(self, question: str, context: str) -> str:
         
@@ -1978,7 +1979,6 @@ class KTRetriever:
         triple_texts = []
         valid_triples = []
         
-        print("triples", triples)
         for h, r, t in triples:
             try:
                 head_text = self._get_node_text(h)
@@ -2164,7 +2164,7 @@ class KTRetriever:
         Optimized to use precomputed node texts and persistent caching.
         """
         if self._load_node_text_index():
-            print("Loaded node text index from cache")
+            logger.info("Loaded node text index from cache")
             return
         
         start_time = time.time()
@@ -2194,10 +2194,10 @@ class KTRetriever:
                 
                 processed_nodes += 1
                 if processed_nodes % 1000 == 0:
-                    print(f"Indexed {processed_nodes}/{total_nodes} nodes")
-                        
+                    logger.info(f"Indexed {processed_nodes}/{total_nodes} nodes")
+
             except Exception as e:
-                print(f"Error indexing node {node}: {str(e)}")
+                logger.error(f"Error indexing node {node}: {str(e)}")
                 continue
         
         end_time = time.time()
@@ -2210,7 +2210,7 @@ class KTRetriever:
         cache_path = f"{self.cache_dir}/{self.dataset}/node_text_index.pkl"
         try:
             if not self._node_text_index:
-                print("Warning: No node text index to save!")
+                logger.warning("No node text index to save!")
                 return False
                 
             os.makedirs(os.path.dirname(cache_path), exist_ok=True)
@@ -2580,7 +2580,7 @@ class KTRetriever:
                 except Exception as e:
                     logger.error(f"Error removing corrupted chunk cache file: {cache_path}: {e}")
         else:
-            logger.warning(f"Chunk cache file not found: {cache_path}")
+            logger.info(f"Chunk cache file not found: {cache_path}")
         return False
 
     def _check_chunk_cache_consistency(self):

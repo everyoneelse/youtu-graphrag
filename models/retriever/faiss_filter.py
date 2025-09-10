@@ -368,7 +368,7 @@ class DualFAISSRetriever:
                 
                 # Check if current node exists in graph before getting neighbors
                 if current_node not in self.graph.nodes:
-                    print(f"Warning: Current node {current_node} not found in graph during BFS")
+                    logger.warning(f"Current node {current_node} not found in graph during BFS")
                     continue
                     
                 for neighbor in self.graph.neighbors(current_node):

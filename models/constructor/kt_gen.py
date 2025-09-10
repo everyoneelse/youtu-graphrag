@@ -108,7 +108,7 @@ class KTBuilder:
             for chunk_id, chunk_text in all_data.items():
                 f.write(f"id: {chunk_id}\tChunk: {chunk_text}\n")
         
-        print(f"Chunk data saved to {chunk_file} ({len(all_data)} chunks)")
+        logger.info(f"Chunk data saved to {chunk_file} ({len(all_data)} chunks)")
     
     def extract_with_llm(self, prompt: str):
         response = self.llm_client.call_api(prompt)
@@ -416,7 +416,7 @@ class KTBuilder:
         # connect keywords to communities (optional)
         # self._connect_keywords_to_communities()
         end_comm = time.time()
-        print(f"Community Indexing Time: {end_comm - start_comm}s")
+        logger.info(f"Community Indexing Time: {end_comm - start_comm}s")
     
     def _connect_keywords_to_communities(self):
         """Connect relevant keywords to communities"""
@@ -465,7 +465,7 @@ class KTBuilder:
         start_construct = time.time()
         total_docs = len(documents)
         
-        print(f"Starting processing {total_docs} documents with {max_workers} workers...")
+        logger.info(f"Starting processing {total_docs} documents with {max_workers} workers...")
 
         all_futures = []
         processed_count = 0
@@ -487,7 +487,7 @@ class KTBuilder:
                             remaining_docs = total_docs - processed_count
                             estimated_remaining_time = remaining_docs * avg_time_per_doc
                             
-                            print(f"Progress: {processed_count}/{total_docs} documents processed "
+                            logger.info(f"Progress: {processed_count}/{total_docs} documents processed "
                                   f"({processed_count/total_docs*100:.1f}%) "
                                   f"[{failed_count} failed] "
                                   f"ETA: {estimated_remaining_time/60:.1f} minutes")
@@ -499,12 +499,12 @@ class KTBuilder:
             return
 
         end_construct = time.time()
-        print(f"Construction Time: {end_construct - start_construct}s")
-        print(f"Successfully processed: {processed_count}/{total_docs} documents")
-        print(f"Failed: {failed_count} documents")
+        logger.info(f"Construction Time: {end_construct - start_construct}s")
+        logger.info(f"Successfully processed: {processed_count}/{total_docs} documents")
+        logger.info(f"Failed: {failed_count} documents")
         
-        print(f"\n🚀🚀🚀🚀 {'Processing Level 3 and 4':^20} 🚀🚀🚀🚀")
-        print(f"{'➖' * 20}")
+        logger.info(f"\n🚀🚀🚀🚀 {'Processing Level 3 and 4':^20} 🚀🚀🚀🚀")
+        logger.info(f"{'➖' * 20}")
         self.triple_deduplicate()
         self.process_level4()
 

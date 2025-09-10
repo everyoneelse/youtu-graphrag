@@ -183,14 +183,10 @@ class FastTreeComm:
         return dict(clusters)
 
     def detect_communities(self, level_nodes, max_iter=1, merge_threshold=0.5):
-        # print(f"Starting hierarchical community detection for {len(level_nodes)} nodes...")
-        
         if len(level_nodes) <= 1:
             return {0: level_nodes} if level_nodes else {}
 
         initial_clusters = self._fast_clustering(level_nodes)
-        # print(f"Initial clustering created {len(initial_clusters)} clusters")
-        
         final_communities = {}
         comm_id = 0
         
@@ -363,8 +359,6 @@ class FastTreeComm:
         
 
     def create_super_nodes(self, comm_to_nodes: Dict[str, List[str]], level: int = 4, batch_size: int = 5):
-        # print(f"Creating super nodes for {len(comm_to_nodes)} communities...")
-        
         super_nodes = {}
         communities = [(comm_id, members) for comm_id, members in comm_to_nodes.items() 
                       if len(members) >= 2]
@@ -379,7 +373,7 @@ class FastTreeComm:
                     
                     llm_dict = {str(item.get("id", "")): item for item in llm_results}
                 except Exception as e:
-                    print(f"Batch LLM processing failed: {e}")
+                    logger.error(f"Batch LLM processing failed: {e}")
                     llm_dict = {}
             else:
                 llm_dict = {}
@@ -410,9 +404,9 @@ class FastTreeComm:
                     super_nodes[super_node_id] = member_names
                     
                 except Exception as e:
-                    print(f"Error creating super node for community {comm_id}: {e}")
+                    logger.error(f"Error creating super node for community {comm_id}: {e}")
         
-        print(f"Created {len(super_nodes)} super nodes")
+        logger.info(f"Created {len(super_nodes)} super nodes")
         return super_nodes
 
     def extract_keywords_from_community(self, community_nodes: List[str], top_k: int = 5) -> List[str]:
@@ -440,9 +434,6 @@ class FastTreeComm:
         return top_nodes
 
     def create_super_nodes_with_keywords(self, comm_to_nodes: Dict[str, List[str]], level: int = 4, batch_size: int = 5):
-        # print("Creating super nodes with keywords...")
-        start_time = time.time()
-        
         super_nodes = self.create_super_nodes(comm_to_nodes, level, batch_size)
         
         keyword_mapping = {}
@@ -475,7 +466,7 @@ class FastTreeComm:
                     keyword_mapping[keyword_node_id] = keyword
                     
             except Exception as e:
-                print(f"Error creating keywords for community {comm_id}: {e}")
+                logger.error(f"Error creating keywords for community {comm_id}: {e}")
         
         return super_nodes, keyword_mapping
 
