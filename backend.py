@@ -535,35 +535,28 @@ def convert_standard_format(graph_data: Dict) -> Dict:
 
 @app.post("/api/ask-question", response_model=QuestionResponse)
 async def ask_question(request: QuestionRequest, client_id: str = "default"):
-    """Process question and return answer"""
+    """Process question using agent mode (iterative retrieval + reasoning) and return answer."""
     try:
         dataset_name = request.dataset_name
         question = request.question
-        
+
         if not GRAPHRAG_AVAILABLE:
             return await ask_demo_question(question, dataset_name, client_id)
-        
-        await send_progress_update(client_id, "retrieval", 10, "初始化检索系统...")
-        
-        # Get paths
+
+        await send_progress_update(client_id, "retrieval", 10, "初始化检索系统 (agent 模式)...")
+
         graph_path = f"output/graphs/{dataset_name}_new.json"
-        # Always use demo.json schema for consistency
         schema_path = "schemas/demo.json"
-        
         if not os.path.exists(graph_path):
-            # Try demo
             graph_path = "output/graphs/demo_new.json"
-        
         if not os.path.exists(graph_path):
             raise HTTPException(status_code=404, detail="Graph not found. Please construct graph first.")
-        
-        await send_progress_update(client_id, "retrieval", 30, "问题分解中...")
-        
-        # Initialize components
+
+        # Config & components
         global config
         if config is None:
             config = get_config("config/base_config.yaml")
-        
+
         graphq = decomposer.GraphQ(dataset_name, config=config)
         kt_retriever = retriever.KTRetriever(
             dataset_name,
@@ -571,116 +564,178 @@ async def ask_question(request: QuestionRequest, client_id: str = "default"):
             recall_paths=config.retrieval.recall_paths,
             schema_path=schema_path,
             top_k=config.retrieval.top_k_filter,
-            mode=config.triggers.mode,
+            mode="agent",  # 强制 agent 模式
             config=config
         )
-        await send_progress_update(client_id, "retrieval", 50, "构建搜索索引...")
+
+        await send_progress_update(client_id, "retrieval", 40, "构建索引...")
         kt_retriever.build_indices()
-        
-        await send_progress_update(client_id, "retrieval", 70, "检索相关信息...")
-        
-        # Decompose question
-        decomposition_result = graphq.decompose(question, schema_path)
-        sub_questions = decomposition_result.get("sub_questions", [])
-        
-        # Helpers for triple normalization
-        def _normalize_triple_str(t: str):
-            """Extract (s,r,o) ignoring score / extra annotations, lowercase for stable key."""
-            if not isinstance(t, str):
-                return None
-            m = re.search(r"\(([^,]+),\s*([^,]+),\s*([^\)]+)\)", t)
-            if not m:
-                return None
-            s, r, o = [x.strip().lower() for x in m.groups()]
-            return s, r, o
 
-        def _format_triple_key(key):
-            if not key:
-                return None
-            s, r, o = key
-            return f"({s}, {r}, {o})"
+        # Helper functions (复用 main.py 逻辑的精简版)
+        def _dedup(items):
+            return list({x: None for x in items}.keys())
+        def _merge_chunk_contents(ids, mapping):
+            return [mapping.get(i, f"[Missing content for chunk {i}]") for i in ids]
 
-        # Process retrieval (deduplicating across sub-questions)
-        all_triple_keys = set()
-        all_triples_formatted = []  # keep ordered unique formatted triples
-        all_chunk_contents = {}
+        # Step 1: decomposition
+        await send_progress_update(client_id, "retrieval", 50, "问题分解...")
+        try:
+            decomposition = graphq.decompose(question, schema_path)
+            sub_questions = decomposition.get("sub_questions", [])
+            involved_types = decomposition.get("involved_types", {})
+        except Exception as e:
+            logger.error(f"Decompose failed: {e}")
+            sub_questions = [{"sub-question": question}]
+            involved_types = {"nodes": [], "relations": [], "attributes": []}
+            decomposition = {"sub_questions": sub_questions, "involved_types": involved_types}
+
         reasoning_steps = []
-        
-        for sub_question in sub_questions:
-            sub_question_text = sub_question["sub-question"]
-            retrieval_results, time_taken = kt_retriever.process_retrieval_results(
-                sub_question_text, top_k=config.retrieval.top_k_filter
-            )
-            
-            triples = retrieval_results.get('triples', []) or []
-            chunk_contents = retrieval_results.get('chunk_contents', {}) or {}
-            # Per-step dedup
-            step_seen = set()
-            step_triples_dedup = []
-            for t in triples:
-                key = _normalize_triple_str(t)
-                if not key:
-                    continue
-                if key not in step_seen:
-                    step_seen.add(key)
-                    # Global accumulation
-                    if key not in all_triple_keys:
-                        all_triple_keys.add(key)
-                        formatted = _format_triple_key(key)
-                        if formatted:
-                            all_triples_formatted.append(formatted)
-                    step_triples_dedup.append(_format_triple_key(key))
+        all_triples = set()
+        all_chunk_ids = set()
+        all_chunk_contents: Dict[str, str] = {}
 
+        # Step 2: initial retrieval for each sub-question
+        await send_progress_update(client_id, "retrieval", 65, "初始检索...")
+        import time as _time
+        for idx, sq in enumerate(sub_questions):
+            sq_text = sq.get("sub-question", question)
+            start_t = _time.time()
+            retrieval_results, elapsed = kt_retriever.process_retrieval_results(
+                sq_text,
+                top_k=config.retrieval.top_k_filter,
+                involved_types=involved_types
+            )
+            triples = retrieval_results.get('triples', []) or []
+            chunk_ids = retrieval_results.get('chunk_ids', []) or []
+            chunk_contents = retrieval_results.get('chunk_contents', []) or []
             if isinstance(chunk_contents, dict):
-                all_chunk_contents.update(chunk_contents)
-            
-            # Store detailed information for visualization
+                for cid, ctext in chunk_contents.items():
+                    all_chunk_contents[cid] = ctext
+            else:
+                for i_c, cid in enumerate(chunk_ids):
+                    if i_c < len(chunk_contents):
+                        all_chunk_contents[cid] = chunk_contents[i_c]
+            all_triples.update(triples)
+            all_chunk_ids.update(chunk_ids)
             reasoning_steps.append({
                 "type": "sub_question",
-                "question": sub_question_text,
-                "triples": step_triples_dedup[:10],  # Already deduplicated
-                "triples_count": len(step_triples_dedup),
-                "chunks_count": len(chunk_contents) if isinstance(chunk_contents, dict) else 0,
-                "processing_time": time_taken,
-                "chunk_contents": list(chunk_contents.values())[:3] if isinstance(chunk_contents, dict) else []
+                "question": sq_text,
+                "triples": triples[:10],
+                "triples_count": len(triples),
+                "chunks_count": len(chunk_ids),
+                "processing_time": elapsed,
+                "chunk_contents": list(all_chunk_contents.values())[:3]
             })
 
-        await send_progress_update(client_id, "retrieval", 90, "生成答案...")
+        # Step 3: IRCoT iterative refinement
+        await send_progress_update(client_id, "retrieval", 75, "迭代推理...")
+        max_steps = getattr(getattr(config.retrieval, 'agent', object()), 'max_steps', 3)
+        current_query = question
+        thoughts = []
 
-        # Generate answer
-        dedup_triples = all_triples_formatted  # already in insertion order and deduped
-        dedup_chunk_contents = list(all_chunk_contents.values())
+        # Initial answer attempt
+        initial_triples = _dedup(list(all_triples))
+        initial_chunk_ids = list(set(all_chunk_ids))
+        initial_chunk_contents = _merge_chunk_contents(initial_chunk_ids, all_chunk_contents)
+        context_initial = "=== Triples ===\n" + "\n".join(initial_triples[:20]) + "\n=== Chunks ===\n" + "\n".join(initial_chunk_contents[:10])
+        init_prompt = kt_retriever.generate_prompt(question, context_initial)
+        try:
+            initial_answer = kt_retriever.generate_answer(init_prompt)
+        except Exception as e:
+            initial_answer = f"Initial answer failed: {e}"
+        thoughts.append(f"Initial: {initial_answer[:200]}")
+        final_answer = initial_answer
 
-        context = "=== Triples ===\n" + "\n".join(dedup_triples[:20])
-        context += "\n=== Chunks ===\n" + "\n".join(dedup_chunk_contents[:10])
+        import re as _re
+        for step in range(1, max_steps + 1):
+            loop_triples = _dedup(list(all_triples))
+            loop_chunk_ids = list(set(all_chunk_ids))
+            loop_chunk_contents = _merge_chunk_contents(loop_chunk_ids, all_chunk_contents)
+            loop_ctx = "=== Triples ===\n" + "\n".join(loop_triples[:20]) + "\n=== Chunks ===\n" + "\n".join(loop_chunk_contents[:10])
+            loop_prompt = f"""
+You are an expert knowledge assistant using iterative retrieval with chain-of-thought reasoning.
+Current Question: {question}
+Current Iteration Query: {current_query}
+Knowledge Context:\n{loop_ctx}
+Previous Thoughts: {' | '.join(thoughts) if thoughts else 'None'}
+Instructions:
+1. If enough info answer with: So the answer is: <answer>
+2. Else propose new query with: The new query is: <query>
+Your reasoning:
+"""
+            try:
+                reasoning = kt_retriever.generate_answer(loop_prompt)
+            except Exception as e:
+                reasoning = f"Reasoning error: {e}"
+            thoughts.append(reasoning[:400])
+            reasoning_steps.append({
+                "type": "ircot_step",
+                "question": current_query,
+                "triples": loop_triples[:10],
+                "triples_count": len(loop_triples),
+                "chunks_count": len(loop_chunk_ids),
+                "processing_time": 0,
+                "chunk_contents": loop_chunk_contents[:3],
+                "thought": reasoning[:300]
+            })
+            if "So the answer is:" in reasoning:
+                m = _re.search(r"So the answer is:\s*(.*)", reasoning, flags=_re.IGNORECASE | _re.DOTALL)
+                final_answer = m.group(1).strip() if m else reasoning
+                break
+            if "The new query is:" not in reasoning:
+                final_answer = initial_answer or reasoning
+                break
+            new_query = reasoning.split("The new query is:", 1)[1].strip().splitlines()[0]
+            if not new_query or new_query == current_query:
+                final_answer = initial_answer or reasoning
+                break
+            current_query = new_query
+            await send_progress_update(client_id, "retrieval", min(90, 75 + step * 5), f"迭代检索 Step {step}...")
+            try:
+                new_ret, _ = kt_retriever.process_retrieval_results(current_query, top_k=config.retrieval.top_k_filter)
+                new_triples = new_ret.get('triples', []) or []
+                new_chunk_ids = new_ret.get('chunk_ids', []) or []
+                new_chunk_contents = new_ret.get('chunk_contents', []) or []
+                if isinstance(new_chunk_contents, dict):
+                    for cid, ctext in new_chunk_contents.items():
+                        all_chunk_contents[cid] = ctext
+                else:
+                    for i_c, cid in enumerate(new_chunk_ids):
+                        if i_c < len(new_chunk_contents):
+                            all_chunk_contents[cid] = new_chunk_contents[i_c]
+                all_triples.update(new_triples)
+                all_chunk_ids.update(new_chunk_ids)
+            except Exception as e:
+                logger.error(f"Iterative retrieval failed: {e}")
+                break
 
-        prompt = kt_retriever.generate_prompt(question, context)
-        answer = kt_retriever.generate_answer(prompt)
+        # Final aggregation
+        final_triples = _dedup(list(all_triples))[:20]
+        final_chunk_ids = list(set(all_chunk_ids))
+        final_chunk_contents = _merge_chunk_contents(final_chunk_ids, all_chunk_contents)[:10]
 
         await send_progress_update(client_id, "retrieval", 100, "答案生成完成!")
-        
-        # Prepare enhanced visualization data
+
         visualization_data = {
             "subqueries": prepare_subquery_visualization(sub_questions, reasoning_steps),
-            "knowledge_graph": prepare_retrieved_graph_visualization(dedup_triples),
+            "knowledge_graph": prepare_retrieved_graph_visualization(final_triples),
             "reasoning_flow": prepare_reasoning_flow_visualization(reasoning_steps),
             "retrieval_details": {
-                "total_triples": len(dedup_triples),
-                "total_chunks": len(dedup_chunk_contents),
+                "total_triples": len(final_triples),
+                "total_chunks": len(final_chunk_contents),
                 "sub_questions_count": len(sub_questions),
-                "triples_by_subquery": [step["triples_count"] for step in reasoning_steps]
+                "triples_by_subquery": [s.get("triples_count", 0) for s in reasoning_steps if s.get("type") == "sub_question"]
             }
         }
-        
+
         return QuestionResponse(
-            answer=answer,
+            answer=final_answer,
             sub_questions=sub_questions,
-            retrieved_triples=dedup_triples[:20],
-            retrieved_chunks=dedup_chunk_contents[:10],
+            retrieved_triples=final_triples,
+            retrieved_chunks=final_chunk_contents,
             reasoning_steps=reasoning_steps,
             visualization_data=visualization_data
         )
-    
     except Exception as e:
         await send_progress_update(client_id, "retrieval", 0, f"问答处理失败: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
