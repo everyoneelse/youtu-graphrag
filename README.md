@@ -235,10 +235,6 @@ We welcome contributions from the community! Here's how you can help:
 - **🎯 Domain-Specific Applications**: Extend framework for specialized use cases with 'Best Practice'
 
 
-## 📄 License
-
-This project is licensed under the [MIT License](LICENSE) - see the LICENSE file for details.
-
 ## 📞 Contact
 
 **Hanson Dong** - hansonjdong@tencent.com  **Siyu An** - siyuan@tencent.com
