@@ -252,6 +252,6 @@ retrieval:
   top_k: 20
   top_k_filter: 20
 triggers:
-  constructor_trigger: false
+  constructor_trigger: true
   mode: agent
   retrieve_trigger: true
