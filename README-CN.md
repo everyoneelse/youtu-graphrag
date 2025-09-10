@@ -230,10 +230,6 @@ curl -v http://localhost:8000
 - **📊 自定义数据集集成**：在图本体模式最小人为干预的前提下，集成新的数据集
 - **🎯 领域特定应用**：展示特定领域最佳实践案例
 
-## 📄 开源协议
-
-本项目采用 [MIT License](LICENSE) 开源协议，详细条款请参见LICENSE文件。
-
 ## 📞 联系我们
 
 **董俊男** - hansonjdong@tencent.com  **安思宇** - siyuan@tencent.com
