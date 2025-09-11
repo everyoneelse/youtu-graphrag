@@ -35,7 +35,7 @@ Youtu-GraphRAG框架概览
 
 <div align="center">
 <img src="assets/graph_demo.png" alt="Graph Construction" width="48%"/>
-<img src="assets/retrieval_demo.png" alt="Retrieval" width="49.5%"/>
+<img src="assets/retrieval_demo.png" alt="Retrieval" width="47.5%"/>
 </div>
 
 

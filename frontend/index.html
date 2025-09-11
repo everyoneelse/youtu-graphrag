@@ -587,11 +587,25 @@
         }
 
         .retrieval-details {
-            background: rgba(255, 255, 255, 0.05);
-            border-radius: 8px;
-            padding: 20px;
-            margin: 20px 0;
-            border: 1px solid rgba(255, 255, 255, 0.1);
+            /* High contrast container */
+            background: linear-gradient(145deg, rgba(15,22,33,0.92) 0%, rgba(30,42,60,0.88) 100%);
+            border-radius: 14px;
+            padding: 24px 26px 20px;
+            margin: 28px 0 24px;
+            border: 1px solid rgba(255, 255, 255, 0.12);
+            box-shadow: 0 10px 28px -6px rgba(0,0,0,0.55), 0 2px 0 rgba(255,255,255,0.06) inset;
+            position: relative;
+            overflow: hidden;
+        }
+
+        .retrieval-details::before {
+            content: '';
+            position: absolute;
+            inset: 0;
+            background: radial-gradient(circle at 12% 18%, rgba(107,115,255,0.18), transparent 60%),
+                        radial-gradient(circle at 88% 82%, rgba(155,181,255,0.16), transparent 65%);
+            pointer-events: none;
+            mix-blend-mode: screen;
         }
 
         .retrieval-summary h4,
@@ -631,11 +645,34 @@
         }
 
         .subquestion-item {
-            background: rgba(255, 255, 255, 0.08);
-            border-radius: 8px;
-            padding: 15px;
-            margin-bottom: 15px;
-            border-left: 4px solid #9bb5ff;
+            /* Higher-contrast panel for readability */
+            background: linear-gradient(135deg, rgba(18,25,38,0.88) 0%, rgba(34,45,65,0.82) 100%);
+            backdrop-filter: blur(6px);
+            border-radius: 10px;
+            padding: 16px 18px 14px;
+            margin-bottom: 16px;
+            border: 1px solid rgba(255,255,255,0.12);
+            border-left: 5px solid #6b73ff;
+            box-shadow: 0 4px 14px rgba(0,0,0,0.45), 0 1px 0 rgba(255,255,255,0.08) inset;
+            position: relative;
+            overflow: hidden;
+            transition: background 0.3s ease, transform 0.25s ease, box-shadow 0.3s ease;
+        }
+
+        .subquestion-item::before {
+            content: '';
+            position: absolute;
+            top: 0; left: 0; right: 0; bottom: 0;
+            background: radial-gradient(circle at 15% 20%, rgba(107,115,255,0.20), transparent 60%),
+                        radial-gradient(circle at 85% 80%, rgba(155,181,255,0.18), transparent 65%);
+            opacity: 0.9;
+            pointer-events: none;
+        }
+
+        .subquestion-item:hover {
+            background: linear-gradient(135deg, rgba(25,35,50,0.92) 0%, rgba(46,60,85,0.86) 100%);
+            transform: translateY(-3px);
+            box-shadow: 0 8px 22px rgba(0,0,0,0.55), 0 2px 0 rgba(255,255,255,0.08) inset;
         }
 
         .subquestion-header {
@@ -856,12 +893,26 @@
         }
 
         .answer-content {
-            background: rgba(255, 255, 255, 0.05);
-            border-left: 4px solid #6b73ff;
-            padding: 20px;
-            border-radius: 8px;
-            margin: 20px 0;
-            line-height: 1.6;
+            background: linear-gradient(120deg, rgba(20,28,42,0.94) 0%, rgba(34,46,66,0.9) 100%);
+            border-left: 6px solid #6b73ff;
+            padding: 22px 26px 24px;
+            border-radius: 14px;
+            margin: 26px 0 20px;
+            line-height: 1.66;
+            border: 1px solid rgba(255,255,255,0.12);
+            box-shadow: 0 8px 24px -4px rgba(0,0,0,0.55), 0 1px 0 rgba(255,255,255,0.08) inset;
+            position: relative;
+            overflow: hidden;
+        }
+
+        .answer-content::before {
+            content: '';
+            position: absolute;
+            inset: 0;
+            background: radial-gradient(circle at 18% 22%, rgba(107,115,255,0.22), transparent 55%),
+                        radial-gradient(circle at 82% 78%, rgba(155,181,255,0.18), transparent 60%);
+            pointer-events: none;
+            opacity: 0.9;
         }
 
         .file-list {
@@ -1626,6 +1677,20 @@
             
             // Show the container
             detailsContainer.style.display = 'block';
+
+            // Compute total retrieved triples from visible sub-question steps (sum of each step's deduped triples list)
+            let subQuestionTriplesTotal = 0;
+            if (result.sub_questions && result.sub_questions.length > 0 && Array.isArray(result.reasoning_steps)) {
+                for (let i = 0; i < result.sub_questions.length; i++) {
+                    const step = result.reasoning_steps[i];
+                    if (step && Array.isArray(step.triples)) {
+                        subQuestionTriplesTotal += dedupTriples(step.triples).length;
+                    } else if (step && typeof step.triples_count === 'number') {
+                        // fallback if only count exists
+                        subQuestionTriplesTotal += step.triples_count;
+                    }
+                }
+            }
             
             let detailsHtml = `
                 <div class="retrieval-summary">
@@ -1636,8 +1701,8 @@
                             <span class="stat-value">${result.sub_questions?.length || 0}</span>
                         </div>
                         <div class="stat-item">
-                <span class="stat-label">Retrieved Triples:</span>
-                            <span class="stat-value">${result.retrieved_triples?.length || 0}</span>
+                <span class="stat-label">Retrieved Triples (Sum):</span>
+                            <span class="stat-value">${subQuestionTriplesTotal}</span>
                         </div>
                         <div class="stat-item">
                 <span class="stat-label">Relevant Chunks:</span>
