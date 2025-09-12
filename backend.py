@@ -25,13 +25,12 @@ from pydantic import BaseModel
 import uvicorn
 
 from utils.logger import logger
-import re
+import ast
 
 # Try to import GraphRAG components
 try:
     from models.constructor import kt_gen as constructor
     from models.retriever import agentic_decomposer as decomposer, enhanced_kt_retriever as retriever
-    from utils.eval import Eval
     from config import get_config, ConfigManager
     GRAPHRAG_AVAILABLE = True
     logger.info("✅ GraphRAG components loaded successfully")
@@ -301,11 +300,9 @@ async def create_dataset_config():
 async def construct_graph(request: GraphConstructionRequest, client_id: str = "default"):
     """Construct knowledge graph from uploaded data"""
     try:
-        dataset_name = request.dataset_name
-        
         if not GRAPHRAG_AVAILABLE:
-            # Fallback to demo mode
-            return await construct_demo_graph(dataset_name, client_id)
+            raise HTTPException(status_code=503, detail="GraphRAG components not available. Please install or configure them.")
+        dataset_name = request.dataset_name
         
         await send_progress_update(client_id, "construction", 2, "清理旧缓存文件...")
         
@@ -390,49 +387,6 @@ async def construct_graph(request: GraphConstructionRequest, client_id: str = "d
         await send_progress_update(client_id, "construction", 0, f"构建失败: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
-async def construct_demo_graph(client_id: str):
-    """Fallback demo graph construction"""
-    await send_progress_update(client_id, "construction", 10, "启动演示图构建...")
-    
-    stages = [
-        (25, "模拟实体抽取..."),
-        (45, "模拟关系发现..."),
-        (65, "模拟社区检测..."),
-        (85, "模拟层次构建..."),
-    ]
-    
-    for progress, message in stages:
-        await asyncio.sleep(2)  # Simulate realistic work time
-        await send_progress_update(client_id, "construction", progress, message)
-    
-    # Create demo graph data
-    demo_graph = {
-        "nodes": [
-            {"id": "entity1", "name": "实体1", "category": "person", "value": 5, "symbolSize": 25},
-            {"id": "entity2", "name": "实体2", "category": "location", "value": 3, "symbolSize": 20},
-            {"id": "entity3", "name": "实体3", "category": "concept", "value": 4, "symbolSize": 22},
-            {"id": "entity4", "name": "实体4", "category": "person", "value": 6, "symbolSize": 28},
-        ],
-        "links": [
-            {"source": "entity1", "target": "entity2", "name": "位于", "value": 1},
-            {"source": "entity2", "target": "entity3", "name": "相关", "value": 1},
-            {"source": "entity1", "target": "entity4", "name": "认识", "value": 2},
-        ],
-        "categories": [
-            {"name": "person", "itemStyle": {"color": "#ff6b6b"}},
-            {"name": "location", "itemStyle": {"color": "#4ecdc4"}},
-            {"name": "concept", "itemStyle": {"color": "#45b7d1"}},
-        ],
-        "stats": {"total_nodes": 4, "total_edges": 3, "displayed_nodes": 4, "displayed_edges": 3}
-    }
-    
-    await send_progress_update(client_id, "construction", 100, "演示图构建完成!")
-    
-    return GraphConstructionResponse(
-        success=True,
-        message="Demo knowledge graph constructed successfully",
-        graph_data=demo_graph
-    )
 
 async def prepare_graph_visualization(graph_path: str) -> Dict:
     """Prepare graph data for visualization"""
@@ -590,11 +544,10 @@ def convert_standard_format(graph_data: Dict) -> Dict:
 async def ask_question(request: QuestionRequest, client_id: str = "default"):
     """Process question using agent mode (iterative retrieval + reasoning) and return answer."""
     try:
+        if not GRAPHRAG_AVAILABLE:
+            raise HTTPException(status_code=503, detail="GraphRAG components not available. Please install or configure them.")
         dataset_name = request.dataset_name
         question = request.question
-
-        if not GRAPHRAG_AVAILABLE:
-            return await ask_demo_question(question, dataset_name, client_id)
 
         await send_progress_update(client_id, "retrieval", 10, "初始化检索系统 (agent 模式)...")
 
@@ -793,66 +746,6 @@ Your reasoning:
         await send_progress_update(client_id, "retrieval", 0, f"问答处理失败: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
-async def ask_demo_question(question: str, client_id: str):
-    """Demo question answering"""
-    stages = [
-        (30, "分析问题..."),
-        (60, "检索知识..."),
-        (90, "生成答案..."),
-    ]
-    
-    for progress, message in stages:
-        await asyncio.sleep(1)
-        await send_progress_update(client_id, "retrieval", progress, message)
-    
-    mock_response = QuestionResponse(
-        answer=f"基于知识图谱分析，这是对问题 '{question}' 的回答：这是一个演示回答，展示了问答功能的工作流程。",
-        sub_questions=[
-            {"sub-question": "主要实体是什么？"},
-            {"sub-question": "它们之间的关系如何？"}
-        ],
-        retrieved_triples=[
-            "[实体1, 位于, 实体2]",
-            "[实体2, 相关, 实体3]"
-        ],
-        retrieved_chunks=[
-            "这是检索到的相关文本片段，为回答提供上下文。"
-        ],
-        reasoning_steps=[
-            {
-                "type": "sub_question",
-                "question": "主要实体识别",
-                "triples_count": 2,
-                "chunks_count": 1,
-                "processing_time": 0.5
-            }
-        ],
-        visualization_data={
-            "subqueries": {
-                "nodes": [
-                    {"id": "original", "name": "原始问题", "category": "question", "symbolSize": 40},
-                    {"id": "sub1", "name": "子问题1", "category": "sub_question", "symbolSize": 30}
-                ],
-                "links": [{"source": "original", "target": "sub1", "name": "分解为"}],
-                "categories": [
-                    {"name": "question", "itemStyle": {"color": "#ff6b6b"}},
-                    {"name": "sub_question", "itemStyle": {"color": "#4ecdc4"}}
-                ]
-            },
-            "knowledge_graph": {
-                "nodes": [{"id": "entity1", "name": "检索实体", "category": "entity", "symbolSize": 20}],
-                "links": [],
-                "categories": [{"name": "entity", "itemStyle": {"color": "#95de64"}}]
-            },
-            "reasoning_flow": {
-                "steps": [{"step": 1, "type": "sub_question", "question": "示例问题", "triples_count": 2, "chunks_count": 1, "processing_time": 0.5}],
-                "timeline": [0.5]
-            }
-        }
-    )
-    
-    await send_progress_update(client_id, "retrieval", 100, "演示答案生成完成!")
-    return mock_response
 
 def prepare_subquery_visualization(sub_questions: List[Dict], reasoning_steps: List[Dict]) -> Dict:
     """Prepare subquery visualization"""
@@ -887,7 +780,10 @@ def prepare_retrieved_graph_visualization(triples: List[str]) -> Dict:
     for triple in triples[:10]:
         try:
             if triple.startswith('[') and triple.endswith(']'):
-                parts = eval(triple)
+                try:
+                    parts = ast.literal_eval(triple)
+                except Exception:
+                    continue
                 if len(parts) == 3:
                     source, relation, target = parts
                     
@@ -1021,6 +917,8 @@ async def delete_dataset(dataset_name: str):
 async def reconstruct_dataset(dataset_name: str, client_id: str = "default"):
     """Reconstruct graph for an existing dataset"""
     try:
+        if not GRAPHRAG_AVAILABLE:
+            raise HTTPException(status_code=503, detail="GraphRAG components not available. Please install or configure them.")
         # Check if dataset exists
         corpus_path = f"data/uploaded/{dataset_name}/corpus.json"
         if not os.path.exists(corpus_path):
@@ -1043,15 +941,6 @@ async def reconstruct_dataset(dataset_name: str, client_id: str = "default"):
             import shutil
             shutil.rmtree(cache_dir)
             await send_progress_update(client_id, "reconstruction", 25, "已清理缓存文件...")
-        
-        # Trigger graph construction using the existing endpoint
-        if not GRAPHRAG_AVAILABLE:
-            await send_progress_update(client_id, "reconstruction", 100, "演示模式重构完成!")
-            return {
-                "success": True,
-                "message": "Dataset reconstructed successfully (demo mode)",
-                "dataset_name": dataset_name
-            }
         
         await send_progress_update(client_id, "reconstruction", 35, "重新初始化图构建器...")
         
@@ -1149,7 +1038,6 @@ async def startup_event():
     os.makedirs("schemas", exist_ok=True)
     
     logger.info("🚀 Youtu-GraphRAG Unified Interface initialized")
-    logger.info(f"📊 GraphRAG components: {'Available' if GRAPHRAG_AVAILABLE else 'Demo mode'}")
 
 if __name__ == "__main__":
     uvicorn.run(app, host="0.0.0.0", port=8000)
