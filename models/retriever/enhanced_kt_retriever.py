@@ -1625,61 +1625,61 @@ class KTRetriever:
     def _process_single_subquestion(self, sub_question: Dict, top_k: int, involved_types: dict = None) -> Dict:
 
         sub_question_text = sub_question.get('sub-question', '')
-        # try:
-        retrieval_results, time_taken = self.process_retrieval_results(sub_question_text, top_k, involved_types)
-        triples = retrieval_results.get('triples', []) or []
-        chunk_ids = retrieval_results.get('chunk_ids', []) or []
-        chunk_contents = retrieval_results.get('chunk_contents', []) or []
-        
-        if isinstance(chunk_contents, dict):
-            chunk_contents_list = list(chunk_contents.values())
-        else:
-            chunk_contents_list = chunk_contents
-        
-        if not isinstance(triples, (list, tuple)):
-            logger.warning(f"triples is not a list: {type(triples)}")
-            triples = []
-        if not isinstance(chunk_ids, (list, tuple)):
-            logger.warning(f"chunk_ids is not a list: {type(chunk_ids)}")
-            chunk_ids = []
-        if not isinstance(chunk_contents_list, (list, tuple)):
-            logger.warning(f"chunk_contents_list is not a list: {type(chunk_contents_list)}")
-            chunk_contents_list = []
-        
-        sub_result = {
-            'sub_question': sub_question_text,
-            'triples_count': len(triples),
-            'chunk_ids_count': len(chunk_ids),
-            'time_taken': time_taken
-        }
-        
-        chunk_contents_dict = {}
-        for i, chunk_id in enumerate(chunk_ids):
-            if i < len(chunk_contents_list):
-                chunk_contents_dict[chunk_id] = chunk_contents_list[i]
-            else:
-                chunk_contents_dict[chunk_id] = f"[Missing content for chunk {chunk_id}]"
-        
-        return {
-            'triples': set(triples),
-            'chunk_ids': set(chunk_ids),
-            'chunk_contents': chunk_contents_dict,
-            'sub_result': sub_result
-        }
+        try:
+            retrieval_results, time_taken = self.process_retrieval_results(sub_question_text, top_k, involved_types)
+            triples = retrieval_results.get('triples', []) or []
+            chunk_ids = retrieval_results.get('chunk_ids', []) or []
+            chunk_contents = retrieval_results.get('chunk_contents', []) or []
             
-        # except Exception as e:
-        #     logger.error(f"Error processing sub-question '{sub_question_text}': {str(e)}")
-        #     return {
-        #         'triples': set(),
-        #         'chunk_ids': set(),
-        #         'chunk_contents': {},
-        #         'sub_result': {
-        #             'sub_question': sub_question_text,
-        #             'triples_count': 0,
-        #             'chunk_ids_count': 0,
-        #             'time_taken': 0.0
-        #         }
-        #     }
+            if isinstance(chunk_contents, dict):
+                chunk_contents_list = list(chunk_contents.values())
+            else:
+                chunk_contents_list = chunk_contents
+            
+            if not isinstance(triples, (list, tuple)):
+                logger.warning(f"triples is not a list: {type(triples)}")
+                triples = []
+            if not isinstance(chunk_ids, (list, tuple)):
+                logger.warning(f"chunk_ids is not a list: {type(chunk_ids)}")
+                chunk_ids = []
+            if not isinstance(chunk_contents_list, (list, tuple)):
+                logger.warning(f"chunk_contents_list is not a list: {type(chunk_contents_list)}")
+                chunk_contents_list = []
+            
+            sub_result = {
+                'sub_question': sub_question_text,
+                'triples_count': len(triples),
+                'chunk_ids_count': len(chunk_ids),
+                'time_taken': time_taken
+            }
+            
+            chunk_contents_dict = {}
+            for i, chunk_id in enumerate(chunk_ids):
+                if i < len(chunk_contents_list):
+                    chunk_contents_dict[chunk_id] = chunk_contents_list[i]
+                else:
+                    chunk_contents_dict[chunk_id] = f"[Missing content for chunk {chunk_id}]"
+            
+            return {
+                'triples': set(triples),
+                'chunk_ids': set(chunk_ids),
+                'chunk_contents': chunk_contents_dict,
+                'sub_result': sub_result
+            }
+            
+        except Exception as e:
+            logger.error(f"Error processing sub-question '{sub_question_text}': {str(e)}")
+            return {
+                'triples': set(),
+                'chunk_ids': set(),
+                'chunk_contents': {},
+                'sub_result': {
+                    'sub_question': sub_question_text,
+                    'triples_count': 0,
+                    'chunk_ids_count': 0,
+                    'time_taken': 0.0
+                }
+            }
 
     def generate_prompt(self, question: str, context: str) -> str:
         
