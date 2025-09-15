@@ -1112,9 +1112,6 @@ class KTRetriever:
         return list(self.graph.neighbors(node_id))
 
     def _optimized_neighbor_expansion(self, top_nodes: List[str], question_embed: torch.Tensor) -> List[Tuple]:
-        overall_start = time.time()
-
-        neighbor_start = time.time()
         all_neighbors = set()
         edge_queries = set()
         for node in top_nodes:
@@ -1123,7 +1120,6 @@ class KTRetriever:
             edge_queries.update((node, n) for n in all_neighbors)
             edge_queries.update((n, node) for n in all_neighbors)
 
-        triple_start = time.time()
         triples = []
         for u, v in edge_queries:
             edge_data = self.graph.get_edge_data(u, v)
@@ -1586,27 +1582,26 @@ class KTRetriever:
             
             for future in concurrent.futures.as_completed(future_to_subquestion):
                 sub_q = future_to_subquestion[future]
-                # try:
-                sub_result = future.result()
-                
-                with threading.Lock():
-                    all_triples.update(sub_result['triples'])
-                    all_chunk_ids.update(sub_result['chunk_ids'])
+                try:
+                    sub_result = future.result()
                     
-                    for chunk_id, content in sub_result['chunk_contents'].items():
-                        all_chunk_contents[chunk_id] = content
-                    
-                    all_sub_question_results.append(sub_result['sub_result'])
+                    with threading.Lock():
+                        all_triples.update(sub_result['triples'])
+                        all_chunk_ids.update(sub_result['chunk_ids'])
                         
-                # except Exception as e:
-                #     logger.error(f"Error processing sub-question: {str(e)}")
-                #     with threading.Lock():
-                #         all_sub_question_results.append({
-                #             'sub_question': sub_q.get('sub-question', ''),
-                #             'triples_count': 0,
-                #             'chunk_ids_count': 0,
-                #             'time_taken': 0.0
-                #         })
+                        for chunk_id, content in sub_result['chunk_contents'].items():
+                            all_chunk_contents[chunk_id] = content
+                        
+                        all_sub_question_results.append(sub_result['sub_result'])
+                except Exception as e:
+                    logger.error(f"Error processing sub-question: {str(e)}")
+                    with threading.Lock():
+                        all_sub_question_results.append({
+                            'sub_question': sub_q.get('sub-question', ''),
+                            'triples_count': 0,
+                            'chunk_ids_count': 0,
+                            'time_taken': 0.0
+                        })
 
         dedup_triples = list(all_triples) 
         dedup_chunk_ids = list(all_chunk_ids)  
