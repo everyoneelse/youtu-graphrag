@@ -122,15 +122,23 @@ class KTBuilder:
         return len(encoding.encode(text))
     
     def _get_construction_prompt(self, chunk: str) -> str:
-        """Get the appropriate construction prompt based on dataset name."""
+        """Get the appropriate construction prompt based on dataset name and mode (agent/noagent)."""
         recommend_schema = json.dumps(self.schema, ensure_ascii=False)
         
+        # Base prompt type mapping
         prompt_type_map = {
-            "novel": "novel_chs",
+            "novel": "novel",
             "novel_eng": "novel_eng"
         }
         
-        prompt_type = prompt_type_map.get(self.dataset_name, "general")
+        base_prompt_type = prompt_type_map.get(self.dataset_name, "general")
+        
+        # Add agent suffix if in agent mode
+        if self.mode == "agent":
+            prompt_type = f"{base_prompt_type}_agent"
+        else:
+            prompt_type = base_prompt_type
+        
         return self.config.get_prompt_formatted("construction", prompt_type, schema=recommend_schema, chunk=chunk)
     
     def _validate_and_parse_llm_response(self, prompt: str, llm_response: str) -> dict:
@@ -329,7 +337,11 @@ class KTBuilder:
             self.graph.add_edge(subj_node_id, obj_node_id, relation=pred)
 
     def process_level1_level2_agent(self, chunk: str, id: int):
-        """Process attributes (level 1) and triples (level 2) with agent mechanism for schema evolution."""
+        """Process attributes (level 1) and triples (level 2) with agent mechanism for schema evolution.
+        
+        This method enables dynamic schema evolution by allowing the LLM to suggest new entity types,
+        relation types, and attribute types that can be added to the existing schema.
+        """
         prompt = self._get_construction_prompt(chunk)
         llm_response = self.extract_with_llm(prompt)
         
@@ -352,7 +364,15 @@ class KTBuilder:
             self._process_triples_agent(extracted_triples, id, entity_types)
 
     def _update_schema_with_new_types(self, new_schema_types: Dict[str, List[str]]):
-        """Update the schema file with new types discovered by the agent"""
+        """Update the schema file with new types discovered by the agent.
+        
+        This method processes schema evolution suggestions from the LLM and updates
+        the corresponding schema file with new node types, relations, and attributes.
+        Only adds types that don't already exist in the current schema.
+        
+        Args:
+            new_schema_types: Dictionary containing 'nodes', 'relations', and 'attributes' lists
+        """
         try:
             schema_paths = {
                 "hotpot": "schemas/hotpot.json",
@@ -450,9 +470,12 @@ class KTBuilder:
                     id = nanoid.generate(size=8)
                     chunk2id[id] = chunk
                 
+                # Route to appropriate processing method based on mode
                 if self.mode == "agent":
+                    # Agent mode: includes schema evolution capabilities
                     self.process_level1_level2_agent(chunk, id)
                 else:
+                    # NoAgent mode: standard processing without schema evolution
                     self.process_level1_level2(chunk, id)
                 
         except Exception as e:
