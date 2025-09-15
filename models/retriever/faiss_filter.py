@@ -846,8 +846,18 @@ class DualFAISSRetriever:
             self._build_community_index()
             logger.info("FAISS indices and embeddings built successfully!")
             self._populate_embedding_maps()
-            
-            self._precompute_node_embeddings(force_recompute=True)
+            # Seed node embedding cache from freshly built embeddings to avoid re-encoding
+            try:
+                if self.node_embeddings is not None and self.node_map:
+                    self.node_embedding_cache = {}
+                    for i_str, node_id in self.node_map.items():
+                        try:
+                            self.node_embedding_cache[node_id] = self.node_embeddings[int(i_str)].detach()
+                        except Exception:
+                            continue
+                    self.save_embedding_cache()
+            except Exception as e:
+                logger.warning(f"Warning: Failed to seed node_embedding_cache from built embeddings: {e}")
         
         self._preload_faiss_indices()
 
@@ -859,9 +869,8 @@ class DualFAISSRetriever:
         
         # Store embeddings on CPU to save GPU memory
         self.node_embeddings = embeddings.cpu()
-        # Save as numpy to avoid pickle issues
-        embeddings_numpy = self.node_embeddings.numpy()
-        np.save(f"{self.cache_dir}/{self.dataset}/node_embeddings.npy", embeddings_numpy)
+        # Save as .pt for consistency across the codebase
+        torch.save(self.node_embeddings, f"{self.cache_dir}/{self.dataset}/node_embeddings.pt")
         
         # Build FAISS index
         embeddings_np = embeddings.cpu().numpy()
@@ -887,9 +896,8 @@ class DualFAISSRetriever:
 
         # Store embeddings on CPU
         self.relation_embeddings = embeddings.cpu()
-        # Save as numpy to avoid pickle issues
-        embeddings_numpy = self.relation_embeddings.numpy()
-        np.save(f"{self.cache_dir}/{self.dataset}/relation_embeddings.npy", embeddings_numpy)
+        # Save as .pt for consistency across the codebase
+        torch.save(self.relation_embeddings, f"{self.cache_dir}/{self.dataset}/relation_embeddings.pt")
 
         # Build FAISS index
         embeddings_np = embeddings.cpu().numpy()

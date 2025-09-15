@@ -128,14 +128,11 @@ class KTRetriever:
         if self.enable_performance_optimizations:
             try:
                 cache_loaded = self._load_node_embedding_cache()
-                self.faiss_retriever.build_indices()
                 self._precompute_node_texts()
                 self._build_node_text_index()
                 self._precompute_chunk_embeddings()
                 
-                if not cache_loaded:
-                    self._precompute_node_embeddings()
-                else:
+                if cache_loaded:
                     self.node_embeddings_precomputed = True
                     
                     if not hasattr(self.faiss_retriever, 'node_embedding_cache') or not self.faiss_retriever.node_embedding_cache:
