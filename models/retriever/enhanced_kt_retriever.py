@@ -1478,6 +1478,8 @@ class KTRetriever:
             head_props = self._get_node_properties(h)
             tail_props = self._get_node_properties(t)
             triple_text = f"({head_text} {head_props}, {r}, {tail_text} {tail_props}) [score: {score:.3f}]"
+            if "represented_by" == r or "kw_filter_by" == r:
+                continue
             formatted_triples.append(triple_text)
             
         return formatted_triples
