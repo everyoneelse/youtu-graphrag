@@ -794,6 +794,7 @@ class DualFAISSRetriever:
         node_embed_path = f"{self.cache_dir}/{self.dataset}/node_embeddings.pt"
         relation_embed_path = f"{self.cache_dir}/{self.dataset}/relation_embeddings.pt"
         node_map_path = f"{self.cache_dir}/{self.dataset}/node_map.json"
+        dim_transform_path = f"{self.cache_dir}/{self.dataset}/dim_transform.pt"
         
         all_exist = (os.path.exists(node_path) and 
                     os.path.exists(relation_path) and 
@@ -811,13 +812,32 @@ class DualFAISSRetriever:
                 current_nodes = set(self.graph.nodes())
                 cached_nodes = set(cached_node_map.values())
                 
-                if current_nodes == cached_nodes:
+                # Check graph consistency
+                graph_consistent = current_nodes == cached_nodes
+                
+                # Check model dimension consistency
+                dim_consistent = True
+                if os.path.exists(dim_transform_path):
+                    try:
+                        cached_dim_info = torch.load(dim_transform_path, map_location='cpu', weights_only=False)
+                        cached_model_dim = cached_dim_info.get('model_dim')
+                        if cached_model_dim != self.model_dim:
+                            logger.info(f"Model dimension changed: cached {cached_model_dim}, current {self.model_dim}")
+                            dim_consistent = False
+                    except Exception as e:
+                        logger.warning(f"Error checking dimension transform consistency: {e}")
+                        dim_consistent = False
+                
+                if graph_consistent and dim_consistent:
                     indices_consistent = True
-                    logger.info("Cached FAISS indices are consistent with current graph")
+                    logger.info("Cached FAISS indices are consistent with current graph and model")
                 else:
-                    logger.info(f"Graph inconsistency detected: current nodes {len(current_nodes)}, cached nodes {len(cached_nodes)}")
-                    logger.info(f"Missing in cache: {current_nodes - cached_nodes}")
-                    logger.info(f"Extra in cache: {cached_nodes - current_nodes}")
+                    if not graph_consistent:
+                        logger.info(f"Graph inconsistency detected: current nodes {len(current_nodes)}, cached nodes {len(cached_nodes)}")
+                        logger.info(f"Missing in cache: {current_nodes - cached_nodes}")
+                        logger.info(f"Extra in cache: {cached_nodes - current_nodes}")
+                    if not dim_consistent:
+                        logger.info("Model dimension inconsistency detected")
             except Exception as e:
                 logger.error(f"Error checking index consistency: {e}")
         
@@ -836,7 +856,7 @@ class DualFAISSRetriever:
             logger.info("Building FAISS indices and embeddings...")
             if all_exist and not indices_consistent:
                 logger.info("Clearing inconsistent cache files...")
-                for path in [node_path, relation_path, triple_path, comm_path, node_embed_path, relation_embed_path, node_map_path]:
+                for path in [node_path, relation_path, triple_path, comm_path, node_embed_path, relation_embed_path, node_map_path, dim_transform_path]:
                     if os.path.exists(path):
                         os.remove(path)
             
@@ -844,9 +864,9 @@ class DualFAISSRetriever:
             self._build_relation_index()
             self._build_triple_index()
             self._build_community_index()
+            self._save_dim_transform()
             logger.info("FAISS indices and embeddings built successfully!")
             self._populate_embedding_maps()
-            # Seed node embedding cache from freshly built embeddings to avoid re-encoding
             try:
                 if self.node_embeddings is not None and self.node_map:
                     self.node_embedding_cache = {}
@@ -860,6 +880,72 @@ class DualFAISSRetriever:
                 logger.warning(f"Warning: Failed to seed node_embedding_cache from built embeddings: {e}")
         
         self._preload_faiss_indices()
+
+    def _save_dim_transform(self):
+        """Save dimension transform state to disk"""
+        dim_transform_path = f"{self.cache_dir}/{self.dataset}/dim_transform.pt"
+        try:
+            save_data = {
+                'model_dim': self.model_dim,
+                'target_dim': 384,
+                'has_transform': self.dim_transform is not None
+            }
+            
+            if self.dim_transform is not None:
+                save_data['state_dict'] = self.dim_transform.cpu().state_dict()
+            
+            torch.save(save_data, dim_transform_path)
+            logger.info(f"Saved dimension transform to {dim_transform_path}")
+        except Exception as e:
+            logger.error(f"Error saving dimension transform: {e}")
+
+    def _load_dim_transform(self):
+        """Load dimension transform state from disk"""
+        dim_transform_path = f"{self.cache_dir}/{self.dataset}/dim_transform.pt"
+        if not os.path.exists(dim_transform_path):
+            return False
+            
+        try:
+            try:
+                save_data = torch.load(dim_transform_path, map_location='cpu', weights_only=False)
+            except TypeError:
+                save_data = torch.load(dim_transform_path, map_location='cpu')
+            
+            cached_model_dim = save_data.get('model_dim')
+            has_transform = save_data.get('has_transform', False)
+            
+            # Verify dimension consistency
+            if cached_model_dim != self.model_dim:
+                logger.warning(f"Model dimension mismatch: cached {cached_model_dim}, current {self.model_dim}")
+                return False
+            
+            if has_transform and 'state_dict' in save_data:
+                if self.dim_transform is None:
+                    self.dim_transform = torch.nn.Linear(self.model_dim, 384)
+                
+                # Load the saved weights
+                self.dim_transform.load_state_dict(save_data['state_dict'])
+                
+                if self.device.type == "cuda" and torch.cuda.is_available():
+                    self.dim_transform = self.dim_transform.to(self.device)
+                else:
+                    self.dim_transform = self.dim_transform.to("cpu")
+                    
+                logger.info(f"Loaded dimension transform from {dim_transform_path}")
+                return True
+            elif not has_transform:
+                if self.dim_transform is None:
+                    logger.info("No dimension transform needed (cached and current both 384-dim)")
+                    return True
+                else:
+                    logger.warning("Dimension transform state mismatch")
+                    return False
+                    
+        except Exception as e:
+            logger.error(f"Error loading dimension transform: {e}")
+            return False
+        
+        return False
 
     def _build_node_index(self):
         """Build FAISS index for all nodes and cache embeddings"""
@@ -1029,6 +1115,9 @@ class DualFAISSRetriever:
             except Exception as e:
                 logger.warning(f"Warning: Failed to load relation embeddings: {e}")
 
+        # Load dimension transform if available
+        self._load_dim_transform()
+        
         # Populate maps if all necessary data is loaded
         if self.node_map and self.node_embeddings is not None:
             self._populate_embedding_maps()
