@@ -77,15 +77,16 @@ prompts:
     general: "You are an expert information extractor and structured data organizer.\
       \ Your task is to analyze the provided text and extract as many valuable entities,\
       \ their attributes, and relations as possible in a structured JSON format. \
-      \ \n\nGuidelines:\n1. Prioritize the following predefined schema for extraction;\n\
-      \   ```{schema}```\n2. Flexibility: If the context doesn't fit the predefined\
-      \ schema, extract the valuable knowledge as needed;\n3. Conciseness: The Attributes\
-      \ and Triples you extract should be complementary and no semantic redundancy.\n\
-      4. Do NOT miss any useful information in the context;\n5. Output Format: Return\
+      \ \n\nGuidelines:\n1. Schema Compliance: Strictly follow the predefined schema for entity types;\n\
+      \   ```{schema}```\n2. Entity Type Mapping: ALL entities MUST be mapped to types defined in the schema.\n\
+      \   - If an entity doesn't fit any schema type perfectly, map it to the closest/most similar type\n\
+      \   - Do NOT create new entity types or use types not in the schema\n3. Flexible Relations and Attributes: You may extract relations and attributes beyond the schema if they capture valuable knowledge\n\
+      4. Conciseness: The Attributes and Triples you extract should be complementary with no semantic redundancy\n\
+      5. Completeness: Do NOT miss any useful information in the context\n6. Output Format: Return\
       \ only JSON as **Example Output** with:  \n   - Attributes: Map each entity\
-      \ to its descriptive features.  \n   - Triples: List relations between entities\
-      \ in `[entity_mention1, relation, entity_mention2]` format.\n   - Entity_types:\
-      \ Map each entity to its schema type based on the provided schema.\n\n```{chunk}```\n\
+      \ to its descriptive features  \n   - Triples: List relations between entities\
+      \ in `[entity_mention1, relation, entity_mention2]` format\n   - Entity_types:\
+      \ Map each entity to its schema type (must use types from provided schema only)\n\n```{chunk}```\n\
       \nExample Output:  \n{{\n  \"attributes\": {{\n    \"Stephen King\": [\"profession:\
       \ author\"]\n  }},\n  \"triples\": [\n    [\"Shawshank Redemption\", \"based\
       \ on\", \"Rita Hayworth and Shawshank Redemption\"],\n    [\"Shawshank Redemption\"\
@@ -120,9 +121,10 @@ prompts:
       \  \"new_schema_types\": {{\n      \"nodes\": [\"Movie\"],\n      \"relations\"\
       : [\"starring\"],\n      \"attributes\": [\"genre\"]\n  }}\n}}\n"
     novel: "你是小说信息提取专家，请根据小说内容，参考以下schema，提取小说中的主要人物、人物关系、人物属性、人物事件等关键信息，并严格按照示例返回一个JSON格式。\n\
-      \n小说内容:\n```{chunk}```\n\n参考schema:\n```{schema}```\n\n要求：\n1. 主要人物：包括主角、配角、反派等。\n\
-      2. 人物关系：包括人物之间的互动、关系等。\n3. 人物属性：包括人物的职位、称号、绰号、性别、年龄、职业、性格、特长等。\n4. 主要事件：包括策略、行动、故事背景、历史事件等。\n\
-      5. 事件属性：包括事件的地点、时间、事件的参与者、事件的后果等。\n6. 实体地点等名称严格使用文本中的名称，不要自己推理和创造。\n7. 根据提供的schema为每个实体分配正确的类型。\n注意：\n严格抽取triple三元组为[实体,关系,实体]，不要多余元素。\n\
+      \n小说内容:\n```{chunk}```\n\n参考schema:\n```{schema}```\n\n要求：\n1. 实体类型：所有实体必须严格映射到schema中定义的类型（如person、event、location等）\n\
+      \   - 如果某个实体不完全符合某个类型，请映射到最接近的类型\n   - 不要创建schema中没有的新类型\n2. 主要人物：包括主角、配角、反派等\n\
+      3. 人物关系：包括人物之间的互动、关系等（关系名称可以灵活命名以准确描述关系）\n4. 人物属性：包括人物的职位、称号、绰号、性别、年龄、职业、性格、特长等\n5. 主要事件：包括策略、行动、故事背景、历史事件等\n\
+      6. 事件属性：包括事件的地点、时间、事件的参与者、事件的后果等\n7. 实体地点等名称严格使用文本中的名称，不要自己推理和创造\n注意：\n严格抽取triple三元组为[实体,关系,实体]，不要多余元素。\n\
       \n示例输出，包括属性、三元组及实体类型：\n{{\n    \"attributes\": {{\n      \"PERSON#1\": [\"绰号: 智多星\"\
       , \"职位: 智囊团\", \"特长: 策划\"]\n    }},\n    \"triples\": [\n      [\"PERSON#1\"\
       , \"策划\", \"智取生辰纲\"],\n      [\"智取生辰纲\", \"发生地\", \"LOCATION#1\"]\n    ],\n    \"entity_types\": {{\n      \"PERSON#1\": \"person\",\n      \"智取生辰纲\": \"event\",\n      \"LOCATION#1\": \"location\"\n    }}\n}}\n"
@@ -137,15 +139,16 @@ prompts:
     novel_eng: "You are an expert information extractor and structured data organizer.\
       \ Your task is to analyze the provided text and extract as many valuable entities,\
       \ their attributes, and relations as possible in a structured JSON format. \
-      \ \n\nGuidelines:\n1. Prioritize the following predefined schema for extraction;\n\
-      \   ```{schema}```\n2. Flexibility: If the context doesn't fit the predefined\
-      \ schema, extract the valuable knowledge as needed;\n3. Conciseness: The Attributes\
-      \ and Triples you extract should be complementary and no semantic redundancy.\n\
-      4. Do NOT miss any useful information in the context;\n5. Output Format: Return\
+      \ \n\nGuidelines:\n1. Schema Compliance: Strictly follow the predefined schema for entity types;\n\
+      \   ```{schema}```\n2. Entity Type Mapping: ALL entities MUST be mapped to types defined in the schema\n\
+      \   - If an entity doesn't fit any schema type perfectly, map it to the closest/most similar type\n\
+      \   - Do NOT create new entity types or use types not in the schema\n3. Flexible Relations and Attributes: You may extract relations and attributes beyond the schema if they capture valuable knowledge\n\
+      4. Conciseness: The Attributes and Triples you extract should be complementary with no semantic redundancy\n\
+      5. Completeness: Do NOT miss any useful information in the context\n6. Output Format: Return\
       \ only JSON as **Example Output** with:  \n   - Attributes: Map each entity\
-      \ to its descriptive features.  \n   - Triples: List relations between entities\
-      \ in `[entity_mention1, relation, entity_mention2]` format.\n   - Entity_types:\
-      \ Map each entity to its schema type based on the provided schema.\n\nChunk:\n\
+      \ to its descriptive features  \n   - Triples: List relations between entities\
+      \ in `[entity_mention1, relation, entity_mention2]` format\n   - Entity_types:\
+      \ Map each entity to its schema type (must use types from provided schema only)\n\nChunk:\n\
       ```{chunk}```\n\nExample Output:  \n{{\n  \"attributes\": {{\n    \"PERSON#1\"\
       : [\"profession: writer\"]\n  }},\n  \"triples\": [\n    [\"PERSON#1\", \"\
       located at\", \"LOCATION#1\"],\n    [\"PERSON#1\", \"good at\", \"playing piano\"\
