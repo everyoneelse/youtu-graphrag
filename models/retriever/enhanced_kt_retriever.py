@@ -1681,9 +1681,9 @@ class KTRetriever:
     def generate_prompt(self, question: str, context: str) -> str:
         
         if self.config:
-            if self.dataset == 'novel':
-                return self.config.get_prompt_formatted("retrieval", "novel_chs", question=question, context=context)
-            elif self.dataset == 'novel_eng':
+            if self.dataset == 'anony_chs':
+                return self.config.get_prompt_formatted("retrieval", "novel", question=question, context=context)
+            elif self.dataset == 'anony_eng':
                 return self.config.get_prompt_formatted("retrieval", "novel_eng", question=question, context=context)
             else:
                 return self.config.get_prompt_formatted("retrieval", "general", question=question, context=context)
