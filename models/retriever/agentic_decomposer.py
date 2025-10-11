@@ -26,7 +26,7 @@ class GraphQ:
     def prompt_format(self, schema: str, question: str) -> str:
         if self.config:
             if self.dataset_name == "anony_chs":
-                return self.config.get_prompt_formatted("decomposition", "anony_chs", ontology=schema, question=question)
+                return self.config.get_prompt_formatted("decomposition", "novel", ontology=schema, question=question)
             else:
                 return self.config.get_prompt_formatted("decomposition", "general", ontology=schema, question=question)
         else:
