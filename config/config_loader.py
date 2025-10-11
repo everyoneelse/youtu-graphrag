@@ -247,7 +247,15 @@ class ConfigManager:
         """Get a formatted prompt with variables substituted."""
         template = self.get_prompt(category, prompt_type)
         try:
-            return template.format(**kwargs)
+            # Escape curly braces in kwargs values to prevent them from being interpreted as format variables
+            escaped_kwargs = {}
+            for key, value in kwargs.items():
+                if isinstance(value, str):
+                    # Replace { and } with {{ and }} to escape them
+                    escaped_kwargs[key] = value.replace('{', '{{').replace('}', '}}')
+                else:
+                    escaped_kwargs[key] = value
+            return template.format(**escaped_kwargs)
         except KeyError as e:
             raise ValueError(f"Missing variable {e} for prompt {category}.{prompt_type}")
     
