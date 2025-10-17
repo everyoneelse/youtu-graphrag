@@ -764,6 +764,285 @@ class SemanticTripleDeduplicator:
         return deduplicated
 
 
+class KeywordDeduplicator:
+    """
+    Semantic deduplication for keyword nodes.
+    
+    Keywords from different communities may represent the same concept.
+    This class identifies and merges semantically equivalent keywords.
+    """
+    
+    def __init__(
+        self,
+        embedding_model_name: str = "all-MiniLM-L6-v2",
+        similarity_threshold: float = 0.8,
+        enable_llm_verification: bool = True,
+        use_chunk_context: bool = True,
+        config=None,
+        graph=None,
+        all_chunks: Dict[str, str] = None
+    ):
+        """
+        Initialize the keyword deduplicator.
+        
+        Args:
+            embedding_model_name: Name of the sentence transformer model
+            similarity_threshold: Similarity threshold (higher for keywords)
+            enable_llm_verification: Whether to use LLM for verification
+            use_chunk_context: Whether to use chunk context for verification
+            config: Configuration object
+            graph: NetworkX graph
+            all_chunks: Dictionary mapping chunk_id to chunk_text
+        """
+        self.similarity_threshold = similarity_threshold
+        self.enable_llm_verification = enable_llm_verification
+        self.use_chunk_context = use_chunk_context
+        self.config = config
+        self.graph = graph
+        self.all_chunks = all_chunks or {}
+        
+        # Initialize embedding model
+        if SENTENCE_TRANSFORMERS_AVAILABLE:
+            try:
+                self.embedding_model = SentenceTransformer(embedding_model_name)
+                logger.info(f"Loaded embedding model for keyword dedup: {embedding_model_name}")
+            except Exception as e:
+                logger.warning(f"Failed to load embedding model: {e}")
+                self.embedding_model = None
+        else:
+            logger.warning("sentence-transformers not available")
+            self.embedding_model = None
+        
+        # Initialize LLM client
+        if self.enable_llm_verification:
+            try:
+                self.llm_client = LLMCompletionCall()
+            except Exception as e:
+                logger.warning(f"Failed to initialize LLM client: {e}")
+                self.llm_client = None
+                self.enable_llm_verification = False
+    
+    def get_keyword_chunk_info(self, keyword_node_id: str) -> Dict:
+        """
+        Get chunk information for a keyword node.
+        
+        Args:
+            keyword_node_id: ID of the keyword node
+            
+        Returns:
+            Dictionary with chunk_id, chunk_text, and source_entity
+        """
+        if not self.graph:
+            return {}
+        
+        node_data = self.graph.nodes.get(keyword_node_id, {})
+        properties = node_data.get("properties", {})
+        
+        chunk_id = properties.get("chunk id")
+        source_entity = properties.get("source_entity")
+        
+        chunk_text = ""
+        if chunk_id and self.all_chunks:
+            chunk_text = self.all_chunks.get(chunk_id, "")
+        
+        return {
+            "chunk_id": chunk_id,
+            "chunk_text": chunk_text,
+            "source_entity": source_entity
+        }
+    
+    def compute_embeddings(self, texts: List[str]) -> Optional[np.ndarray]:
+        """Compute embeddings for keyword names."""
+        if not self.embedding_model or not texts:
+            return None
+        
+        try:
+            embeddings = self.embedding_model.encode(
+                texts,
+                convert_to_numpy=True,
+                show_progress_bar=False
+            )
+            return embeddings
+        except Exception as e:
+            logger.warning(f"Failed to compute embeddings: {e}")
+            return None
+    
+    def build_keyword_verification_prompt(
+        self,
+        kw1_name: str,
+        kw2_name: str,
+        kw1_info: Dict,
+        kw2_info: Dict
+    ) -> str:
+        """Build prompt for LLM to verify keyword equivalence."""
+        
+        context_text = ""
+        if self.use_chunk_context:
+            if kw1_info.get("chunk_text"):
+                context_text += f"\n关键词1的原始文本上下文：\n{kw1_info['chunk_text'][:300]}\n"
+            if kw2_info.get("chunk_text"):
+                context_text += f"\n关键词2的原始文本上下文：\n{kw2_info['chunk_text'][:300]}\n"
+        
+        prompt = f"""你是一个知识图谱专家。请判断以下两个关键词是否表达相同的概念。
+
+关键词1: {kw1_name}
+关键词2: {kw2_name}
+{context_text}
+判断标准：
+1. 如果两个关键词表达完全相同的概念或实体，则认为等价
+2. 同义词、近义词、缩写、全称/简称应该认为等价
+3. 如果有原始文本上下文，优先参考上下文判断
+4. 如果两个关键词表达不同的概念，即使相关也不应合并
+5. 关键词去重要求比较严格，只有高度确定相同时才判断为等价
+
+请严格按照以下JSON格式回答：
+{{
+  "equivalent": true 或 false,
+  "confidence": 0.0到1.0之间的数字,
+  "reasoning": "判断理由"
+}}"""
+        
+        return prompt
+    
+    def verify_keywords_with_llm(
+        self,
+        kw1_name: str,
+        kw2_name: str,
+        kw1_info: Dict,
+        kw2_info: Dict
+    ) -> bool:
+        """Verify if two keywords are semantically equivalent using LLM."""
+        if not self.llm_client:
+            return False
+        
+        try:
+            prompt = self.build_keyword_verification_prompt(
+                kw1_name, kw2_name, kw1_info, kw2_info
+            )
+            response = self.llm_client.call_api(prompt)
+            
+            result = json.loads(response)
+            equivalent = result.get("equivalent", False)
+            confidence = result.get("confidence", 0.0)
+            reasoning = result.get("reasoning", "")
+            
+            logger.debug(f"Keyword verification: '{kw1_name}' vs '{kw2_name}' -> {equivalent} (confidence: {confidence}) - {reasoning}")
+            
+            # Require higher confidence for keyword merging
+            return equivalent and confidence >= 0.8
+            
+        except Exception as e:
+            logger.warning(f"LLM keyword verification failed: {e}")
+            return False
+    
+    def deduplicate_keywords(self) -> Dict[str, str]:
+        """
+        Deduplicate keyword nodes in the graph.
+        
+        Returns:
+            Dictionary mapping old keyword node IDs to representative node IDs
+        """
+        if not self.graph:
+            logger.warning("No graph provided for keyword deduplication")
+            return {}
+        
+        # Get all keyword nodes
+        keyword_nodes = [
+            (node_id, data) 
+            for node_id, data in self.graph.nodes(data=True)
+            if data.get("label") == "keyword"
+        ]
+        
+        if not keyword_nodes:
+            logger.info("No keyword nodes found")
+            return {}
+        
+        logger.info(f"Starting keyword deduplication on {len(keyword_nodes)} keywords")
+        
+        # Extract keyword names
+        keyword_names = [
+            data.get("properties", {}).get("name", "")
+            for _, data in keyword_nodes
+        ]
+        keyword_ids = [node_id for node_id, _ in keyword_nodes]
+        
+        n = len(keyword_nodes)
+        uf = UnionFind(n)
+        
+        # Step 1: Embedding-based similarity
+        if self.embedding_model:
+            embeddings = self.compute_embeddings(keyword_names)
+            
+            if embeddings is not None:
+                # Compute pairwise similarities
+                norms = np.linalg.norm(embeddings, axis=1, keepdims=True)
+                normalized = embeddings / (norms + 1e-8)
+                similarity_matrix = np.dot(normalized, normalized.T)
+                
+                # Find similar pairs
+                similar_pairs = []
+                for i in range(n):
+                    for j in range(i + 1, n):
+                        sim = similarity_matrix[i, j]
+                        if sim >= self.similarity_threshold:
+                            similar_pairs.append((i, j, sim))
+                
+                similar_pairs.sort(key=lambda x: x[2], reverse=True)
+                
+                logger.debug(f"Found {len(similar_pairs)} similar keyword pairs")
+                
+                # Step 2: LLM verification
+                if self.enable_llm_verification and similar_pairs:
+                    verified_count = 0
+                    for i, j, sim in similar_pairs:
+                        # Skip if already in same group
+                        if uf.find(i) == uf.find(j):
+                            continue
+                        
+                        # Get keyword info
+                        kw1_info = self.get_keyword_chunk_info(keyword_ids[i])
+                        kw2_info = self.get_keyword_chunk_info(keyword_ids[j])
+                        
+                        # Verify with LLM
+                        if self.verify_keywords_with_llm(
+                            keyword_names[i], keyword_names[j],
+                            kw1_info, kw2_info
+                        ):
+                            uf.union(i, j)
+                            verified_count += 1
+                    
+                    logger.info(f"LLM verified {verified_count} equivalent keyword pairs")
+                else:
+                    # No LLM, just use embedding similarity
+                    for i, j, _ in similar_pairs:
+                        uf.union(i, j)
+        
+        # Step 3: Build mapping and merge nodes
+        groups = uf.get_groups()
+        keyword_mapping = {}
+        merged_count = 0
+        
+        for root, members in groups.items():
+            if len(members) == 1:
+                # No duplicates, keep as is
+                continue
+            
+            # Choose representative (e.g., first one or most connected)
+            representative_idx = members[0]
+            representative_id = keyword_ids[representative_idx]
+            
+            # Map all members to representative
+            for member_idx in members:
+                if member_idx != representative_idx:
+                    member_id = keyword_ids[member_idx]
+                    keyword_mapping[member_id] = representative_id
+                    merged_count += 1
+        
+        logger.info(f"Keyword deduplication complete: {len(keyword_nodes)} -> {len(keyword_nodes) - merged_count} keywords ({merged_count} merged)")
+        
+        return keyword_mapping
+
+
 def semantic_deduplicate_triples(
     triples: List[str],
     config=None,

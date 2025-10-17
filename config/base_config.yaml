@@ -17,6 +17,8 @@ construction:
     batch_size: 8
     use_chunk_context: true
     use_keywords: true
+    enable_keyword_dedup: true
+    keyword_similarity_threshold: 0.8
   tree_comm:
     embedding_model: all-MiniLM-L6-v2
     enable_fast_mode: true

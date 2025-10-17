@@ -2,7 +2,10 @@
 
 ## 功能概述
 
-本项目实现了基于语义的三元组去重功能，能够识别并合并具有相同主体（head）和关系（relation）但尾实体（tail）描述略有不同但语义等价的三元组。
+本项目实现了基于语义的去重功能，包括：
+
+1. **三元组去重**：识别并合并具有相同主体（head）和关系（relation）但尾实体（tail）描述略有不同但语义等价的三元组
+2. **关键词去重**：识别并合并表达相同概念的 keyword 节点，利用 chunk 上下文信息提高准确性
 
 ## 核心特性
 
@@ -52,11 +55,13 @@
 ```yaml
 construction:
   semantic_dedup:
-    enable: true                    # 是否启用语义去重
-    similarity_threshold: 0.7       # 嵌入相似度阈值（0-1）
-    batch_size: 8                   # LLM 批量处理大小
-    use_chunk_context: true         # 是否使用原始 chunk 上下文
-    use_keywords: true              # 是否使用关键词特征
+    enable: true                        # 是否启用三元组语义去重
+    similarity_threshold: 0.7           # 三元组嵌入相似度阈值（0-1）
+    batch_size: 8                       # LLM 批量处理大小
+    use_chunk_context: true             # 是否使用原始 chunk 上下文
+    use_keywords: true                  # 是否使用关键词特征
+    enable_keyword_dedup: true          # 是否启用关键词去重
+    keyword_similarity_threshold: 0.8   # 关键词相似度阈值（更高更保守）
 ```
 
 ### 参数说明
@@ -83,13 +88,23 @@ construction:
   - 利用关键词作为额外的语义特征
   - 依赖于图谱中是否有 keyword 节点
 
+- **enable_keyword_dedup**:
+  - 是否启用关键词节点的语义去重
+  - **推荐启用**：可显著减少冗余的 keyword 节点
+
+- **keyword_similarity_threshold**:
+  - 关键词去重的相似度阈值
+  - 范围：0.0 ~ 1.0
+  - 推荐值：0.8（比三元组更高，更保守）
+  - 只有高度相似的 keyword 才会被合并
+
 ## 工作流程
 
 ### 1. 图构建阶段
 ```
-文档 → 分块 → 实体/关系抽取 → 图构建 → 三元组去重
-                   ↓
-              记录 chunk_id
+文档 → 分块 → 实体/关系抽取 → 图构建 → 社区检测 → 提取关键词
+                   ↓                      ↓            ↓
+              记录 chunk_id        三元组去重    关键词去重
 ```
 
 ### 2. 三元组去重流程
@@ -110,6 +125,26 @@ construction:
 4. 移除非代表实体的边
    ↓
 5. 输出去重后的图谱
+```
+
+### 3. 关键词去重流程
+```
+1. 获取所有 keyword 节点
+   ↓
+2. 继承来源实体的 chunk_id
+   ↓
+3. 计算所有 keyword 的 embedding 相似度
+   ↓
+4. 对相似度高的 keyword 对：
+   a. 获取 chunk 上下文
+   b. LLM 验证语义等价性
+   c. 使用并查集合并等价 keywords
+   ↓
+5. 合并重复 keyword 节点：
+   a. 重定向所有连接边到代表节点
+   b. 删除重复的 keyword 节点
+   ↓
+6. 输出精简后的图谱
 ```
 
 ## 使用示例
@@ -307,38 +342,113 @@ construction:
 - 可以帮助 LLM 理解实体的语义范围
 - 例如：如果一个实体关联了"科技公司"、"互联网"等关键词，LLM 在判断时会考虑这些语义特征
 
+### Q6: Keyword 去重是如何工作的？
+**A**:
+- Keyword 节点在创建时会继承其代表的实体节点的 `chunk_id`
+- 去重时会利用这个 chunk 上下文来判断语义
+- 例如：从不同社区提取的 "CEO" 和 "首席执行官" 这两个 keyword，如果它们的 chunk 上下文相似，就会被判定为等价并合并
+- 合并后，所有指向旧 keyword 的边会重定向到代表 keyword
+
+### Q7: 为什么 Keyword 的相似度阈值更高？
+**A**:
+- Keyword 代表关键概念，合并错误的代价较高
+- 较高的阈值（0.8）确保只有高度相似的 keyword 才会被合并
+- 避免过度合并导致语义信息丢失
+- 三元组可以有更低的阈值（0.7），因为三元组的上下文信息更丰富
+
+## Keyword 去重的特殊优势
+
+### 1. 利用 Chunk 上下文
+- **关键创新**：Keyword 节点继承其代表实体的 chunk_id
+- 去重时可以看到 keyword 来源的原始文本
+- 提高判断准确性，避免误合并
+
+### 2. 减少图谱冗余
+- 不同社区可能提取相同或相似的 keyword
+- 例如："AI"、"人工智能"、"Artificial Intelligence" 可能出现在多个社区
+- 去重后可以显著减少 keyword 节点数量
+
+### 3. 保持语义一致性
+- 合并后的 keyword 能更好地代表概念
+- 避免同一概念有多个不同的表示
+- 提高图谱查询和检索的准确性
+
+### 示例场景
+
+**场景：科技公司图谱**
+
+构建前（多个社区提取了类似的 keywords）:
+```
+Community 1: ["AI", "人工智能", "深度学习"]
+Community 2: ["Artificial Intelligence", "AI技术", "机器学习"]
+Community 3: ["人工智能", "AI算法", "神经网络"]
+```
+
+去重后：
+```
+Merged Keywords:
+- "AI" ← ["AI", "Artificial Intelligence", "AI技术", "AI算法"]
+- "人工智能" ← ["人工智能", "人工智能"]
+- "深度学习" (unique)
+- "机器学习" (unique)
+- "神经网络" (unique)
+```
+
+结果：从 12 个 keyword 节点减少到 5 个代表性节点。
+
 ## 未来改进方向
 
-1. **增量去重**：支持新增三元组的增量去重
+1. **增量去重**：支持新增三元组和 keyword 的增量去重
 2. **人工审核**：对低置信度的等价判断提供人工审核接口
 3. **统计报告**：生成详细的去重统计报告
 4. **多语言支持**：优化对英文等其他语言的支持
 5. **缓存机制**：缓存 embedding 和 LLM 判断结果
+6. **属性去重**：扩展到 attribute 节点的语义去重
 
 ## 技术架构
 
 ```
-SemanticTripleDeduplicator
+Semantic Deduplication System
 │
-├── UnionFind (并查集)
-│   ├── find()
-│   ├── union()
-│   └── get_groups()
+├── SemanticTripleDeduplicator (三元组去重)
+│   │
+│   ├── UnionFind (并查集)
+│   │   ├── find()
+│   │   ├── union()
+│   │   └── get_groups()
+│   │
+│   ├── Embedding Layer
+│   │   ├── SentenceTransformer
+│   │   ├── compute_embeddings()
+│   │   └── compute_similarity_matrix()
+│   │
+│   ├── Context Extraction
+│   │   ├── get_entity_chunk_info()
+│   │   ├── Graph traversal
+│   │   └── Keyword extraction
+│   │
+│   └── LLM Verification
+│       ├── Pairwise mode
+│       ├── Batch mode
+│       └── Prompt engineering
 │
-├── Embedding Layer
-│   ├── SentenceTransformer
-│   ├── compute_embeddings()
-│   └── compute_similarity_matrix()
-│
-├── Context Extraction
-│   ├── get_entity_chunk_info()
-│   ├── Graph traversal
-│   └── Keyword extraction
-│
-└── LLM Verification
-    ├── Pairwise mode
-    ├── Batch mode
-    └── Prompt engineering
+└── KeywordDeduplicator (关键词去重)
+    │
+    ├── UnionFind (并查集)
+    │
+    ├── Embedding Layer
+    │   └── compute_embeddings()
+    │
+    ├── Chunk Context
+    │   ├── get_keyword_chunk_info()
+    │   └── Inherit from source entity
+    │
+    ├── LLM Verification
+    │   └── Pairwise mode (stricter)
+    │
+    └── Node Merging
+        ├── Redirect edges
+        └── Remove duplicates
 ```
 
 ## 贡献与反馈

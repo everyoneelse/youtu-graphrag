@@ -449,11 +449,20 @@ class FastTreeComm:
                     keyword_node_id = f"kw_{comm_id}_{keyword}"
                     keyword_name = self.node_names[keyword]
                     
+                    # Get chunk_id from the source entity node
+                    keyword_chunk_id = self.graph.nodes[keyword].get("properties", {}).get("chunk id")
+                    
+                    # Create keyword node properties
+                    keyword_properties = {"name": keyword_name}
+                    if keyword_chunk_id:
+                        keyword_properties["chunk id"] = keyword_chunk_id
+                        keyword_properties["source_entity"] = keyword  # Track source entity
+                    
                     self.graph.add_node(
                         keyword_node_id,
                         label="keyword",
                         level=3,
-                        properties={"name": keyword_name}
+                        properties=keyword_properties
                     )
                     
                     self.graph.add_edge(keyword, keyword_node_id, relation="represented_by")
