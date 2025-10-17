@@ -535,7 +535,16 @@ class KTBuilder:
        
 
     def triple_deduplicate(self):
-        """deduplicate triples in lv1 and lv2"""
+        """
+        Deduplicate triples in lv1 and lv2.
+        
+        Performs both:
+        1. Exact deduplication (removes identical triples)
+        2. Semantic deduplication (if enabled in config)
+        """
+        logger.info("Starting triple deduplication...")
+        
+        # Step 1: Exact deduplication
         new_graph = nx.MultiDiGraph()
 
         for node, node_data in self.graph.nodes(data=True):
@@ -548,6 +557,141 @@ class KTBuilder:
                 seen_triples.add((u, v, relation))
                 new_graph.add_edge(u, v, **data)
         self.graph = new_graph
+        
+        logger.info(f"Exact deduplication complete: {len(seen_triples)} unique triples")
+        
+        # Step 2: Semantic deduplication (if enabled)
+        semantic_dedup_enabled = False
+        try:
+            semantic_dedup_enabled = self.config.construction.semantic_dedup.enable
+        except AttributeError:
+            # Config doesn't have semantic_dedup settings, skip
+            pass
+        
+        if semantic_dedup_enabled:
+            logger.info("Starting semantic deduplication...")
+            try:
+                from utils.semantic_dedup import SemanticTripleDeduplicator
+                
+                # Get configuration parameters
+                try:
+                    similarity_threshold = self.config.construction.semantic_dedup.similarity_threshold
+                    batch_size = self.config.construction.semantic_dedup.batch_size
+                    use_chunk_context = self.config.construction.semantic_dedup.use_chunk_context
+                    use_keywords = self.config.construction.semantic_dedup.use_keywords
+                except AttributeError:
+                    # Use defaults if config parameters not found
+                    similarity_threshold = 0.7
+                    batch_size = 8
+                    use_chunk_context = True
+                    use_keywords = True
+                
+                # Create deduplicator
+                deduplicator = SemanticTripleDeduplicator(
+                    similarity_threshold=similarity_threshold,
+                    batch_size=batch_size,
+                    enable_llm_verification=True,
+                    use_chunk_context=use_chunk_context,
+                    use_keywords=use_keywords,
+                    config=self.config,
+                    graph=self.graph,
+                    all_chunks=self.all_chunks
+                )
+                
+                # Apply semantic deduplication to entity-entity edges only
+                self._apply_semantic_deduplication(deduplicator)
+                
+                logger.info("Semantic deduplication complete")
+                
+            except Exception as e:
+                logger.error(f"Semantic deduplication failed: {e}")
+                logger.info("Continuing with exact deduplication only")
+    
+    def _apply_semantic_deduplication(self, deduplicator):
+        """
+        Apply semantic deduplication to entity-entity relationships.
+        
+        Args:
+            deduplicator: SemanticTripleDeduplicator instance
+        """
+        from collections import defaultdict
+        
+        # Group edges by (head, relation) where both head and tail are entities
+        edge_groups = defaultdict(list)
+        
+        for u, v, key, data in self.graph.edges(keys=True, data=True):
+            u_data = self.graph.nodes[u]
+            v_data = self.graph.nodes[v]
+            
+            # Only process entity-entity relationships
+            if u_data.get("label") != "entity" or v_data.get("label") != "entity":
+                continue
+            
+            head_name = u_data.get("properties", {}).get("name", "")
+            tail_name = v_data.get("properties", {}).get("name", "")
+            relation = data.get("relation", "")
+            
+            if not head_name or not tail_name or not relation:
+                continue
+            
+            key_tuple = (head_name, relation)
+            edge_groups[key_tuple].append({
+                "u": u,
+                "v": v,
+                "key": key,
+                "data": data,
+                "tail_name": tail_name
+            })
+        
+        # Process each group
+        total_groups = len(edge_groups)
+        processed_groups = 0
+        total_removed = 0
+        
+        for (head_name, relation), edges in edge_groups.items():
+            if len(edges) <= 1:
+                continue
+            
+            processed_groups += 1
+            
+            # Extract tail names
+            tails = [edge["tail_name"] for edge in edges]
+            
+            # Deduplicate this group
+            try:
+                representatives = deduplicator.deduplicate_group(
+                    head_name, relation,
+                    [(i, tail, tail) for i, tail in enumerate(tails)]
+                )
+                
+                # Keep only representative edges
+                keep_indices = set(representatives)
+                edges_to_remove = []
+                
+                for i, edge in enumerate(edges):
+                    if i not in keep_indices:
+                        edges_to_remove.append(edge)
+                
+                # Remove non-representative edges from graph
+                for edge in edges_to_remove:
+                    try:
+                        self.graph.remove_edge(edge["u"], edge["v"], key=edge["key"])
+                        total_removed += 1
+                    except Exception as e:
+                        logger.debug(f"Failed to remove edge: {e}")
+                
+                if edges_to_remove:
+                    logger.debug(f"Group ({head_name}, {relation}): removed {len(edges_to_remove)} semantic duplicates")
+            
+            except Exception as e:
+                logger.warning(f"Failed to deduplicate group ({head_name}, {relation}): {e}")
+                continue
+            
+            # Progress logging
+            if processed_groups % 10 == 0:
+                logger.info(f"Semantic deduplication progress: {processed_groups}/{total_groups} groups processed, {total_removed} duplicates removed")
+        
+        logger.info(f"Semantic deduplication summary: processed {processed_groups} groups, removed {total_removed} duplicate edges")
 
     def format_output(self) -> List[Dict[str, Any]]:
         """convert graph to specified output format"""

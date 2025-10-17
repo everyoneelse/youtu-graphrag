@@ -11,6 +11,12 @@ construction:
   max_workers: 32
   mode: agent
   overlap: 200
+  semantic_dedup:
+    enable: true
+    similarity_threshold: 0.7
+    batch_size: 8
+    use_chunk_context: true
+    use_keywords: true
   tree_comm:
     embedding_model: all-MiniLM-L6-v2
     enable_fast_mode: true
