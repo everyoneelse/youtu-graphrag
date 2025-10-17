@@ -1,9 +1,12 @@
+import copy
 import json
 import os
 import threading
 import time
 from concurrent import futures
 from typing import Any, Dict, List, Tuple
+from collections import defaultdict
+
 
 import nanoid
 import networkx as nx
@@ -13,6 +16,28 @@ import json_repair
 from config import get_config
 from utils import call_llm_api, graph_processor, tree_comm
 from utils.logger import logger
+
+import numpy as np
+
+DEFAULT_SEMANTIC_DEDUP_PROMPT = (
+    "You are a knowledge graph curation assistant. All listed triples share the same head entity and relation.\n"
+    "Head entity: {head}\n"
+    "Relation: {relation}\n\n"
+    "Head contexts:\n{head_context}\n\n"
+    "Candidate tails:\n"
+    "{candidates}\n\n"
+    "Instructions:\n"
+    "1. Use the provided contexts when comparing meanings. Group tails that refer to the same real-world entity or express the same fact.\n"
+    "2. Keep tails separate when their meanings differ or when the contexts describe different situations.\n"
+    "3. Choose the most informative mention as the representative index.\n"
+    "4. Every input index must appear in exactly one group.\n\n"
+    "Respond with strict JSON using this schema:\n"
+    "{{\n"
+    "  \"groups\": [\n"
+    "    {{\"members\": [1, 3], \"representative\": 3, \"rationale\": \"Why the members belong together.\"}}\n"
+    "  ]\n"
+    "}}\n"
+)
 
 class KTBuilder:
     def __init__(self, dataset_name, schema_path=None, mode=None, config=None):
@@ -30,6 +55,7 @@ class KTBuilder:
         self.llm_client = call_llm_api.LLMCompletionCall()
         self.all_chunks = {}
         self.mode = mode or config.construction.mode
+        self._semantic_dedup_embedder = None
 
     def load_schema(self, schema_path) -> Dict[str, Any]:
         try:
@@ -261,15 +287,22 @@ class KTBuilder:
         triple_nodes, triple_edges = self._process_triples(extracted_triples, id, entity_types)
         
         all_nodes = attr_nodes + triple_nodes
-        all_edges = attr_edges + triple_edges
+        #all_edges = attr_edges + triple_edges
         
         with self.lock:
             for node_id, node_data in all_nodes:
                 self.graph.add_node(node_id, **node_data)
             
-            for u, v, relation in all_edges:
+            for u, v, relation in attr_edges:
                 self.graph.add_edge(u, v, relation=relation)
 
+            for subj, obj, relation, source_chunk_id in triple_edges:
+                edge_data = {"relation": relation}
+                if source_chunk_id:
+                    edge_data["source_chunks"] = [source_chunk_id]
+                self.graph.add_edge(subj, obj, **edge_data)
+
+    
     def _find_or_create_entity_direct(self, entity_name: str, chunk_id: int, entity_type: str = None) -> str:
         """Find existing entity or create a new one directly in graph (for agent mode)."""
         entity_node_id = next(
@@ -334,7 +367,12 @@ class KTBuilder:
             subj_node_id = self._find_or_create_entity_direct(subj, chunk_id, subj_type)
             obj_node_id = self._find_or_create_entity_direct(obj, chunk_id, obj_type)
             
-            self.graph.add_edge(subj_node_id, obj_node_id, relation=pred)
+            #self.graph.add_edge(subj_node_id, obj_node_id, relation=pred)
+            edge_data = {"relation": pred}
+            if chunk_id:
+                edge_data["source_chunks"] = [chunk_id]
+            self.graph.add_edge(subj_node_id, obj_node_id, **edge_data)
+    
 
     def process_level1_level2_agent(self, chunk: str, id: int):
         """Process attributes (level 1) and triples (level 2) with agent mechanism for schema evolution.
@@ -420,7 +458,7 @@ class KTBuilder:
         except Exception as e:
             logger.error(f"Failed to update schema for dataset '{self.dataset_name}': {type(e).__name__}: {e}")
 
-    def process_level4(self):
+    def process_level4(self, method = "semantic"):
         """Process communities using Tree-Comm algorithm"""
         level2_nodes = [n for n, d in self.graph.nodes(data=True) if d['level'] == 2]
         start_comm = time.time()
@@ -430,12 +468,23 @@ class KTBuilder:
             struct_weight=self.config.tree_comm.struct_weight,
         )
         comm_to_nodes = _tree_comm.detect_communities(level2_nodes)
-
-        # create super nodes (level 4 communities)
-        _tree_comm.create_super_nodes_with_keywords(comm_to_nodes, level=4)
-        # _tree_comm.add_keywords_to_level3(comm_to_nodes)
-        # connect keywords to communities (optional)
-        # self._connect_keywords_to_communities()
+        if method == 'semantic':
+            _, keyword_mapping = _tree_comm.create_super_nodes_with_keywords(comm_to_nodes, level=4)
+            if keyword_mapping:
+                try:
+                    self._deduplicate_keyword_nodes(keyword_mapping)
+                except Exception as keyword_error:
+                    logger.warning(
+                        "Keyword semantic deduplication failed: %s: %s",
+                        type(keyword_error).__name__,
+                        keyword_error,
+                    )
+        else:                    
+            # create super nodes (level 4 communities)
+            _tree_comm.create_super_nodes_with_keywords(comm_to_nodes, level=4)
+            # _tree_comm.add_keywords_to_level3(comm_to_nodes)
+            # connect keywords to communities (optional)
+            # self._connect_keywords_to_communities()
         end_comm = time.time()
         logger.info(f"Community Indexing Time: {end_comm - start_comm}s")
     
@@ -532,7 +581,793 @@ class KTBuilder:
         self.triple_deduplicate()
         self.process_level4()
 
-       
+    def _semantic_dedup_enabled(self) -> bool:
+        config = getattr(self.config.construction, "semantic_dedup", None)
+        return bool(config and config.enabled)
+
+    def _get_semantic_dedup_config(self):
+        return getattr(self.config.construction, "semantic_dedup", None)
+
+    def _get_semantic_dedup_embedder(self):
+        config = self._get_semantic_dedup_config()
+        if not config or not config.use_embeddings:
+            return None
+
+        if self._semantic_dedup_embedder is not None:
+            return self._semantic_dedup_embedder
+
+        model_name = getattr(config, "embedding_model", "") or getattr(self.config.embeddings, "model_name", "all-MiniLM-L6-v2")
+        try:
+            from sentence_transformers import SentenceTransformer
+
+            self._semantic_dedup_embedder = SentenceTransformer(model_name)
+        except Exception as e:
+            logger.warning(
+                "Failed to initialize semantic dedup embedder with model '%s': %s: %s",
+                model_name,
+                type(e).__name__,
+                e,
+            )
+            self._semantic_dedup_embedder = None
+
+        return self._semantic_dedup_embedder
+
+    def _describe_node(self, node_id: str) -> str:
+        node_data = self.graph.nodes.get(node_id, {})
+        label = node_data.get("label", "node")
+        properties = node_data.get("properties", {})
+
+        if isinstance(properties, dict):
+            name = properties.get("name") or properties.get("title")
+            extras = []
+            for key, value in properties.items():
+                if key == "name" or value in (None, ""):
+                    continue
+                extras.append(f"{key}: {value}")
+
+            extra_text = ", ".join(extras)
+            if name and extra_text:
+                return f"{name} ({extra_text}) [{label}]"
+            if name:
+                return f"{name} [{label}]"
+            if extra_text:
+                return f"{label} ({extra_text})"
+
+        return f"{label}:{node_id}"
+
+    def _collect_node_chunk_ids(self, node_id: str) -> list:
+        node_data = self.graph.nodes.get(node_id, {})
+        properties = node_data.get("properties", {}) if isinstance(node_data, dict) else {}
+        chunk_id = None
+        if isinstance(properties, dict):
+            chunk_id = properties.get("chunk id") or properties.get("chunk_id")
+
+        if not chunk_id:
+            return []
+
+        return [chunk_id] if isinstance(chunk_id, str) else list(chunk_id)
+
+    def _extract_edge_chunk_ids(self, edge_data: dict | None) -> list:
+        if not isinstance(edge_data, dict):
+            return []
+
+        chunk_ids = edge_data.get("source_chunks") or edge_data.get("source_chunk_ids")
+        if not chunk_ids:
+            return []
+
+        if isinstance(chunk_ids, (list, tuple, set)):
+            return [chunk for chunk in chunk_ids if isinstance(chunk, str) and chunk]
+
+        if isinstance(chunk_ids, str):
+            return [chunk_ids]
+
+        return []
+
+    def _summarize_contexts(self, chunk_ids: list, max_items: int = 2, max_chars: int = 200) -> list:
+        summaries: list = []
+        seen: set = set()
+
+        for chunk_id in chunk_ids:
+            if not chunk_id or chunk_id in seen:
+                continue
+
+            seen.add(chunk_id)
+            chunk_text = self.all_chunks.get(chunk_id)
+            if not chunk_text:
+                summaries.append(f"- ({chunk_id}) [context not available]")
+                if len(summaries) >= max_items:
+                    break
+                continue
+
+            snippet = " ".join(str(chunk_text).split())
+            if len(snippet) > max_chars:
+                snippet = snippet[:max_chars].rstrip() + "…"
+
+            summaries.append(f"- ({chunk_id}) {snippet}")
+            if len(summaries) >= max_items:
+                break
+
+        if not summaries:
+            summaries.append("- (no context available)")
+
+        return summaries
+
+    def _cluster_candidate_tails(self, descriptions: list, threshold: float) -> list:
+        if len(descriptions) <= 1:
+            return [list(range(len(descriptions)))]
+
+        embedder = self._get_semantic_dedup_embedder()
+        if embedder is None:
+            return [list(range(len(descriptions)))]
+
+        try:
+            embeddings = embedder.encode(descriptions, normalize_embeddings=True)
+        except Exception as e:
+            logger.warning("Failed to encode descriptions for semantic dedup: %s: %s", type(e).__name__, e)
+            return [list(range(len(descriptions)))]
+
+        clusters: list = []
+        for idx, vector in enumerate(embeddings):
+            vector_arr = np.asarray(vector, dtype=float)
+            assigned = False
+            for cluster in clusters:
+                if any(float(np.dot(existing_vec, vector_arr)) >= threshold for existing_vec in cluster["vectors"]):
+                    cluster["members"].append(idx)
+                    cluster["vectors"].append(vector_arr)
+                    assigned = True
+                    break
+
+            if not assigned:
+                clusters.append({"members": [idx], "vectors": [vector_arr]})
+
+        return [cluster["members"] for cluster in clusters]
+
+    def _build_semantic_dedup_prompt(
+        self,
+        head_text: str,
+        relation: str,
+        head_context_lines: list,
+        batch_entries: list,
+    ) -> str:
+        candidate_blocks = []
+        for idx, entry in enumerate(batch_entries, start=1):
+            description = entry.get("description") or "[NO DESCRIPTION]"
+            context_lines = entry.get("context_summaries") or ["- (no context available)"]
+            context_block = "\n        ".join(context_lines)
+            candidate_blocks.append(
+                f"[{idx}] Tail: {description}\n    Contexts:\n        {context_block}"
+            )
+
+        candidates_text = "\n".join(candidate_blocks) if candidate_blocks else "[No candidates]"
+        relation_text = relation or "[UNKNOWN]"
+        head_context_text = "\n".join(head_context_lines) if head_context_lines else "- (no context available)"
+
+        prompt_type = getattr(self._get_semantic_dedup_config(), "prompt_type", "general")
+        prompt_kwargs = {
+            "head": head_text or "[UNKNOWN_HEAD]",
+            "relation": relation_text,
+            "head_context": head_context_text,
+            "candidates": candidates_text,
+        }
+
+        try:
+            return self.config.get_prompt_formatted("semantic_dedup", prompt_type, **prompt_kwargs)
+        except Exception:
+            return DEFAULT_SEMANTIC_DEDUP_PROMPT.format(**prompt_kwargs)
+
+    def _llm_semantic_group(
+        self,
+        head_text: str,
+        relation: str,
+        head_context_lines: list,
+        batch_entries: list,
+    ) -> list:
+        prompt = self._build_semantic_dedup_prompt(head_text, relation, head_context_lines, batch_entries)
+
+        try:
+            response = self.llm_client.call_api(prompt)
+        except Exception as e:
+            logger.warning("Semantic dedup LLM call failed: %s: %s", type(e).__name__, e)
+            return []
+
+        try:
+            parsed = json_repair.loads(response)
+        except Exception:
+            try:
+                parsed = json.loads(response)
+            except Exception as parse_error:
+                logger.warning("Failed to parse semantic dedup LLM response: %s: %s", type(parse_error).__name__, parse_error)
+                return []
+
+        groups_raw = parsed.get("groups") if isinstance(parsed, dict) else None
+        if not isinstance(groups_raw, list):
+            return []
+
+        groups: list = []
+        assigned = set()
+        for group in groups_raw:
+            if not isinstance(group, dict):
+                continue
+
+            members_raw = group.get("members")
+            if not isinstance(members_raw, list):
+                continue
+
+            normalized_members = []
+            for member in members_raw:
+                try:
+                    member_idx = int(member) - 1
+                except (TypeError, ValueError):
+                    continue
+                if 0 <= member_idx < len(batch_entries):
+                    normalized_members.append(member_idx)
+
+            if not normalized_members:
+                continue
+
+            rep_raw = group.get("representative")
+            try:
+                rep_idx = int(rep_raw) - 1 if rep_raw is not None else None
+            except (TypeError, ValueError):
+                rep_idx = None
+
+            if rep_idx is None or rep_idx not in normalized_members:
+                rep_idx = normalized_members[0]
+
+            rationale = group.get("rationale")
+            groups.append(
+                {
+                    "representative": rep_idx,
+                    "members": normalized_members,
+                    "rationale": rationale,
+                }
+            )
+            assigned.update(normalized_members)
+
+        for idx in range(len(batch_entries)):
+            if idx not in assigned:
+                groups.append({"representative": idx, "members": [idx], "rationale": None})
+
+        return groups
+
+    def _merge_duplicate_metadata(self, base_entry: dict, duplicates: list, rationale: str = None):
+        if isinstance(base_entry, dict):
+            base_data = base_entry.get("data", {})
+            representative_chunks = list(base_entry.get("context_chunk_ids") or [])
+            representative_contexts = list(base_entry.get("context_summaries") or [])
+        else:
+            base_data = base_entry
+            representative_chunks = []
+            representative_contexts = []
+
+        merged = copy.deepcopy(base_data)
+
+        combined_chunks: list = []
+
+        def _append_chunk(chunk_id: str):
+            if chunk_id and chunk_id not in combined_chunks:
+                combined_chunks.append(chunk_id)
+
+        for chunk_id in representative_chunks:
+            _append_chunk(chunk_id)
+
+        for chunk_id in self._extract_edge_chunk_ids(merged):
+            _append_chunk(chunk_id)
+
+        for duplicate in duplicates or []:
+            if not isinstance(duplicate, dict):
+                continue
+
+            for chunk_id in duplicate.get("context_chunk_ids", []) or []:
+                _append_chunk(chunk_id)
+
+            duplicate_data = duplicate.get("raw_data") or duplicate.get("data")
+            for chunk_id in self._extract_edge_chunk_ids(duplicate_data):
+                _append_chunk(chunk_id)
+
+        if combined_chunks:
+            merged["source_chunks"] = combined_chunks
+
+        semantic_info = merged.get("semantic_dedup")
+
+        if rationale or duplicates or representative_contexts or combined_chunks:
+            if semantic_info is None:
+                semantic_info = {}
+                merged["semantic_dedup"] = semantic_info
+
+            if combined_chunks:
+                semantic_info.setdefault("representative_chunk_ids", combined_chunks)
+
+            if representative_contexts:
+                semantic_info.setdefault("representative_contexts", representative_contexts)
+            elif combined_chunks:
+                semantic_info.setdefault(
+                    "representative_contexts",
+                    self._summarize_contexts(combined_chunks),
+                )
+
+            if rationale:
+                rationales = semantic_info.setdefault("rationales", [])
+                rationales.append(rationale)
+
+            if duplicates:
+                duplicate_entries = semantic_info.setdefault("duplicates", [])
+                for duplicate in duplicates:
+                    if not isinstance(duplicate, dict):
+                        continue
+
+                    duplicate_chunk_ids = list(duplicate.get("context_chunk_ids") or [])
+                    duplicate_contexts = duplicate.get("context_summaries")
+                    if not duplicate_contexts and duplicate_chunk_ids:
+                        duplicate_contexts = self._summarize_contexts(duplicate_chunk_ids)
+
+                    duplicate_entries.append(
+                        {
+                            "tail_node": duplicate.get("node_id"),
+                            "tail_description": duplicate.get("description"),
+                            "edge_attributes": copy.deepcopy(duplicate.get("raw_data", duplicate.get("data", {}))),
+                            "context_chunk_ids": duplicate_chunk_ids,
+                            "context_summaries": copy.deepcopy(duplicate_contexts or []),
+                        }
+                    )
+
+        return merged
+
+    def _set_node_chunk_ids(self, properties: dict, chunk_ids: set):
+        if not isinstance(properties, dict):
+            return
+
+        normalized = [chunk_id for chunk_id in sorted(chunk_ids) if chunk_id]
+
+        if not normalized:
+            properties.pop("chunk id", None)
+            properties.pop("chunk_id", None)
+            return
+
+        if len(normalized) == 1:
+            properties["chunk id"] = normalized[0]
+        else:
+            properties["chunk id"] = normalized
+
+    def _edge_exists(self, source: str, target: str, data: dict) -> bool:
+        relation = data.get("relation") if isinstance(data, dict) else None
+        existing = self.graph.get_edge_data(source, target, default={})
+
+        for edge_data in existing.values() if isinstance(existing, dict) else []:
+            if not isinstance(edge_data, dict):
+                continue
+            if relation and edge_data.get("relation") != relation:
+                continue
+            return True
+
+        return False
+
+    def _reassign_keyword_edges(self, source_id: str, target_id: str):
+        incoming_edges = list(self.graph.in_edges(source_id, keys=True, data=True))
+        for origin, _, _, data in incoming_edges:
+            if origin == target_id:
+                continue
+            data_copy = copy.deepcopy(data)
+            if not self._edge_exists(origin, target_id, data_copy):
+                self.graph.add_edge(origin, target_id, **data_copy)
+
+        outgoing_edges = list(self.graph.out_edges(source_id, keys=True, data=True))
+        for _, destination, _, data in outgoing_edges:
+            if destination == target_id:
+                continue
+            data_copy = copy.deepcopy(data)
+            if not self._edge_exists(target_id, destination, data_copy):
+                self.graph.add_edge(target_id, destination, **data_copy)
+
+    def _merge_keyword_nodes(
+        self,
+        representative_entry: dict,
+        duplicates: list,
+        rationale: str | None,
+        keyword_mapping: dict | None,
+    ) -> list:
+        rep_id = representative_entry.get("node_id") if isinstance(representative_entry, dict) else None
+        if not rep_id or rep_id not in self.graph or not duplicates:
+            return []
+
+        rep_node = self.graph.nodes.get(rep_id, {})
+        rep_properties = rep_node.setdefault("properties", {}) if isinstance(rep_node, dict) else {}
+
+        representative_chunks = set(self._collect_node_chunk_ids(rep_id))
+        for chunk_id in representative_entry.get("chunk_ids", []) or []:
+            if chunk_id:
+                representative_chunks.add(chunk_id)
+
+        metadata = rep_properties.setdefault("semantic_dedup", {})
+        metadata.setdefault("node_type", "keyword")
+
+        rep_source_name = representative_entry.get("source_entity_name")
+        if rep_source_name and "representative_source_entity" not in metadata:
+            metadata["representative_source_entity"] = rep_source_name
+            metadata["representative_source_entity_id"] = representative_entry.get("source_entity_id")
+
+        rep_contexts = representative_entry.get("context_summaries") or []
+        if rep_contexts and "representative_contexts" not in metadata:
+            metadata["representative_contexts"] = list(rep_contexts)
+
+        removed_nodes: list = []
+        duplicates_info = metadata.setdefault("duplicates", [])
+
+        if rationale:
+            metadata.setdefault("rationales", []).append(rationale)
+
+        for duplicate in duplicates:
+            if not isinstance(duplicate, dict):
+                continue
+
+            dup_id = duplicate.get("node_id")
+            if not dup_id or dup_id == rep_id or dup_id not in self.graph:
+                continue
+
+            dup_node = self.graph.nodes.get(dup_id, {})
+            dup_props = dup_node.get("properties", {}) if isinstance(dup_node, dict) else {}
+
+            duplicate_chunks = set(self._collect_node_chunk_ids(dup_id))
+            for chunk_id in duplicate.get("chunk_ids", []) or []:
+                if chunk_id:
+                    duplicate_chunks.add(chunk_id)
+
+            representative_chunks.update(duplicate_chunks)
+
+            duplicate_contexts = duplicate.get("context_summaries") or []
+            if not duplicate_contexts and duplicate_chunks:
+                duplicate_contexts = self._summarize_contexts(sorted(duplicate_chunks))
+
+            duplicates_info.append(
+                {
+                    "node_id": dup_id,
+                    "name": dup_props.get("name") or duplicate.get("raw_name") or duplicate.get("description"),
+                    "chunk_ids": sorted(duplicate_chunks),
+                    "contexts": list(duplicate_contexts),
+                    "source_entity": duplicate.get("source_entity_name"),
+                    "source_entity_id": duplicate.get("source_entity_id"),
+                }
+            )
+
+            self._reassign_keyword_edges(dup_id, rep_id)
+            self.graph.remove_node(dup_id)
+            removed_nodes.append(dup_id)
+
+            if keyword_mapping is not None:
+                keyword_mapping.pop(dup_id, None)
+
+        if keyword_mapping is not None and not keyword_mapping.get(rep_id):
+            for duplicate in duplicates or []:
+                source_candidate = duplicate.get("source_entity_id") if isinstance(duplicate, dict) else None
+                if source_candidate:
+                    keyword_mapping[rep_id] = source_candidate
+                    break
+
+        if representative_chunks:
+            self._set_node_chunk_ids(rep_properties, representative_chunks)
+            metadata["representative_chunk_ids"] = sorted(representative_chunks)
+
+        return removed_nodes
+
+    def _deduplicate_keyword_nodes(self, keyword_mapping: dict):
+        if not keyword_mapping or not self._semantic_dedup_enabled():
+            return
+
+        config = self._get_semantic_dedup_config()
+        if not config:
+            return
+
+        community_to_keywords: dict = defaultdict(list)
+        for keyword_node_id in list(keyword_mapping.keys()):
+            if keyword_node_id not in self.graph:
+                continue
+            for _, target, _, data in self.graph.out_edges(keyword_node_id, keys=True, data=True):
+                if isinstance(data, dict) and data.get("relation") == "keyword_of":
+                    community_to_keywords[target].append(keyword_node_id)
+
+        if not community_to_keywords:
+            return
+
+        threshold = getattr(config, "embedding_threshold", 0.85) or 0.85
+        max_batch_size = max(1, int(getattr(config, "max_batch_size", 8) or 8))
+        max_candidates = int(getattr(config, "max_candidates", 0) or 0)
+
+        for community_id, keyword_ids in community_to_keywords.items():
+            keyword_ids = [kw for kw in keyword_ids if kw in self.graph]
+            if len(keyword_ids) <= 1:
+                continue
+
+            entries: list = []
+            for kw_id in keyword_ids:
+                node_data = self.graph.nodes.get(kw_id, {})
+                properties = node_data.get("properties", {}) if isinstance(node_data, dict) else {}
+                raw_name = properties.get("name") or properties.get("title") or kw_id
+
+                chunk_ids = set(self._collect_node_chunk_ids(kw_id))
+                source_entity_id = keyword_mapping.get(kw_id)
+                source_entity_name = None
+
+                if source_entity_id and source_entity_id in self.graph:
+                    source_entity_name = self._describe_node(source_entity_id)
+                    for chunk_id in self._collect_node_chunk_ids(source_entity_id):
+                        if chunk_id:
+                            chunk_ids.add(chunk_id)
+
+                description = raw_name
+                if source_entity_name and source_entity_name not in description:
+                    description = f"{raw_name} (from {source_entity_name})"
+
+                context_summaries = self._summarize_contexts(list(chunk_ids))
+
+                entries.append(
+                    {
+                        "node_id": kw_id,
+                        "description": description,
+                        "raw_name": raw_name,
+                        "chunk_ids": list(chunk_ids),
+                        "context_summaries": context_summaries,
+                        "source_entity_id": source_entity_id,
+                        "source_entity_name": source_entity_name,
+                    }
+                )
+
+            if len(entries) <= 1:
+                continue
+
+            for idx, entry in enumerate(entries):
+                entry["index"] = idx
+
+            community_chunk_ids = set()
+            for entry in entries:
+                for chunk_id in entry.get("chunk_ids", []):
+                    if chunk_id:
+                        community_chunk_ids.add(chunk_id)
+
+            head_context_lines = self._summarize_contexts(list(community_chunk_ids))
+            head_text = self._describe_node(community_id)
+
+            candidate_descriptions = [entry["description"] for entry in entries]
+            initial_clusters = self._cluster_candidate_tails(candidate_descriptions, threshold)
+
+            processed_indices: set = set()
+            duplicate_indices: set = set()
+
+            for cluster in initial_clusters:
+                cluster_indices = [idx for idx in cluster if 0 <= idx < len(entries)]
+                if not cluster_indices:
+                    continue
+
+                overflow_indices = []
+                if max_candidates and len(cluster_indices) > max_candidates:
+                    overflow_indices = cluster_indices[max_candidates:]
+                    cluster_indices = cluster_indices[:max_candidates]
+
+                while cluster_indices:
+                    batch_indices = cluster_indices[:max_batch_size]
+                    batch_entries = [entries[i] for i in batch_indices]
+
+                    groups = self._llm_semantic_group(head_text, "keyword_of", head_context_lines, batch_entries)
+
+                    if not groups:
+                        for idx in batch_indices:
+                            processed_indices.add(idx)
+                        cluster_indices = cluster_indices[len(batch_indices):]
+                        continue
+
+                    for group in groups:
+                        rep_local = group.get("representative")
+                        if rep_local is None or rep_local < 0 or rep_local >= len(batch_indices):
+                            continue
+
+                        rep_global = batch_indices[rep_local]
+                        if rep_global in processed_indices:
+                            continue
+
+                        duplicates: list = []
+                        for member_local in group.get("members", []):
+                            if member_local < 0 or member_local >= len(batch_indices):
+                                continue
+                            member_global = batch_indices[member_local]
+                            if member_global == rep_global or member_global in processed_indices:
+                                continue
+                            duplicates.append(entries[member_global])
+                            duplicate_indices.add(member_global)
+
+                        if duplicates:
+                            self._merge_keyword_nodes(
+                                entries[rep_global],
+                                duplicates,
+                                group.get("rationale"),
+                                keyword_mapping,
+                            )
+
+                        processed_indices.add(rep_global)
+                        for duplicate_entry in duplicates:
+                            duplicate_idx = duplicate_entry.get("index")
+                            if duplicate_idx is not None:
+                                processed_indices.add(duplicate_idx)
+
+                    cluster_indices = [idx for idx in cluster_indices if idx not in processed_indices and idx not in duplicate_indices]
+
+                for idx in overflow_indices:
+                    processed_indices.add(idx)
+
+    def _deduplicate_exact(self, edges: list) -> list:
+        unique_edges: list = []
+        index_by_key: dict = {}
+
+        for tail_id, data in edges:
+            data_copy = copy.deepcopy(data)
+
+            if isinstance(data_copy, dict):
+                chunk_ids = self._extract_edge_chunk_ids(data_copy)
+                normalized_chunks: list = []
+                seen_chunks: set = set()
+                for chunk_id in chunk_ids:
+                    if chunk_id and chunk_id not in seen_chunks:
+                        normalized_chunks.append(chunk_id)
+                        seen_chunks.add(chunk_id)
+
+                # ensure chunk provenance stored in a consistent field
+                if normalized_chunks:
+                    data_copy["source_chunks"] = normalized_chunks
+                if "source_chunk_ids" in data_copy:
+                    data_copy.pop("source_chunk_ids", None)
+
+                key_payload = copy.deepcopy(data_copy)
+                key_payload.pop("source_chunks", None)
+            else:
+                chunk_ids = []
+                key_payload = copy.deepcopy(data_copy)
+
+            try:
+                frozen = json.dumps(key_payload, ensure_ascii=False, sort_keys=True, default=str)
+            except Exception:
+                frozen = str(key_payload)
+
+            key = (tail_id, frozen)
+            if key in index_by_key:
+                _, existing_data = unique_edges[index_by_key[key]]
+                if isinstance(existing_data, dict):
+                    existing_chunks = self._extract_edge_chunk_ids(existing_data)
+                    combined = list(existing_chunks)
+                    seen_chunks = set(existing_chunks)
+                    for chunk_id in chunk_ids:
+                        if chunk_id and chunk_id not in seen_chunks:
+                            combined.append(chunk_id)
+                            seen_chunks.add(chunk_id)
+                    if combined:
+                        existing_data["source_chunks"] = combined
+                        existing_data.pop("source_chunk_ids", None)
+                continue
+
+            unique_edges.append((tail_id, data_copy))
+            index_by_key[key] = len(unique_edges) - 1
+
+        return unique_edges
+
+    def _semantic_deduplicate_group(self, head_id: str, relation: str, edges: list) -> list:
+        config = self._get_semantic_dedup_config()
+        if not config or len(edges) <= 1:
+            return edges
+
+        head_text = self._describe_node(head_id)
+        entries = []
+        for idx, (tail_id, data) in enumerate(edges):
+            chunk_ids = self._extract_edge_chunk_ids(data)
+            if not chunk_ids:
+                chunk_ids = self._collect_node_chunk_ids(tail_id)
+            entries.append(
+                {
+                    "index": idx,
+                    "node_id": tail_id,
+                    "data": copy.deepcopy(data),
+                    "raw_data": copy.deepcopy(data),
+                    "description": self._describe_node(tail_id),
+                    "context_chunk_ids": chunk_ids,
+                    "context_summaries": self._summarize_contexts(chunk_ids),
+                }
+            )
+
+        head_chunk_ids = set()
+        for entry in entries:
+            for chunk_id in entry.get("context_chunk_ids", []):
+                if chunk_id:
+                    head_chunk_ids.add(chunk_id)
+
+        if not head_chunk_ids:
+            for chunk_id in self._collect_node_chunk_ids(head_id):
+                if chunk_id:
+                    head_chunk_ids.add(chunk_id)
+
+        head_context_lines = self._summarize_contexts(list(head_chunk_ids))
+
+        threshold = getattr(config, "embedding_threshold", 0.85) or 0.85
+        candidate_descriptions = [entry["description"] for entry in entries]
+        initial_clusters = self._cluster_candidate_tails(candidate_descriptions, threshold)
+
+        max_batch_size = max(1, int(getattr(config, "max_batch_size", 8) or 8))
+        max_candidates = int(getattr(config, "max_candidates", 0) or 0)
+
+        final_edges: list = []
+        processed_indices: set = set()
+        duplicate_indices: set = set()
+
+        for cluster in initial_clusters:
+            cluster_indices = [idx for idx in cluster if idx not in processed_indices and idx not in duplicate_indices]
+            if not cluster_indices:
+                continue
+
+            overflow_indices = []
+            if max_candidates and len(cluster_indices) > max_candidates:
+                overflow_indices = cluster_indices[max_candidates:]
+                cluster_indices = cluster_indices[:max_candidates]
+                logger.debug(
+                    "Semantic dedup limited LLM candidates for head '%s' relation '%s' to %d of %d items",
+                    head_text,
+                    relation,
+                    max_candidates,
+                    len(cluster),
+                )
+
+            while cluster_indices:
+                batch_indices = cluster_indices[:max_batch_size]
+                batch_entries = [entries[i] for i in batch_indices]
+                groups = self._llm_semantic_group(head_text, relation, head_context_lines, batch_entries)
+
+                if not groups:
+                    for global_idx in batch_indices:
+                        entry = entries[global_idx]
+                        final_edges.append((entry["node_id"], copy.deepcopy(entry["data"])))
+                        processed_indices.add(global_idx)
+                    cluster_indices = cluster_indices[len(batch_indices):]
+                    continue
+
+                for group in groups:
+                    rep_local = group.get("representative")
+                    if rep_local is None or rep_local < 0 or rep_local >= len(batch_indices):
+                        continue
+
+                    rep_global = batch_indices[rep_local]
+                    if rep_global in processed_indices:
+                        continue
+
+                    duplicates = []
+                    for member_local in group.get("members", []):
+                        if member_local < 0 or member_local >= len(batch_indices):
+                            continue
+                        member_global = batch_indices[member_local]
+                        if member_global == rep_global or member_global in processed_indices:
+                            continue
+                        duplicates.append(entries[member_global])
+                        duplicate_indices.add(member_global)
+
+                    merged_data = self._merge_duplicate_metadata(
+                        entries[rep_global],
+                        duplicates,
+                        group.get("rationale"),
+                    )
+
+                    final_edges.append((entries[rep_global]["node_id"], merged_data))
+                    processed_indices.add(rep_global)
+
+                cluster_indices = [idx for idx in cluster_indices if idx not in processed_indices and idx not in duplicate_indices]
+
+            for global_idx in overflow_indices:
+                if global_idx in processed_indices:
+                    continue
+                entry = entries[global_idx]
+                final_edges.append((entry["node_id"], copy.deepcopy(entry["data"])))
+                processed_indices.add(global_idx)
+
+        for entry in entries:
+            idx = entry["index"]
+            if idx in processed_indices or idx in duplicate_indices:
+                continue
+            final_edges.append((entry["node_id"], copy.deepcopy(entry["data"])))
+            processed_indices.add(idx)
+
+        return final_edges
 
     def triple_deduplicate(self):
         """deduplicate triples in lv1 and lv2"""
@@ -548,6 +1383,31 @@ class KTBuilder:
                 seen_triples.add((u, v, relation))
                 new_graph.add_edge(u, v, **data)
         self.graph = new_graph
+
+    def triple_deduplicate_semantic(self):
+        """deduplicate triples in lv1 and lv2"""
+        new_graph = nx.MultiDiGraph()
+
+        for node, node_data in self.graph.nodes(data=True):
+            new_graph.add_node(node, **node_data)
+
+        grouped_edges: dict = defaultdict(list)
+        for u, v, key, data in self.graph.edges(keys=True, data=True):
+            relation = data.get('relation')
+            grouped_edges[(u, relation)].append((v, copy.deepcopy(data)))
+
+        for (head, relation), edges in grouped_edges.items():
+            exact_unique = self._deduplicate_exact(edges)
+            if self._semantic_dedup_enabled() and len(exact_unique) > 1:
+                deduped_edges = self._semantic_deduplicate_group(head, relation, exact_unique)
+            else:
+                deduped_edges = exact_unique
+
+            for tail_id, edge_data in deduped_edges:
+                new_graph.add_edge(head, tail_id, **edge_data)
+
+        self.graph = new_graph
+
 
     def format_output(self) -> List[Dict[str, Any]]:
         """convert graph to specified output format"""
