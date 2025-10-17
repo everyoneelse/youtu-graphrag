@@ -28,6 +28,18 @@ class TriggersConfig:
     mode: str = "agent"  # "agent" or "noagent"
 
 @dataclass
+class SemanticDedupConfig:
+    """Semantic deduplication configuration"""
+    enabled: bool = False
+    embedding_threshold: float = 0.85
+    max_batch_size: int = 8
+    max_candidates: int = 50
+    use_embeddings: bool = True
+    embedding_model: str = ""
+    prompt_type: str = "general"
+
+
+@dataclass
 class ConstructionConfig:
     """Construction configuration"""
     mode: str = "agent"
@@ -35,11 +47,13 @@ class ConstructionConfig:
     datasets_no_chunk: list = None
     chunk_size: int = 1000
     overlap: int = 200
+    semantic_dedup: SemanticDedupConfig = None
     
     def __post_init__(self):
         if self.datasets_no_chunk is None:
             self.datasets_no_chunk = ["hotpot", "2wiki", "musique", "graphrag-bench", "anony_chs", "anony_eng"]
-
+        if self.semantic_dedup is None:
+            self.semantic_dedup = SemanticDedupConfig()
 @dataclass
 class TreeCommConfig:
     """Tree-Comm algorithm configuration"""
@@ -184,7 +198,9 @@ class ConfigManager:
         
         construction_data = self.config_data.get("construction", {})
         tree_comm_data = construction_data.pop("tree_comm", {})
+        semantic_dedup_data = construction_data.pop("semantic_dedup", {})
         self.construction = ConstructionConfig(**construction_data)
+        self.construction.semantic_dedup = SemanticDedupConfig(**semantic_dedup_data)
         self.tree_comm = TreeCommConfig(**tree_comm_data)
         
         retrieval_data = self.config_data.get("retrieval", {})
