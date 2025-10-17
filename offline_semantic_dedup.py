@@ -40,9 +40,17 @@ class OfflineSemanticDeduper(KTBuilder):
 
         self.config = config
         self.graph = nx.MultiDiGraph()
-        self.llm_client = call_llm_api.LLMCompletionCall()
+        # Lazy initialize llm_client only when semantic dedup is enabled
+        self._llm_client = None
         self.all_chunks: Dict[str, str] = {}
         self._semantic_dedup_embedder = None
+    
+    @property
+    def llm_client(self):
+        """Lazy initialization of LLM client."""
+        if self._llm_client is None:
+            self._llm_client = call_llm_api.LLMCompletionCall()
+        return self._llm_client
 
     # Expose protected helpers for external script usage while keeping the
     # original implementations in ``KTBuilder`` intact.
