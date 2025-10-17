@@ -16,6 +16,7 @@ from .config_loader import (
     OutputConfig,
     PerformanceConfig,
     EvaluationConfig,
+    SemanticDedupConfig,
 )
 
 __all__ = [
@@ -32,4 +33,5 @@ __all__ = [
     "OutputConfig",
     "PerformanceConfig",
     "EvaluationConfig",
+    "SemanticDedupConfig",
 ]
