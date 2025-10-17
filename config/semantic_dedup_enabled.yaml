@@ -1,0 +1,109 @@
+# 启用语义去重的示例配置文件
+# 使用方法：
+# python offline_semantic_dedup.py --config config/semantic_dedup_enabled.yaml ...
+
+construction:
+  chunk_size: 1000
+  datasets_no_chunk:
+  - hotpot
+  - 2wiki
+  - musique
+  - graphrag-bench
+  - annoy_chs
+  - annoy_eng
+  - demo
+  max_workers: 32
+  mode: agent
+  overlap: 200
+  tree_comm:
+    embedding_model: all-MiniLM-L6-v2
+    enable_fast_mode: true
+    struct_weight: 0.3
+  
+  # ============ 语义去重配置 ============
+  semantic_dedup:
+    # 启用语义去重
+    enabled: true
+    
+    # Embedding 相似度阈值（0-1）
+    # 用于初步聚类，相似度高于此阈值的候选会被分到同一组
+    # 建议：0.75-0.90
+    # - 阈值越高，越保守（调用 LLM 次数越多）
+    # - 阈值越低，越激进（可能漏掉一些相似项）
+    embedding_threshold: 0.85
+    
+    # 每批发送给 LLM 的最大候选数
+    # 建议：5-10
+    # - 太小：LLM 无法看到足够的上下文进行对比
+    # - 太大：prompt 过长，成本高且可能出错
+    max_batch_size: 8
+    
+    # 每个 (head, relation) 分组最多处理的候选数
+    # 建议：50-100
+    # - 用于避免处理超大分组（如有上百个候选）
+    # - 超出限制的候选会被跳过
+    max_candidates: 50
+    
+    # 是否使用 embedding 进行预筛选
+    # 建议：true
+    # - 开启可大幅降低 LLM 调用次数（10 个候选从 45 次降到 2-3 次）
+    # - 关闭则所有候选都会发给 LLM 判断（成本高）
+    use_embeddings: true
+    
+    # Prompt 类型
+    # 可选：general, novel
+    # - general: 通用场景
+    # - novel: 小说/故事场景
+    prompt_type: general
+
+# 其他配置保持默认...
+datasets:
+  demo:
+    corpus_path: data/demo/demo_corpus.json
+    qa_path: data/demo/demo.json
+    schema_path: schemas/demo.json
+    graph_output: output/graphs/demo_new.json
+
+embeddings:
+  batch_size: 32
+  device: cpu
+  max_length: 512
+  model_name: all-MiniLM-L6-v2
+
+output:
+  base_dir: output
+  chunks_dir: output/chunks
+  graphs_dir: output/graphs
+  logs_dir: output/logs
+  save_chunk_details: true
+  save_intermediate_results: true
+
+performance:
+  batch_size: 16
+  max_workers: 32
+  memory_optimization: true
+  parallel_processing: true
+
+retrieval:
+  agent:
+    enable_ircot: true
+    enable_parallel_subquestions: true
+    max_steps: 5
+  cache_dir: retriever/faiss_cache_new
+  enable_caching: true
+  enable_high_recall: true
+  enable_query_enhancement: true
+  enable_reranking: true
+  faiss:
+    device: cpu
+    max_workers: 4
+    search_k: 50
+  recall_paths: 2
+  similarity_threshold: 0.3
+  top_k: 20
+  top_k_filter: 20
+
+triggers:
+  constructor_trigger: true
+  mode: agent
+  retrieve_trigger: true
