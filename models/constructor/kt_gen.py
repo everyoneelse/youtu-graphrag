@@ -1509,6 +1509,51 @@ class KTBuilder:
 
         max_batch_size = max(1, int(getattr(config, "max_batch_size", 8) or 8))
         max_candidates = int(getattr(config, "max_candidates", 0) or 0)
+        
+        # Initialize intermediate results collector for edge deduplication
+        save_intermediate = getattr(config, "save_intermediate_results", False)
+        edge_dedup_result = {
+            "head_id": head_id,
+            "head_name": head_text,
+            "relation": relation,
+            "total_edges": len(edges),
+            "candidates": [],
+            "clustering": {
+                "method": "average_linkage",
+                "threshold": threshold,
+                "clusters": []
+            },
+            "llm_groups": [],
+            "final_merges": []
+        } if save_intermediate else None
+        
+        # Save candidates info
+        if save_intermediate:
+            edge_dedup_result["head_contexts"] = head_context_lines
+            for entry in entries:
+                edge_dedup_result["candidates"].append({
+                    "index": entry["index"],
+                    "node_id": entry["node_id"],
+                    "description": entry["description"]
+                })
+
+        # Save clustering results
+        if save_intermediate:
+            for cluster_idx, cluster in enumerate(initial_clusters):
+                cluster_info = {
+                    "cluster_id": cluster_idx,
+                    "size": len(cluster),
+                    "member_indices": cluster,
+                    "members": [
+                        {
+                            "index": idx,
+                            "node_id": entries[idx]["node_id"],
+                            "description": entries[idx]["description"]
+                        }
+                        for idx in cluster if 0 <= idx < len(entries)
+                    ]
+                }
+                edge_dedup_result["clustering"]["clusters"].append(cluster_info)
 
         final_edges: list = []
         processed_indices: set = set()
@@ -1517,6 +1562,15 @@ class KTBuilder:
         for cluster in initial_clusters:
             cluster_indices = [idx for idx in cluster if idx not in processed_indices and idx not in duplicate_indices]
             if not cluster_indices:
+                continue
+
+            # Optimization: Skip LLM call for single-item clusters
+            # No semantic grouping needed when there's only one edge
+            if len(cluster_indices) == 1:
+                idx = cluster_indices[0]
+                entry = entries[idx]
+                final_edges.append((entry["node_id"], copy.deepcopy(entry["data"])))
+                processed_indices.add(idx)
                 continue
 
             overflow_indices = []
@@ -1535,6 +1589,33 @@ class KTBuilder:
                 batch_indices = cluster_indices[:max_batch_size]
                 batch_entries = [entries[i] for i in batch_indices]
                 groups = self._llm_semantic_group(head_text, relation, head_context_lines, batch_entries)
+
+                # Save LLM groups result
+                if save_intermediate:
+                    llm_result = {
+                        "cluster_id": initial_clusters.index([idx for idx in cluster if idx not in processed_indices and idx not in duplicate_indices][:len(cluster_indices)]) if cluster_indices else -1,
+                        "batch_indices": batch_indices,
+                        "batch_size": len(batch_indices),
+                        "groups": []
+                    }
+                    if groups:
+                        for group in groups:
+                            group_info = {
+                                "members": group.get("members", []),
+                                "representative": group.get("representative"),
+                                "rationale": group.get("rationale"),
+                                "member_details": [
+                                    {
+                                        "local_idx": m,
+                                        "global_idx": batch_indices[m] if 0 <= m < len(batch_indices) else None,
+                                        "description": entries[batch_indices[m]]["description"] if 0 <= m < len(batch_indices) else None
+                                    }
+                                    for m in group.get("members", [])
+                                    if 0 <= m < len(batch_indices)
+                                ]
+                            }
+                            llm_result["groups"].append(group_info)
+                    edge_dedup_result["llm_groups"].append(llm_result)
 
                 if not groups:
                     for global_idx in batch_indices:
@@ -1563,6 +1644,26 @@ class KTBuilder:
                         duplicates.append(entries[member_global])
                         duplicate_indices.add(member_global)
 
+                    # Save merge operation
+                    if save_intermediate and duplicates:
+                        merge_info = {
+                            "representative": {
+                                "index": rep_global,
+                                "node_id": entries[rep_global]["node_id"],
+                                "description": entries[rep_global]["description"]
+                            },
+                            "duplicates": [
+                                {
+                                    "index": d.get("index"),
+                                    "node_id": d["node_id"],
+                                    "description": d["description"]
+                                }
+                                for d in duplicates
+                            ],
+                            "rationale": group.get("rationale")
+                        }
+                        edge_dedup_result["final_merges"].append(merge_info)
+
                     merged_data = self._merge_duplicate_metadata(
                         entries[rep_global],
                         duplicates,
@@ -1588,6 +1689,24 @@ class KTBuilder:
             final_edges.append((entry["node_id"], copy.deepcopy(entry["data"])))
             processed_indices.add(idx)
 
+        # Save edge dedup result with summary
+        if save_intermediate:
+            edge_dedup_result["summary"] = {
+                "total_edges": len(edges),
+                "total_clusters": len(initial_clusters),
+                "single_item_clusters": sum(1 for c in initial_clusters if len(c) == 1),
+                "multi_item_clusters": sum(1 for c in initial_clusters if len(c) > 1),
+                "total_llm_calls": len(edge_dedup_result["llm_groups"]),
+                "total_merges": len(edge_dedup_result["final_merges"]),
+                "edges_merged": sum(len(m["duplicates"]) for m in edge_dedup_result["final_merges"]),
+                "final_edges": len(final_edges)
+            }
+            
+            # Accumulate to class-level collector
+            if not hasattr(self, '_edge_dedup_results'):
+                self._edge_dedup_results = []
+            self._edge_dedup_results.append(edge_dedup_result)
+
         return final_edges
 
     def triple_deduplicate(self):
@@ -1607,6 +1726,13 @@ class KTBuilder:
 
     def triple_deduplicate_semantic(self):
         """deduplicate triples in lv1 and lv2"""
+        
+        # Initialize edge dedup results collector
+        config = self._get_semantic_dedup_config()
+        save_intermediate = config and getattr(config, "save_intermediate_results", False)
+        if save_intermediate:
+            self._edge_dedup_results = []
+        
         new_graph = nx.MultiDiGraph()
 
         for node, node_data in self.graph.nodes(data=True):
@@ -1628,6 +1754,60 @@ class KTBuilder:
                 new_graph.add_edge(head, tail_id, **edge_data)
 
         self.graph = new_graph
+        
+        # Save edge deduplication intermediate results
+        if save_intermediate and hasattr(self, '_edge_dedup_results') and self._edge_dedup_results:
+            import datetime
+            timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+            output_path = getattr(config, "intermediate_results_path", None)
+            
+            if not output_path:
+                output_path = f"output/dedup_intermediate/{self.dataset_name}_edge_dedup_{timestamp}.json"
+            else:
+                # If path is a directory, add filename
+                if output_path.endswith('/'):
+                    output_path = f"{output_path}{self.dataset_name}_edge_dedup_{timestamp}.json"
+                else:
+                    # Add _edge suffix to distinguish from keyword dedup
+                    base, ext = os.path.splitext(output_path)
+                    output_path = f"{base}_edge_{timestamp}{ext}"
+            
+            # Ensure directory exists
+            output_dir = os.path.dirname(output_path)
+            if output_dir:
+                os.makedirs(output_dir, exist_ok=True)
+            
+            # Build complete results structure
+            edge_intermediate_results = {
+                "dataset": self.dataset_name,
+                "dedup_type": "edge_deduplication",
+                "config": {
+                    "threshold": getattr(config, "embedding_threshold", 0.85) or 0.85,
+                    "max_batch_size": max(1, int(getattr(config, "max_batch_size", 8) or 8)),
+                    "max_candidates": int(getattr(config, "max_candidates", 0) or 0),
+                },
+                "triples": self._edge_dedup_results,
+                "summary": {
+                    "total_triples": len(self._edge_dedup_results),
+                    "total_edges": sum(r["total_edges"] for r in self._edge_dedup_results),
+                    "total_clusters": sum(len(r["clustering"]["clusters"]) for r in self._edge_dedup_results),
+                    "total_llm_calls": sum(len(r["llm_groups"]) for r in self._edge_dedup_results),
+                    "total_merges": sum(len(r["final_merges"]) for r in self._edge_dedup_results),
+                    "total_edges_merged": sum(r["summary"]["edges_merged"] for r in self._edge_dedup_results),
+                    "final_total_edges": sum(r["summary"]["final_edges"] for r in self._edge_dedup_results)
+                }
+            }
+            
+            try:
+                with open(output_path, 'w', encoding='utf-8') as f:
+                    json.dump(edge_intermediate_results, f, indent=2, ensure_ascii=False)
+                logger.info(f"Saved edge deduplication intermediate results to: {output_path}")
+                logger.info(f"Summary: {edge_intermediate_results['summary']}")
+            except Exception as e:
+                logger.warning(f"Failed to save edge deduplication intermediate results: {e}")
+            
+            # Clean up
+            del self._edge_dedup_results
 
 
     def format_output(self) -> List[Dict[str, Any]]:
