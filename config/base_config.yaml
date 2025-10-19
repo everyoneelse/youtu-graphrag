@@ -224,22 +224,12 @@ prompts:
         • Complementary: A describes aspect X, B describes aspect Y → Both are valuable, KEEP SEPARATE
         • Redundant: A and B both describe aspect X in the same way → MERGE
         
-        ⚠️ CRITICAL: Pay attention to SPECIFIC DETAILS, not just high-level similarity
-        Even if two tails describe the same general phenomenon, keep them separate if they provide different specific details:
-        • Different locations: "at interface" vs "across region" → DIFFERENT information
-        • Different geometric properties: "straight lines" vs "curved patterns" → DIFFERENT shapes
-        • Different characteristics: "alternating contrast" vs "uniform intensity" → DIFFERENT features
-        • Different dimensions: "in phase-encoding direction" vs "in frequency direction" → DIFFERENT orientations
+        ⚠️ CRITICAL: Focus on SPECIFIC DETAILS, not just high-level semantic similarity
+        Even if two tails are semantically related or describe similar concepts, keep them separate if they contain ANY different specific details.
       
       3. INFORMATION CONTENT TEST: Do the two tails provide the same information?
         • Different information (even if related) → KEEP SEPARATE
         • Same information, different wording → MERGE
-        
-        Examples:
-        • "Capital: Paris" vs "Population: 2M" → Different information, KEEP SEPARATE
-        • "Capital: Paris" vs "Capital city: Paris" → Same information, MERGE
-        • "Pattern: stripes at boundary" vs "Pattern: stripes across region" → Different locations, KEEP SEPARATE
-        • "Pattern: vertical stripes" vs "Pattern: striped pattern oriented vertically" → Same information, MERGE
       
       PROHIBITED MERGE REASONS (these are NOT valid reasons to merge):
       ✗ Shared relation: "Both satisfy R with H" → NOT sufficient for coreference
