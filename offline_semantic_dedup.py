@@ -40,15 +40,27 @@ class OfflineSemanticDeduper(KTBuilder):
 
         self.config = config
         self.graph = nx.MultiDiGraph()
-        self.llm_client = call_llm_api.LLMCompletionCall()
+        # Lazy initialize llm_client only when semantic dedup is enabled
+        self._llm_client = None
         self.all_chunks: Dict[str, str] = {}
         self._semantic_dedup_embedder = None
+    
+    @property
+    def llm_client(self):
+        """Lazy initialization of LLM client."""
+        if self._llm_client is None:
+            self._llm_client = call_llm_api.LLMCompletionCall()
+        return self._llm_client
 
     # Expose protected helpers for external script usage while keeping the
     # original implementations in ``KTBuilder`` intact.
     triple_deduplicate = KTBuilder.triple_deduplicate
+    triple_deduplicate_semantic = KTBuilder.triple_deduplicate_semantic
+    _triple_deduplicate_exact = KTBuilder._triple_deduplicate_exact
     _deduplicate_keyword_nodes = KTBuilder._deduplicate_keyword_nodes
     _semantic_dedup_enabled = KTBuilder._semantic_dedup_enabled
+    _get_semantic_dedup_config = KTBuilder._get_semantic_dedup_config
+    _get_semantic_dedup_embedder = KTBuilder._get_semantic_dedup_embedder
 
 
 def _load_chunk_mapping(path: Path) -> Dict[str, str]:
@@ -179,14 +191,24 @@ def main() -> None:
     original_keyword_count = sum(1 for _, data in deduper.graph.nodes(data=True) if data.get("label") == "keyword")
 
     if not deduper._semantic_dedup_enabled():
-        logger.warning("Semantic deduplication is disabled in the configuration. No changes will be made.")
+        logger.warning("Semantic deduplication is disabled in the configuration.")
+        logger.info("Use --force-enable to enable semantic dedup, or enable it in config.")
+        logger.info("Falling back to exact deduplication only.")
+        deduper._triple_deduplicate_exact()
     else:
+        logger.info("Semantic deduplication is enabled")
+        config = deduper._get_semantic_dedup_config()
+        logger.info(f"Config: threshold={getattr(config, 'embedding_threshold', 0.85)}, "
+                    f"max_batch_size={getattr(config, 'max_batch_size', 8)}, "
+                    f"use_embeddings={getattr(config, 'use_embeddings', True)}")
+        
         logger.info("Running triple semantic deduplication")
         deduper.triple_deduplicate()
 
         logger.info("Running keyword semantic deduplication")
         keyword_mapping = _build_keyword_mapping(deduper.graph)
         if keyword_mapping:
+            logger.info(f"Found {len(keyword_mapping)} keyword nodes to deduplicate")
             deduper._deduplicate_keyword_nodes(keyword_mapping)
         else:
             logger.info("No keyword mapping detected; skipping keyword deduplication")

@@ -1370,7 +1370,20 @@ class KTBuilder:
         return final_edges
 
     def triple_deduplicate(self):
-        """deduplicate triples in lv1 and lv2"""
+        """Deduplicate triples in lv1 and lv2.
+        
+        If semantic deduplication is enabled in config, uses semantic dedup.
+        Otherwise, falls back to exact deduplication.
+        """
+        if self._semantic_dedup_enabled():
+            logger.info("Using semantic deduplication for triples")
+            self.triple_deduplicate_semantic()
+        else:
+            logger.info("Using exact deduplication for triples")
+            self._triple_deduplicate_exact()
+    
+    def _triple_deduplicate_exact(self):
+        """Exact deduplication for triples (internal method)"""
         new_graph = nx.MultiDiGraph()
 
         for node, node_data in self.graph.nodes(data=True):
