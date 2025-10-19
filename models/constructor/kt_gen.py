@@ -39,6 +39,34 @@ DEFAULT_SEMANTIC_DEDUP_PROMPT = (
     "}}\n"
 )
 
+DEFAULT_ATTRIBUTE_DEDUP_PROMPT = (
+    "You are a knowledge graph curation assistant. All listed triples share the same head entity and relation.\n"
+    "Your task is to identify and merge ONLY duplicate or redundant attribute values.\n\n"
+    "Head entity: {head}\n"
+    "Relation: {relation}\n\n"
+    "Head contexts:\n{head_context}\n\n"
+    "Candidate attribute values:\n"
+    "{candidates}\n\n"
+    "CRITICAL INSTRUCTIONS for attribute deduplication:\n"
+    "1. ONLY merge if attribute values are truly identical or redundant:\n"
+    "   - Same attribute expressed differently (e.g., 'height: 10cm' and 'height: 10 centimeters')\n"
+    "   - Complete redundancy (e.g., 'color is red' and 'red')\n\n"
+    "2. NEVER merge if:\n"
+    "   - Attributes describe different properties (even if related to the same entity)\n"
+    "   - Attributes have different values or measurements\n"
+    "   - Attributes describe different aspects or characteristics\n"
+    "   - Attributes come from the same context but convey different information\n\n"
+    "3. Choose the most complete and informative description as the representative.\n"
+    "4. Every input index must appear in exactly one group.\n"
+    "5. When in doubt, keep them separate - it's better to have duplicate attributes than to lose information.\n\n"
+    "Respond with strict JSON using this schema:\n"
+    "{{\n"
+    "  \"groups\": [\n"
+    "    {{\"members\": [1, 3], \"representative\": 3, \"rationale\": \"Why these attribute values are truly identical.\"}}\n"
+    "  ]\n"
+    "}}\n"
+)
+
 class KTBuilder:
     def __init__(self, dataset_name, schema_path=None, mode=None, config=None):
         if config is None:
@@ -801,7 +829,18 @@ class KTBuilder:
         relation_text = relation or "[UNKNOWN]"
         head_context_text = "\n".join(head_context_lines) if head_context_lines else "- (no context available)"
 
-        prompt_type = getattr(self._get_semantic_dedup_config(), "prompt_type", "general")
+        # Auto-detect prompt type based on relation
+        config = self._get_semantic_dedup_config()
+        prompt_type = getattr(config, "prompt_type", "general")
+        
+        # Use 'attribute' prompt for attribute-related relations
+        if prompt_type == "general":
+            attribute_relations = {"has_attribute", "attribute", "property", "has_property", "characteristic"}
+            relation_lower = relation.lower() if relation else ""
+            if relation_lower in attribute_relations or "attribute" in relation_lower:
+                prompt_type = "attribute"
+                logger.debug(f"Auto-selected 'attribute' prompt type for relation: {relation}")
+        
         prompt_kwargs = {
             "head": head_text or "[UNKNOWN_HEAD]",
             "relation": relation_text,
@@ -812,7 +851,11 @@ class KTBuilder:
         try:
             return self.config.get_prompt_formatted("semantic_dedup", prompt_type, **prompt_kwargs)
         except Exception:
-            return DEFAULT_SEMANTIC_DEDUP_PROMPT.format(**prompt_kwargs)
+            # Fallback to appropriate default prompt based on type
+            if prompt_type == "attribute":
+                return DEFAULT_ATTRIBUTE_DEDUP_PROMPT.format(**prompt_kwargs)
+            else:
+                return DEFAULT_SEMANTIC_DEDUP_PROMPT.format(**prompt_kwargs)
 
     def _llm_semantic_group(
         self,

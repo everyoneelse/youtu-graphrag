@@ -215,6 +215,55 @@ prompts:
           }}
         ]
       }}
+    
+    attribute: |-
+      You are a knowledge graph curation assistant. All listed triples share the same head entity and relation.
+      Your task is to identify and merge ONLY duplicate or redundant attribute values.
+
+      Head entity: {head}
+      Relation: {relation}
+
+      Head contexts:
+      {head_context}
+
+      Candidate attribute values:
+      {candidates}
+
+      CRITICAL INSTRUCTIONS for attribute deduplication:
+      1. **ONLY merge if attribute values are truly identical or redundant**:
+         - Same attribute expressed differently (e.g., "高度: 10cm" and "height: 10 centimeters")
+         - Complete redundancy (e.g., "颜色是红色" and "红色")
+      
+      2. **NEVER merge if**:
+         - Attributes describe different properties (even if related to the same entity)
+         - Attributes have different values or measurements
+         - Attributes describe different aspects or characteristics
+         - Attributes come from the same context but convey different information
+      
+      3. **Example - DO NOT MERGE**:
+         - [1] "角度依赖性、组织依赖性、TE依赖性" (three characteristics)
+         - [2] "T2弛豫时间最多可延长两倍以上" (specific measurement)
+         → These are DIFFERENT attributes, keep separate!
+      
+      4. **Example - SHOULD MERGE**:
+         - [1] "颜色: 红色"
+         - [2] "color: red"
+         → Same attribute, same value, can merge
+      
+      5. Choose the most complete and informative description as the representative.
+      6. Every input index must appear in exactly one group.
+      7. **When in doubt, keep them separate** - it's better to have duplicate attributes than to lose information.
+
+      Respond with strict JSON using this schema:
+      {{
+        "groups": [
+          {{
+            "members": [1, 3],
+            "representative": 3,
+            "rationale": "Why these attribute values are truly identical or redundant."
+          }}
+        ]
+      }}
 
       
   decomposition:
