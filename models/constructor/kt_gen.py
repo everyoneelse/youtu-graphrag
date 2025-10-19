@@ -986,16 +986,30 @@ class KTBuilder:
         if is_unchanged:
             logger.info("未做更改")
         else:
-            # Group outputs by cluster
-            for cluster_idx, group in enumerate(groups, start=1):
-                members = group.get("members", [])
-                if len(members) > 1:  # Only show clusters with multiple members
-                    logger.info(f"cluster{cluster_idx}:")
+            # Show all groups to make deduplication clear
+            multi_member_clusters = [g for g in groups if len(g.get("members", [])) > 1]
+            single_member_clusters = [g for g in groups if len(g.get("members", [])) == 1]
+            
+            # First show merged clusters
+            if multi_member_clusters:
+                logger.info("已合并的cluster:")
+                for cluster_idx, group in enumerate(multi_member_clusters, start=1):
+                    members = group.get("members", [])
+                    logger.info(f"  cluster{cluster_idx}:")
                     for member_idx in members:
                         if 0 <= member_idx < len(batch_entries):
                             description = batch_entries[member_idx].get("description") or "[NO DESCRIPTION]"
-                            logger.info(f"{description},")
-                    logger.info("")
+                            logger.info(f"    {description},")
+                logger.info("")
+            
+            # Then show unmerged items
+            if single_member_clusters:
+                logger.info("未合并（保持独立）:")
+                for group in single_member_clusters:
+                    members = group.get("members", [])
+                    if members and 0 <= members[0] < len(batch_entries):
+                        description = batch_entries[members[0]].get("description") or "[NO DESCRIPTION]"
+                        logger.info(f"  - {description}")
         
         logger.info("=" * 80)
 
