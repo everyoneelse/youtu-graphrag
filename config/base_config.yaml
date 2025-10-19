@@ -215,91 +215,68 @@ prompts:
         • Same entity, different names → MERGE (e.g., 'NYC' = 'New York City')
         • Different entities → KEEP SEPARATE (even if highly related)
       
-      2. SUBSTITUTION TEST: Can you replace one tail with the other in ALL contexts without changing truth value?
-        • If substitution changes meaning/information → KEEP SEPARATE
-        • If substitution preserves meaning → MERGE
+      2. SUBSTITUTION TEST (CRITICAL): Can you replace one tail with the other in ALL contexts without losing or changing information?
+        • If substitution LOSES information → KEEP SEPARATE (they are complementary, not redundant)
+        • If substitution CHANGES information → KEEP SEPARATE (they convey different facts)
+        • If substitution PRESERVES all information → MERGE (they are truly equivalent)
+        
+        Key insight: COMPLEMENTARY ≠ REDUNDANT
+        • Complementary: A describes aspect X, B describes aspect Y → Both are valuable, KEEP SEPARATE
+        • Redundant: A and B both describe aspect X in the same way → MERGE
       
-      3. EQUIVALENCE CLASS: After merging, all members must denote the SAME single entity.
-        • Do NOT create groups containing multiple distinct entities
-        • Each group = one entity with different linguistic expressions
+      3. INFORMATION CONTENT TEST: Do the two tails provide the same information?
+        • Different information (even if related) → KEEP SEPARATE
+        • Same information, different wording → MERGE
+        
+        Examples across domains:
+        • "Capital: Paris" vs "Population: 2M" → Different information, KEEP SEPARATE
+        • "Capital: Paris" vs "Capital city: Paris" → Same information, MERGE
+        • "定义：原因是X" vs "定义：表现为Y" → Different aspects, KEEP SEPARATE
+        • "定义：原因是X" vs "定义：因为X" → Same aspect, MERGE
       
       PROHIBITED MERGE REASONS (these are NOT valid reasons to merge):
       ✗ Shared relation: "Both satisfy R with H" → NOT sufficient for coreference
       ✗ Semantic similarity: "X and Y are similar/related" → similarity ≠ identity
       ✗ Same category: "Both are type T" → category membership ≠ entity identity
+      ✗ Describing same concept: "X and Y both describe C" → complementary descriptions ≠ same description
       ✗ Co-occurrence: "X and Y appear together" → contextual proximity ≠ coreference
       ✗ Functional relationship: "X causes/affects/contains Y" → relationship ≠ identity
-      ✗ Shared properties: "X and Y have property P" → property sharing ≠ entity identity
-      ✗ Part of same set: "X, Y ∈ Set_S" → set membership ≠ element identity
-      
-      SPECIAL CASE - Multi-Dimensional Definitions:
-      When tails are "definitions" or "descriptions" of the same concept:
-      ⚠️  Definitions from DIFFERENT DIMENSIONS are NOT coreferent, even if describing the same concept.
-      
-      Common definition dimensions that should STAY SEPARATE:
-      • Cause/Origin (原因): "由于X导致" vs "因Y产生" → Different causal mechanisms
-      • Manifestation (表现): "表现为A" vs "呈现为B" → Different observable features
-      • Mechanism (机制): "通过M实现" vs "基于N过程" → Different underlying processes
-      • Location (位置): "出现在L1" vs "位于L2" → Different spatial characteristics
-      • Technical level: "技术描述" vs "通俗描述" → Different abstraction levels
-      
-      Example - DO NOT MERGE (multi-dimensional definitions):
-      - [1] "定义: 由于k空间数据截断导致的伪影" (emphasizes CAUSE)
-      - [2] "定义: 表现为周期性条纹状信号" (emphasizes MANIFESTATION)
-      - [3] "定义: 在图像边界出现的伪影" (emphasizes LOCATION)
-      → These provide COMPLEMENTARY information, not redundant expressions. Keep separate!
-      
-      Example - SHOULD MERGE (same definition, different expressions):
-      - [1] "定义: 由于采样不足导致的伪影"
-      - [2] "定义: 因数据采样不足而产生的伪影"
-      → Same dimension (cause), same information, just rephrased. Can merge.
       
       MULTI-VALUED RELATIONS:
       Many relations map one head to MULTIPLE distinct tail entities. Each tail is a separate instance.
       Pattern: If H has relation R to {{T1, T2, ..., Tn}}, each Ti is typically a DIFFERENT entity.
-      Only merge Ti and Tj if they are different names for the SAME entity, not just because both satisfy R.
+      Only merge Ti and Tj if they express the SAME information, not just because both satisfy R.
       
       DECISION PROCEDURE:
       For each pair of tails (Ti, Tj):
-        1. Ask: "Do Ti and Tj refer to the same entity?" (not "Are they related?")
-        2. For definitions: "Do they describe the SAME DIMENSION with SAME INFORMATION?"
-        3. Apply SUBSTITUTION TEST: Would swapping them change or lose information?
+        1. REFERENT TEST: Do they refer to the same entity? (not just related entities)
+        2. SUBSTITUTION TEST: If I replace Ti with Tj everywhere, will I lose information?
+           → If YES (lose info) → KEEP SEPARATE
+           → If NO (no loss) → Proceed to step 3
+        3. INFORMATION TEST: Do they convey the same facts/properties/aspects?
+           → If NO (different aspects) → KEEP SEPARATE
+           → If YES (same aspect, just rephrased) → MERGE
         4. If uncertain → KEEP SEPARATE (conservative principle)
       
       CONSERVATIVE PRINCIPLE:
-      False splits (keeping coreferent entities separate) < False merges (merging distinct entities)
-      When in doubt, preserve distinctions. Complementary information is valuable, not redundant.
+      Preserving valuable information > Eliminating redundancy
+      False splits (keeping equivalent expressions separate) cause minor inefficiency
+      False merges (combining distinct information) cause information loss
+      When in doubt, preserve distinctions.
 
       OUTPUT FORMAT:
-        - Each group represents tails that refer to the SAME entity/concept with IDENTICAL information
-        - If tails provide complementary information (different dimensions), create SEPARATE groups
-        - Every input index (1, 2, 3...) must appear in exactly one group
-
-      Please provide a rationale in Chinese for each group.
+        - Each group represents tails that express IDENTICAL information
+        - If tails provide complementary/different information, create SEPARATE groups
+        - Every input index must appear in exactly one group
+        - Provide clear rationale in Chinese explaining your decision
 
       Respond with strict JSON using this schema:
-      EXAMPLE1 (merge coreferent entities):
       {{
         "groups": [
           {{
             "members": [1, 3],
             "representative": 3,
-            "rationale": "两个尾实体指代同一实体，只是表述不同。"
-          }}
-        ]
-      }}
-      EXAMPLE2 (keep complementary information separate):
-      {{
-        "groups": [
-          {{
-            "members": [1],
-            "representative": 1,
-            "rationale": "此定义强调原因层面的信息。"
-          }},
-          {{
-            "members": [2],
-            "representative": 2,
-            "rationale": "此定义强调表现层面的信息，与其他定义提供互补信息。"
+            "rationale": "说明为什么这些尾实体表达相同的信息（而不仅仅是相关或相似）"
           }}
         ]
       }}
