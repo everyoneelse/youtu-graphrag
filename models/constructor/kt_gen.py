@@ -515,6 +515,9 @@ class KTBuilder:
             # self._connect_keywords_to_communities()
         end_comm = time.time()
         logger.info(f"Community Indexing Time: {end_comm - start_comm}s")
+        
+        # Deduplicate keywords if enabled
+        self.keyword_deduplicate()
     
     def _connect_keywords_to_communities(self):
         """Connect relevant keywords to communities"""
@@ -1753,7 +1756,16 @@ class KTBuilder:
         return final_edges
 
     def triple_deduplicate(self):
-        """deduplicate triples in lv1 and lv2"""
+        """
+        Deduplicate triples in lv1 and lv2.
+        
+        Performs both:
+        1. Exact deduplication (removes identical triples)
+        2. Semantic deduplication (if enabled in config)
+        """
+        logger.info("Starting triple deduplication...")
+        
+        # Step 1: Exact deduplication
         new_graph = nx.MultiDiGraph()
 
         for node, node_data in self.graph.nodes(data=True):
@@ -1766,6 +1778,239 @@ class KTBuilder:
                 seen_triples.add((u, v, relation))
                 new_graph.add_edge(u, v, **data)
         self.graph = new_graph
+        
+        logger.info(f"Exact deduplication complete: {len(seen_triples)} unique triples")
+        
+        # Step 2: Semantic deduplication (if enabled)
+        semantic_dedup_enabled = False
+        try:
+            semantic_dedup_enabled = self.config.construction.semantic_dedup.enable
+        except AttributeError:
+            # Config doesn't have semantic_dedup settings, skip
+            pass
+        
+        if semantic_dedup_enabled:
+            logger.info("Starting semantic deduplication...")
+            try:
+                from utils.semantic_dedup import SemanticTripleDeduplicator
+                
+                # Get configuration parameters
+                try:
+                    similarity_threshold = self.config.construction.semantic_dedup.similarity_threshold
+                    batch_size = self.config.construction.semantic_dedup.batch_size
+                    use_chunk_context = self.config.construction.semantic_dedup.use_chunk_context
+                    use_keywords = self.config.construction.semantic_dedup.use_keywords
+                except AttributeError:
+                    # Use defaults if config parameters not found
+                    similarity_threshold = 0.7
+                    batch_size = 8
+                    use_chunk_context = True
+                    use_keywords = True
+                
+                # Create deduplicator
+                deduplicator = SemanticTripleDeduplicator(
+                    similarity_threshold=similarity_threshold,
+                    batch_size=batch_size,
+                    enable_llm_verification=True,
+                    use_chunk_context=use_chunk_context,
+                    use_keywords=use_keywords,
+                    config=self.config,
+                    graph=self.graph,
+                    all_chunks=self.all_chunks
+                )
+                
+                # Apply semantic deduplication to entity-entity edges only
+                self._apply_semantic_deduplication(deduplicator)
+                
+                logger.info("Semantic deduplication complete")
+                
+            except Exception as e:
+                logger.error(f"Semantic deduplication failed: {e}")
+                logger.info("Continuing with exact deduplication only")
+    
+    def _apply_semantic_deduplication(self, deduplicator):
+        """
+        Apply semantic deduplication to entity-entity relationships.
+        
+        Args:
+            deduplicator: SemanticTripleDeduplicator instance
+        """
+        from collections import defaultdict
+        
+        # Group edges by (head, relation) where both head and tail are entities
+        edge_groups = defaultdict(list)
+        
+        for u, v, key, data in self.graph.edges(keys=True, data=True):
+            u_data = self.graph.nodes[u]
+            v_data = self.graph.nodes[v]
+            
+            # Only process entity-entity relationships
+            if u_data.get("label") != "entity" or v_data.get("label") != "entity":
+                continue
+            
+            head_name = u_data.get("properties", {}).get("name", "")
+            tail_name = v_data.get("properties", {}).get("name", "")
+            relation = data.get("relation", "")
+            
+            if not head_name or not tail_name or not relation:
+                continue
+            
+            key_tuple = (head_name, relation)
+            edge_groups[key_tuple].append({
+                "u": u,
+                "v": v,
+                "key": key,
+                "data": data,
+                "tail_name": tail_name
+            })
+        
+        # Process each group
+        total_groups = len(edge_groups)
+        processed_groups = 0
+        total_removed = 0
+        
+        for (head_name, relation), edges in edge_groups.items():
+            if len(edges) <= 1:
+                continue
+            
+            processed_groups += 1
+            
+            # Extract tail names
+            tails = [edge["tail_name"] for edge in edges]
+            
+            # Deduplicate this group
+            try:
+                representatives = deduplicator.deduplicate_group(
+                    head_name, relation,
+                    [(i, tail, tail) for i, tail in enumerate(tails)]
+                )
+                
+                # Keep only representative edges
+                keep_indices = set(representatives)
+                edges_to_remove = []
+                
+                for i, edge in enumerate(edges):
+                    if i not in keep_indices:
+                        edges_to_remove.append(edge)
+                
+                # Remove non-representative edges from graph
+                for edge in edges_to_remove:
+                    try:
+                        self.graph.remove_edge(edge["u"], edge["v"], key=edge["key"])
+                        total_removed += 1
+                    except Exception as e:
+                        logger.debug(f"Failed to remove edge: {e}")
+                
+                if edges_to_remove:
+                    logger.debug(f"Group ({head_name}, {relation}): removed {len(edges_to_remove)} semantic duplicates")
+            
+            except Exception as e:
+                logger.warning(f"Failed to deduplicate group ({head_name}, {relation}): {e}")
+                continue
+            
+            # Progress logging
+            if processed_groups % 10 == 0:
+                logger.info(f"Semantic deduplication progress: {processed_groups}/{total_groups} groups processed, {total_removed} duplicates removed")
+        
+        logger.info(f"Semantic deduplication summary: processed {processed_groups} groups, removed {total_removed} duplicate edges")
+    
+    def keyword_deduplicate(self):
+        """
+        Deduplicate keyword nodes using semantic similarity.
+        
+        Keywords representing the same concept will be merged.
+        """
+        # Check if keyword deduplication is enabled
+        keyword_dedup_enabled = False
+        try:
+            keyword_dedup_enabled = self.config.construction.semantic_dedup.enable_keyword_dedup
+        except AttributeError:
+            # Default to False if not specified
+            pass
+        
+        if not keyword_dedup_enabled:
+            logger.info("Keyword deduplication is disabled")
+            return
+        
+        logger.info("Starting keyword deduplication...")
+        
+        try:
+            from utils.semantic_dedup import KeywordDeduplicator
+            
+            # Get configuration parameters
+            try:
+                similarity_threshold = self.config.construction.semantic_dedup.keyword_similarity_threshold
+                use_chunk_context = self.config.construction.semantic_dedup.use_chunk_context
+            except AttributeError:
+                # Use defaults
+                similarity_threshold = 0.8  # Higher threshold for keywords
+                use_chunk_context = True
+            
+            # Create deduplicator
+            deduplicator = KeywordDeduplicator(
+                similarity_threshold=similarity_threshold,
+                enable_llm_verification=True,
+                use_chunk_context=use_chunk_context,
+                config=self.config,
+                graph=self.graph,
+                all_chunks=self.all_chunks
+            )
+            
+            # Get keyword mapping (old_id -> representative_id)
+            keyword_mapping = deduplicator.deduplicate_keywords()
+            
+            if not keyword_mapping:
+                logger.info("No keyword duplicates found")
+                return
+            
+            # Merge duplicate keyword nodes
+            self._merge_keyword_nodes(keyword_mapping)
+            
+            logger.info(f"Keyword deduplication complete: merged {len(keyword_mapping)} duplicate keywords")
+            
+        except Exception as e:
+            logger.error(f"Keyword deduplication failed: {e}")
+            import traceback
+            traceback.print_exc()
+    
+    def _merge_keyword_nodes(self, keyword_mapping: dict):
+        """
+        Merge duplicate keyword nodes in the graph.
+        
+        Args:
+            keyword_mapping: Dictionary mapping old keyword node IDs to representative node IDs
+        """
+        if not keyword_mapping:
+            return
+        
+        # For each duplicate keyword
+        for old_kw_id, representative_kw_id in keyword_mapping.items():
+            try:
+                # Get all incoming edges to the old keyword
+                incoming_edges = list(self.graph.in_edges(old_kw_id, data=True, keys=True))
+                
+                # Get all outgoing edges from the old keyword
+                outgoing_edges = list(self.graph.out_edges(old_kw_id, data=True, keys=True))
+                
+                # Redirect incoming edges to representative
+                for u, v, key, data in incoming_edges:
+                    # Check if edge already exists
+                    if not self.graph.has_edge(u, representative_kw_id):
+                        self.graph.add_edge(u, representative_kw_id, **data)
+                
+                # Redirect outgoing edges to representative
+                for u, v, key, data in outgoing_edges:
+                    # Check if edge already exists
+                    if not self.graph.has_edge(representative_kw_id, v):
+                        self.graph.add_edge(representative_kw_id, v, **data)
+                
+                # Remove the old keyword node
+                self.graph.remove_node(old_kw_id)
+                
+                logger.debug(f"Merged keyword node {old_kw_id} into {representative_kw_id}")
+                
+            except Exception as e:
+                logger.warning(f"Failed to merge keyword node {old_kw_id}: {e}")
 
     def triple_deduplicate_semantic(self):
         """deduplicate triples in lv1 and lv2"""
