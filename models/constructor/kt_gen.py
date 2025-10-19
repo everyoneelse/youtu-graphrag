@@ -709,16 +709,30 @@ class KTBuilder:
         clusters: list = []
         for idx, vector in enumerate(embeddings):
             vector_arr = np.asarray(vector, dtype=float)
-            assigned = False
-            for cluster in clusters:
+            
+            # Find all clusters that are similar to the current vector
+            matching_clusters = []
+            for cluster_idx, cluster in enumerate(clusters):
                 if any(float(np.dot(existing_vec, vector_arr)) >= threshold for existing_vec in cluster["vectors"]):
-                    cluster["members"].append(idx)
-                    cluster["vectors"].append(vector_arr)
-                    assigned = True
-                    break
-
-            if not assigned:
+                    matching_clusters.append(cluster_idx)
+            
+            if not matching_clusters:
+                # No similar cluster found, create a new one
                 clusters.append({"members": [idx], "vectors": [vector_arr]})
+            else:
+                # Add to the first matching cluster
+                first_cluster = clusters[matching_clusters[0]]
+                first_cluster["members"].append(idx)
+                first_cluster["vectors"].append(vector_arr)
+                
+                # Merge all other matching clusters into the first one
+                if len(matching_clusters) > 1:
+                    for cluster_idx in sorted(matching_clusters[1:], reverse=True):
+                        merge_cluster = clusters[cluster_idx]
+                        first_cluster["members"].extend(merge_cluster["members"])
+                        first_cluster["vectors"].extend(merge_cluster["vectors"])
+                        # Remove the merged cluster
+                        clusters.pop(cluster_idx)
 
         return [cluster["members"] for cluster in clusters]
 
