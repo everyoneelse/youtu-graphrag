@@ -26,15 +26,49 @@ DEFAULT_SEMANTIC_DEDUP_PROMPT = (
     "Head contexts:\n{head_context}\n\n"
     "Candidate tails:\n"
     "{candidates}\n\n"
-    "Instructions:\n"
-    "1. Use the provided contexts when comparing meanings. Group tails that refer to the same real-world entity or express the same fact.\n"
-    "2. Keep tails separate when their meanings differ or when the contexts describe different situations.\n"
-    "3. Choose the most informative mention as the representative index.\n"
-    "4. Every input index must appear in exactly one group.\n\n"
+    "CRITICAL INSTRUCTIONS:\n"
+    "1. ONLY merge tails that refer to the EXACT SAME real-world entity:\n"
+    "   - Different expressions of the same entity (e.g., 'knee joint' and '膝关节')\n"
+    "   - Different phrasings of the same specific thing (e.g., 'New York City' and 'NYC')\n"
+    "   - Synonyms or aliases for the same unique entity\n\n"
+    "2. NEVER merge if:\n"
+    "   - Tails are different entities, even if they share similar properties or relationships\n"
+    "   - Tails are different instances of the same category (e.g., 'liver' and 'kidney' are both organs, but different entities)\n"
+    "   - Tails represent different values, locations, or items that happen to relate to the head in the same way\n"
+    "   - You are unsure whether they refer to the exact same entity\n\n"
+    "3. Examples of what NOT to merge:\n"
+    "   - '肌腱' and '韧带' - different anatomical structures, even if both can exhibit the same effect\n"
+    "   - 'Shanghai' and 'Beijing' - different cities, even if both are in China\n"
+    "   - 'apple' and 'orange' - different fruits, even if both are foods\n\n"
+    "4. OUTPUT FORMAT:\n"
+    "   - Each group represents tails that refer to the SAME entity\n"
+    "   - If tails are different entities, create SEPARATE groups with one member each\n"
+    "   - Every input index (1, 2, 3...) must appear in exactly one group\n\n"
+    "5. Use the provided contexts to verify identity, not just similarity.\n"
+    "6. Choose the most informative mention as the representative index.\n"
+    "7. When in doubt, keep them SEPARATE - it's better to have duplicates than to lose distinct information.\n\n"
+    "EXAMPLE 1 - When tails should be merged (same entity):\n"
+    "Input: [1] 'New York City', [2] 'NYC', [3] 'New York'\n"
+    "Output:\n"
+    "{{\n"
+    "  \"groups\": [\n"
+    "    {{\"members\": [1, 2, 3], \"representative\": 1, \"rationale\": \"All three refer to the same city.\"}}\n"
+    "  ]\n"
+    "}}\n\n"
+    "EXAMPLE 2 - When tails should NOT be merged (different entities):\n"
+    "Input: [1] '肌腱', [2] '韧带', [3] '软骨'\n"
+    "Output:\n"
+    "{{\n"
+    "  \"groups\": [\n"
+    "    {{\"members\": [1], \"representative\": 1, \"rationale\": \"Unique entity: tendon.\"}},\n"
+    "    {{\"members\": [2], \"representative\": 2, \"rationale\": \"Unique entity: ligament.\"}},\n"
+    "    {{\"members\": [3], \"representative\": 3, \"rationale\": \"Unique entity: cartilage.\"}}\n"
+    "  ]\n"
+    "}}\n\n"
     "Respond with strict JSON using this schema:\n"
     "{{\n"
     "  \"groups\": [\n"
-    "    {{\"members\": [1, 3], \"representative\": 3, \"rationale\": \"Why the members belong together.\"}}\n"
+    "    {{\"members\": [1, 3], \"representative\": 3, \"rationale\": \"Why these members refer to the EXACT SAME entity.\"}}\n"
     "  ]\n"
     "}}\n"
 )
@@ -866,6 +900,18 @@ class KTBuilder:
     ) -> list:
         prompt = self._build_semantic_dedup_prompt(head_text, relation, head_context_lines, batch_entries)
 
+        # Log LLM input in the requested format
+        logger.info("=" * 80)
+        logger.info("LLM Semantic Deduplication Input:")
+        logger.info("Head and relation:")
+        logger.info(f"{head_text} | {relation}")
+        logger.info("")
+        logger.info("Tail:")
+        for idx, entry in enumerate(batch_entries):
+            description = entry.get("description") or "[NO DESCRIPTION]"
+            logger.info(f"{idx}: {description}")
+        logger.info("=" * 80)
+
         try:
             response = self.llm_client.call_api(prompt)
         except Exception as e:
@@ -929,6 +975,43 @@ class KTBuilder:
         for idx in range(len(batch_entries)):
             if idx not in assigned:
                 groups.append({"representative": idx, "members": [idx], "rationale": None})
+
+        # Log LLM output in the requested format
+        logger.info("=" * 80)
+        logger.info("LLM Semantic Deduplication Output:")
+        
+        # Check if output is unchanged (each tail in its own cluster)
+        is_unchanged = all(len(group.get("members", [])) == 1 for group in groups)
+        
+        if is_unchanged:
+            logger.info("未做更改")
+        else:
+            # Show all groups to make deduplication clear
+            multi_member_clusters = [g for g in groups if len(g.get("members", [])) > 1]
+            single_member_clusters = [g for g in groups if len(g.get("members", [])) == 1]
+            
+            # First show merged clusters
+            if multi_member_clusters:
+                logger.info("已合并的cluster:")
+                for cluster_idx, group in enumerate(multi_member_clusters, start=1):
+                    members = group.get("members", [])
+                    logger.info(f"  cluster{cluster_idx}:")
+                    for member_idx in members:
+                        if 0 <= member_idx < len(batch_entries):
+                            description = batch_entries[member_idx].get("description") or "[NO DESCRIPTION]"
+                            logger.info(f"    {description},")
+                logger.info("")
+            
+            # Then show unmerged items
+            if single_member_clusters:
+                logger.info("未合并（保持独立）:")
+                for group in single_member_clusters:
+                    members = group.get("members", [])
+                    if members and 0 <= members[0] < len(batch_entries):
+                        description = batch_entries[members[0]].get("description") or "[NO DESCRIPTION]"
+                        logger.info(f"  - {description}")
+        
+        logger.info("=" * 80)
 
         return groups
 

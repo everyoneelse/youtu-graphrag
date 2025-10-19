@@ -199,11 +199,51 @@ prompts:
       Candidate tails:
       {candidates}
 
-      Instructions:
-      1. Use the provided contexts when comparing meanings. Group tails that refer to the same real-world entity or express the same fact.
-      2. Keep tails separate when their meanings differ or when the contexts describe different situations.
-      3. Choose the most informative mention in each group as the representative index.
-      4. Every input index must appear in exactly one group.
+      CRITICAL INSTRUCTIONS:
+      1. ONLY merge tails that refer to the EXACT SAME real-world entity:
+         - Different expressions of the same entity (e.g., 'knee joint' and '膝关节')
+         - Different phrasings of the same specific thing (e.g., 'New York City' and 'NYC')
+         - Synonyms or aliases for the same unique entity
+      
+      2. NEVER merge if:
+         - Tails are different entities, even if they share similar properties or relationships
+         - Tails are different instances of the same category (e.g., 'liver' and 'kidney' are both organs, but different entities)
+         - Tails represent different values, locations, or items that happen to relate to the head in the same way
+         - You are unsure whether they refer to the exact same entity
+      
+      3. Examples of what NOT to merge:
+         - '肌腱' and '韧带' - different anatomical structures, even if both can exhibit the same effect
+         - 'Shanghai' and 'Beijing' - different cities, even if both are in China
+         - 'apple' and 'orange' - different fruits, even if both are foods
+      
+      4. OUTPUT FORMAT:
+         - Each group represents tails that refer to the SAME entity
+         - If tails are different entities, create SEPARATE groups with one member each
+         - Every input index (1, 2, 3...) must appear in exactly one group
+      
+      5. Use the provided contexts to verify identity, not just similarity.
+      6. Choose the most informative mention as the representative index.
+      7. When in doubt, keep them SEPARATE - it's better to have duplicates than to lose distinct information.
+
+      EXAMPLE 1 - When tails should be merged (same entity):
+      Input: [1] 'New York City', [2] 'NYC', [3] 'New York'
+      Output:
+      {{
+        "groups": [
+          {{"members": [1, 2, 3], "representative": 1, "rationale": "All three refer to the same city."}}
+        ]
+      }}
+
+      EXAMPLE 2 - When tails should NOT be merged (different entities):
+      Input: [1] '肌腱', [2] '韧带', [3] '软骨'
+      Output:
+      {{
+        "groups": [
+          {{"members": [1], "representative": 1, "rationale": "Unique entity: tendon."}},
+          {{"members": [2], "representative": 2, "rationale": "Unique entity: ligament."}},
+          {{"members": [3], "representative": 3, "rationale": "Unique entity: cartilage."}}
+        ]
+      }}
 
       Respond with strict JSON using this schema:
       {{
@@ -211,7 +251,7 @@ prompts:
           {{
             "members": [1, 3],
             "representative": 3,
-            "rationale": "Why the members belong together."
+            "rationale": "Why these members refer to the EXACT SAME entity."
           }}
         ]
       }}
