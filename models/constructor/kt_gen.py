@@ -29,8 +29,14 @@ DEFAULT_SEMANTIC_DEDUP_PROMPT = (
     "Instructions:\n"
     "1. Use the provided contexts when comparing meanings. Group tails that refer to the same real-world entity or express the same fact.\n"
     "2. Keep tails separate when their meanings differ or when the contexts describe different situations.\n"
-    "3. Choose the most informative mention as the representative index.\n"
-    "4. Every input index must appear in exactly one group.\n\n"
+    "3. CRITICAL - DO NOT merge concepts that are:\n"
+    "   - Related by causality (e.g., 'reduced spatial resolution' CAUSES 'reduced edge sharpness', but they are different effects)\n"
+    "   - At different hierarchical levels (e.g., 'image quality degradation' vs 'blurring')\n"
+    "   - Different dimensions of the same phenomenon (e.g., 'spatial resolution' vs 'edge sharpness' are different quality metrics)\n"
+    "   - Different clinical/technical impacts even if related to the same root cause\n"
+    "4. Choose the most informative mention as the representative index.\n"
+    "5. Every input index must appear in exactly one group.\n"
+    "6. When in doubt, keep them separate - related concepts are NOT the same as identical concepts.\n\n"
     "Respond with strict JSON using this schema:\n"
     "{{\n"
     "  \"groups\": [\n"
@@ -55,10 +61,14 @@ DEFAULT_ATTRIBUTE_DEDUP_PROMPT = (
     "   - Attributes describe different properties (even if related to the same entity)\n"
     "   - Attributes have different values or measurements\n"
     "   - Attributes describe different aspects or characteristics\n"
-    "   - Attributes come from the same context but convey different information\n\n"
-    "3. Choose the most complete and informative description as the representative.\n"
-    "4. Every input index must appear in exactly one group.\n"
-    "5. When in doubt, keep them separate - it's better to have duplicate attributes than to lose information.\n\n"
+    "   - Attributes come from the same context but convey different information\n"
+    "   - Attributes are causally related (e.g., one causes the other, but they are distinct effects)\n"
+    "   - Attributes represent different levels or dimensions (e.g., 'spatial resolution' vs 'edge sharpness')\n\n"
+    "3. For technical/medical/scientific domains: Be especially conservative. Different technical parameters, \n"
+    "   clinical impacts, or quality metrics should remain separate even if related.\n"
+    "4. Choose the most complete and informative description as the representative.\n"
+    "5. Every input index must appear in exactly one group.\n"
+    "6. When in doubt, keep them separate - it's better to have duplicate attributes than to lose information.\n\n"
     "Respond with strict JSON using this schema:\n"
     "{{\n"
     "  \"groups\": [\n"
@@ -836,8 +846,18 @@ class KTBuilder:
         # Use 'attribute' prompt for attribute-related relations
         if prompt_type == "general":
             attribute_relations = {"has_attribute", "attribute", "property", "has_property", "characteristic"}
+            # Relations that describe impacts/effects should use general prompt (with stricter causality handling)
+            impact_relations = {"临床影响为", "影响", "导致", "造成", "引起", "clinical_impact", "impact", "effect", "result", "consequence"}
+            
             relation_lower = relation.lower() if relation else ""
-            if relation_lower in attribute_relations or "attribute" in relation_lower:
+            relation_normalized = relation.replace(" ", "").lower() if relation else ""
+            
+            # Check if it's an impact/effect relation - use general prompt with enhanced causality awareness
+            if relation in impact_relations or relation_lower in impact_relations or relation_normalized in impact_relations:
+                prompt_type = "general"
+                logger.debug(f"Using 'general' prompt type with causality awareness for relation: {relation}")
+            # Check if it's an attribute relation
+            elif relation_lower in attribute_relations or "attribute" in relation_lower:
                 prompt_type = "attribute"
                 logger.debug(f"Auto-selected 'attribute' prompt type for relation: {relation}")
         
