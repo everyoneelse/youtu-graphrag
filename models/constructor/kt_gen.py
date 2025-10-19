@@ -872,6 +872,10 @@ class KTBuilder:
             logger.warning("Semantic dedup LLM call failed: %s: %s", type(e).__name__, e)
             return []
 
+        return self._parse_semantic_group_response(response, batch_entries)
+    
+    def _parse_semantic_group_response(self, response: str, batch_entries: list) -> list:
+        """Parse LLM response for semantic grouping."""
         try:
             parsed = json_repair.loads(response)
         except Exception:
@@ -931,6 +935,47 @@ class KTBuilder:
                 groups.append({"representative": idx, "members": [idx], "rationale": None})
 
         return groups
+    
+    def _call_llm_with_prompt(self, prompt: str) -> str:
+        """Helper method to call LLM API with a prompt."""
+        try:
+            return self.llm_client.call_api(prompt)
+        except Exception as e:
+            logger.warning("Semantic dedup LLM call failed: %s: %s", type(e).__name__, e)
+            return None
+    
+    def _process_llm_prompts_concurrently(self, prompts: List[str], max_workers: int = 5) -> List[str]:
+        """Process multiple LLM prompts concurrently.
+        
+        Args:
+            prompts: List of prompts to process
+            max_workers: Maximum number of concurrent workers
+            
+        Returns:
+            List of LLM responses in the same order as prompts
+        """
+        if not prompts:
+            return []
+        
+        responses = [None] * len(prompts)
+        
+        with futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+            # Submit all tasks
+            future_to_idx = {
+                executor.submit(self._call_llm_with_prompt, prompt): idx
+                for idx, prompt in enumerate(prompts)
+            }
+            
+            # Collect results as they complete
+            for future in futures.as_completed(future_to_idx):
+                idx = future_to_idx[future]
+                try:
+                    responses[idx] = future.result()
+                except Exception as e:
+                    logger.warning("Failed to get result for prompt %d: %s", idx, e)
+                    responses[idx] = None
+        
+        return responses
 
     def _merge_duplicate_metadata(self, base_entry: dict, duplicates: list, rationale: str = None):
         if isinstance(base_entry, dict):
@@ -1294,15 +1339,18 @@ class KTBuilder:
             processed_indices: set = set()
             duplicate_indices: set = set()
 
-            for cluster in initial_clusters:
+            # Step 1: Collect all batches that need LLM processing
+            llm_batches = []
+            single_item_clusters = []
+
+            for cluster_idx, cluster in enumerate(initial_clusters):
                 cluster_indices = [idx for idx in cluster if 0 <= idx < len(entries)]
                 if not cluster_indices:
                     continue
 
                 # Optimization: Skip LLM call for single-item clusters
-                # No semantic grouping needed when there's only one candidate
                 if len(cluster_indices) == 1:
-                    processed_indices.add(cluster_indices[0])
+                    single_item_clusters.append(cluster_indices[0])
                     continue
 
                 overflow_indices = []
@@ -1310,100 +1358,148 @@ class KTBuilder:
                     overflow_indices = cluster_indices[max_candidates:]
                     cluster_indices = cluster_indices[:max_candidates]
 
-                while cluster_indices:
-                    batch_indices = cluster_indices[:max_batch_size]
+                # Split cluster into batches
+                remaining_indices = cluster_indices[:]
+                while remaining_indices:
+                    batch_indices = remaining_indices[:max_batch_size]
                     batch_entries = [entries[i] for i in batch_indices]
+                    llm_batches.append({
+                        'cluster_idx': cluster_idx,
+                        'batch_indices': batch_indices,
+                        'batch_entries': batch_entries,
+                        'overflow_indices': overflow_indices if remaining_indices == cluster_indices else []
+                    })
+                    remaining_indices = remaining_indices[max_batch_size:]
 
-                    groups = self._llm_semantic_group(head_text, "keyword_of", head_context_lines, batch_entries)
+            # Step 2: Build all prompts for concurrent processing
+            prompts = []
+            for batch_info in llm_batches:
+                prompt = self._build_semantic_dedup_prompt(
+                    head_text,
+                    "keyword_of",
+                    head_context_lines,
+                    batch_info['batch_entries']
+                )
+                prompts.append(prompt)
 
-                    # Save LLM groups result
-                    if save_intermediate:
-                        llm_result = {
-                            "cluster_id": initial_clusters.index([idx for idx in cluster if 0 <= idx < len(entries)]),
-                            "batch_indices": batch_indices,
-                            "batch_size": len(batch_indices),
-                            "groups": []
-                        }
-                        if groups:
-                            for group in groups:
-                                group_info = {
-                                    "members": group.get("members", []),
-                                    "representative": group.get("representative"),
-                                    "rationale": group.get("rationale"),
-                                    "member_details": [
-                                        {
-                                            "local_idx": m,
-                                            "global_idx": batch_indices[m] if 0 <= m < len(batch_indices) else None,
-                                            "description": entries[batch_indices[m]]["description"] if 0 <= m < len(batch_indices) else None
-                                        }
-                                        for m in group.get("members", [])
-                                        if 0 <= m < len(batch_indices)
-                                    ]
-                                }
-                                llm_result["groups"].append(group_info)
-                        community_result["llm_groups"].append(llm_result)
+            # Step 3: Process all prompts concurrently
+            llm_max_workers = max(1, int(getattr(config, "llm_max_workers", 5) or 5))
+            logger.debug(
+                "Processing %d LLM batches concurrently (max_workers=%d) for community '%s'",
+                len(prompts),
+                llm_max_workers,
+                head_text
+            )
+            llm_responses = self._process_llm_prompts_concurrently(prompts, max_workers=llm_max_workers) if prompts else []
 
-                    if not groups:
-                        for idx in batch_indices:
+            # Step 4: Parse all responses and collect groups
+            all_groups_results = []
+            for batch_idx, response in enumerate(llm_responses):
+                if response and batch_idx < len(llm_batches):
+                    batch_entries = llm_batches[batch_idx]['batch_entries']
+                    groups = self._parse_semantic_group_response(response, batch_entries)
+                    all_groups_results.append(groups)
+                else:
+                    all_groups_results.append([])
+
+            # Step 5: Process single-item clusters
+            for idx in single_item_clusters:
+                processed_indices.add(idx)
+
+            # Step 6: Process all batches with their LLM results
+            for batch_idx, batch_info in enumerate(llm_batches):
+                batch_indices = batch_info['batch_indices']
+                batch_entries = batch_info['batch_entries']
+                overflow_indices = batch_info['overflow_indices']
+                groups = all_groups_results[batch_idx]
+
+                # Save LLM groups result
+                if save_intermediate:
+                    llm_result = {
+                        "cluster_id": batch_info['cluster_idx'],
+                        "batch_indices": batch_indices,
+                        "batch_size": len(batch_indices),
+                        "groups": []
+                    }
+                    if groups:
+                        for group in groups:
+                            group_info = {
+                                "members": group.get("members", []),
+                                "representative": group.get("representative"),
+                                "rationale": group.get("rationale"),
+                                "member_details": [
+                                    {
+                                        "local_idx": m,
+                                        "global_idx": batch_indices[m] if 0 <= m < len(batch_indices) else None,
+                                        "description": entries[batch_indices[m]]["description"] if 0 <= m < len(batch_indices) else None
+                                    }
+                                    for m in group.get("members", [])
+                                    if 0 <= m < len(batch_indices)
+                                ]
+                            }
+                            llm_result["groups"].append(group_info)
+                    community_result["llm_groups"].append(llm_result)
+
+                if not groups:
+                    for idx in batch_indices:
+                        if idx not in processed_indices:
                             processed_indices.add(idx)
-                        cluster_indices = cluster_indices[len(batch_indices):]
+                    continue
+
+                for group in groups:
+                    rep_local = group.get("representative")
+                    if rep_local is None or rep_local < 0 or rep_local >= len(batch_indices):
                         continue
 
-                    for group in groups:
-                        rep_local = group.get("representative")
-                        if rep_local is None or rep_local < 0 or rep_local >= len(batch_indices):
+                    rep_global = batch_indices[rep_local]
+                    if rep_global in processed_indices:
+                        continue
+
+                    duplicates: list = []
+                    for member_local in group.get("members", []):
+                        if member_local < 0 or member_local >= len(batch_indices):
                             continue
-
-                        rep_global = batch_indices[rep_local]
-                        if rep_global in processed_indices:
+                        member_global = batch_indices[member_local]
+                        if member_global == rep_global or member_global in processed_indices:
                             continue
+                        duplicates.append(entries[member_global])
+                        duplicate_indices.add(member_global)
 
-                        duplicates: list = []
-                        for member_local in group.get("members", []):
-                            if member_local < 0 or member_local >= len(batch_indices):
-                                continue
-                            member_global = batch_indices[member_local]
-                            if member_global == rep_global or member_global in processed_indices:
-                                continue
-                            duplicates.append(entries[member_global])
-                            duplicate_indices.add(member_global)
+                    if duplicates:
+                        # Save merge operation
+                        if save_intermediate:
+                            merge_info = {
+                                "representative": {
+                                    "index": rep_global,
+                                    "node_id": entries[rep_global]["node_id"],
+                                    "description": entries[rep_global]["description"]
+                                },
+                                "duplicates": [
+                                    {
+                                        "index": d.get("index"),
+                                        "node_id": d["node_id"],
+                                        "description": d["description"]
+                                    }
+                                    for d in duplicates
+                                ],
+                                "rationale": group.get("rationale")
+                            }
+                            community_result["final_merges"].append(merge_info)
+                        
+                        self._merge_keyword_nodes(
+                            entries[rep_global],
+                            duplicates,
+                            group.get("rationale"),
+                            keyword_mapping,
+                        )
 
-                        if duplicates:
-                            # Save merge operation
-                            if save_intermediate:
-                                merge_info = {
-                                    "representative": {
-                                        "index": rep_global,
-                                        "node_id": entries[rep_global]["node_id"],
-                                        "description": entries[rep_global]["description"]
-                                    },
-                                    "duplicates": [
-                                        {
-                                            "index": d.get("index"),
-                                            "node_id": d["node_id"],
-                                            "description": d["description"]
-                                        }
-                                        for d in duplicates
-                                    ],
-                                    "rationale": group.get("rationale")
-                                }
-                                community_result["final_merges"].append(merge_info)
-                            
-                            self._merge_keyword_nodes(
-                                entries[rep_global],
-                                duplicates,
-                                group.get("rationale"),
-                                keyword_mapping,
-                            )
+                    processed_indices.add(rep_global)
+                    for duplicate_entry in duplicates:
+                        duplicate_idx = duplicate_entry.get("index")
+                        if duplicate_idx is not None:
+                            processed_indices.add(duplicate_idx)
 
-                        processed_indices.add(rep_global)
-                        for duplicate_entry in duplicates:
-                            duplicate_idx = duplicate_entry.get("index")
-                            if duplicate_idx is not None:
-                                processed_indices.add(duplicate_idx)
-
-                    cluster_indices = [idx for idx in cluster_indices if idx not in processed_indices and idx not in duplicate_indices]
-
+                # Process overflow indices
                 for idx in overflow_indices:
                     processed_indices.add(idx)
             
@@ -1602,18 +1698,18 @@ class KTBuilder:
         processed_indices: set = set()
         duplicate_indices: set = set()
 
-        for cluster in initial_clusters:
+        # Step 1: Collect all batches that need LLM processing
+        llm_batches = []  # List of (cluster_idx, batch_indices, batch_entries, overflow_indices)
+        single_item_clusters = []  # Clusters with only one item
+        
+        for cluster_idx, cluster in enumerate(initial_clusters):
             cluster_indices = [idx for idx in cluster if idx not in processed_indices and idx not in duplicate_indices]
             if not cluster_indices:
                 continue
 
             # Optimization: Skip LLM call for single-item clusters
-            # No semantic grouping needed when there's only one edge
             if len(cluster_indices) == 1:
-                idx = cluster_indices[0]
-                entry = entries[idx]
-                final_edges.append((entry["node_id"], copy.deepcopy(entry["data"])))
-                processed_indices.add(idx)
+                single_item_clusters.append(cluster_indices[0])
                 continue
 
             overflow_indices = []
@@ -1628,96 +1724,149 @@ class KTBuilder:
                     len(cluster),
                 )
 
-            while cluster_indices:
-                batch_indices = cluster_indices[:max_batch_size]
+            # Split cluster into batches
+            remaining_indices = cluster_indices[:]
+            while remaining_indices:
+                batch_indices = remaining_indices[:max_batch_size]
                 batch_entries = [entries[i] for i in batch_indices]
-                groups = self._llm_semantic_group(head_text, relation, head_context_lines, batch_entries)
+                llm_batches.append({
+                    'cluster_idx': cluster_idx,
+                    'batch_indices': batch_indices,
+                    'batch_entries': batch_entries,
+                    'overflow_indices': overflow_indices if remaining_indices == cluster_indices else []
+                })
+                remaining_indices = remaining_indices[max_batch_size:]
+        
+        # Step 2: Build all prompts for concurrent processing
+        prompts = []
+        for batch_info in llm_batches:
+            prompt = self._build_semantic_dedup_prompt(
+                head_text, 
+                relation, 
+                head_context_lines, 
+                batch_info['batch_entries']
+            )
+            prompts.append(prompt)
+        
+        # Step 3: Process all prompts concurrently
+        llm_max_workers = max(1, int(getattr(config, "llm_max_workers", 5) or 5))
+        logger.debug(
+            "Processing %d LLM batches concurrently (max_workers=%d) for head '%s' relation '%s'",
+            len(prompts),
+            llm_max_workers,
+            head_text,
+            relation
+        )
+        llm_responses = self._process_llm_prompts_concurrently(prompts, max_workers=llm_max_workers) if prompts else []
+        
+        # Step 4: Parse all responses and collect groups
+        all_groups_results = []
+        for batch_idx, response in enumerate(llm_responses):
+            if response and batch_idx < len(llm_batches):
+                batch_entries = llm_batches[batch_idx]['batch_entries']
+                groups = self._parse_semantic_group_response(response, batch_entries)
+                all_groups_results.append(groups)
+            else:
+                all_groups_results.append([])
+        
+        # Step 5: Process single-item clusters (no LLM needed)
+        for idx in single_item_clusters:
+            entry = entries[idx]
+            final_edges.append((entry["node_id"], copy.deepcopy(entry["data"])))
+            processed_indices.add(idx)
+        
+        # Step 6: Process all batches with their LLM results
+        for batch_idx, batch_info in enumerate(llm_batches):
+            batch_indices = batch_info['batch_indices']
+            batch_entries = batch_info['batch_entries']
+            overflow_indices = batch_info['overflow_indices']
+            groups = all_groups_results[batch_idx]
+            
+            # Save LLM groups result
+            if save_intermediate:
+                llm_result = {
+                    "cluster_id": batch_info['cluster_idx'],
+                    "batch_indices": batch_indices,
+                    "batch_size": len(batch_indices),
+                    "groups": []
+                }
+                if groups:
+                    for group in groups:
+                        group_info = {
+                            "members": group.get("members", []),
+                            "representative": group.get("representative"),
+                            "rationale": group.get("rationale"),
+                            "member_details": [
+                                {
+                                    "local_idx": m,
+                                    "global_idx": batch_indices[m] if 0 <= m < len(batch_indices) else None,
+                                    "description": entries[batch_indices[m]]["description"] if 0 <= m < len(batch_indices) else None
+                                }
+                                for m in group.get("members", [])
+                                if 0 <= m < len(batch_indices)
+                            ]
+                        }
+                        llm_result["groups"].append(group_info)
+                edge_dedup_result["llm_groups"].append(llm_result)
 
-                # Save LLM groups result
-                if save_intermediate:
-                    llm_result = {
-                        "cluster_id": initial_clusters.index([idx for idx in cluster if idx not in processed_indices and idx not in duplicate_indices][:len(cluster_indices)]) if cluster_indices else -1,
-                        "batch_indices": batch_indices,
-                        "batch_size": len(batch_indices),
-                        "groups": []
-                    }
-                    if groups:
-                        for group in groups:
-                            group_info = {
-                                "members": group.get("members", []),
-                                "representative": group.get("representative"),
-                                "rationale": group.get("rationale"),
-                                "member_details": [
-                                    {
-                                        "local_idx": m,
-                                        "global_idx": batch_indices[m] if 0 <= m < len(batch_indices) else None,
-                                        "description": entries[batch_indices[m]]["description"] if 0 <= m < len(batch_indices) else None
-                                    }
-                                    for m in group.get("members", [])
-                                    if 0 <= m < len(batch_indices)
-                                ]
-                            }
-                            llm_result["groups"].append(group_info)
-                    edge_dedup_result["llm_groups"].append(llm_result)
+            if not groups:
+                for global_idx in batch_indices:
+                    if global_idx in processed_indices:
+                        continue
+                    entry = entries[global_idx]
+                    final_edges.append((entry["node_id"], copy.deepcopy(entry["data"])))
+                    processed_indices.add(global_idx)
+                continue
 
-                if not groups:
-                    for global_idx in batch_indices:
-                        entry = entries[global_idx]
-                        final_edges.append((entry["node_id"], copy.deepcopy(entry["data"])))
-                        processed_indices.add(global_idx)
-                    cluster_indices = cluster_indices[len(batch_indices):]
+            for group in groups:
+                rep_local = group.get("representative")
+                if rep_local is None or rep_local < 0 or rep_local >= len(batch_indices):
                     continue
 
-                for group in groups:
-                    rep_local = group.get("representative")
-                    if rep_local is None or rep_local < 0 or rep_local >= len(batch_indices):
+                rep_global = batch_indices[rep_local]
+                if rep_global in processed_indices:
+                    continue
+
+                duplicates = []
+                for member_local in group.get("members", []):
+                    if member_local < 0 or member_local >= len(batch_indices):
                         continue
-
-                    rep_global = batch_indices[rep_local]
-                    if rep_global in processed_indices:
+                    member_global = batch_indices[member_local]
+                    if member_global == rep_global or member_global in processed_indices:
                         continue
+                    duplicates.append(entries[member_global])
+                    duplicate_indices.add(member_global)
 
-                    duplicates = []
-                    for member_local in group.get("members", []):
-                        if member_local < 0 or member_local >= len(batch_indices):
-                            continue
-                        member_global = batch_indices[member_local]
-                        if member_global == rep_global or member_global in processed_indices:
-                            continue
-                        duplicates.append(entries[member_global])
-                        duplicate_indices.add(member_global)
+                # Save merge operation
+                if save_intermediate and duplicates:
+                    merge_info = {
+                        "representative": {
+                            "index": rep_global,
+                            "node_id": entries[rep_global]["node_id"],
+                            "description": entries[rep_global]["description"]
+                        },
+                        "duplicates": [
+                            {
+                                "index": d.get("index"),
+                                "node_id": d["node_id"],
+                                "description": d["description"]
+                            }
+                            for d in duplicates
+                        ],
+                        "rationale": group.get("rationale")
+                    }
+                    edge_dedup_result["final_merges"].append(merge_info)
 
-                    # Save merge operation
-                    if save_intermediate and duplicates:
-                        merge_info = {
-                            "representative": {
-                                "index": rep_global,
-                                "node_id": entries[rep_global]["node_id"],
-                                "description": entries[rep_global]["description"]
-                            },
-                            "duplicates": [
-                                {
-                                    "index": d.get("index"),
-                                    "node_id": d["node_id"],
-                                    "description": d["description"]
-                                }
-                                for d in duplicates
-                            ],
-                            "rationale": group.get("rationale")
-                        }
-                        edge_dedup_result["final_merges"].append(merge_info)
+                merged_data = self._merge_duplicate_metadata(
+                    entries[rep_global],
+                    duplicates,
+                    group.get("rationale"),
+                )
 
-                    merged_data = self._merge_duplicate_metadata(
-                        entries[rep_global],
-                        duplicates,
-                        group.get("rationale"),
-                    )
+                final_edges.append((entries[rep_global]["node_id"], merged_data))
+                processed_indices.add(rep_global)
 
-                    final_edges.append((entries[rep_global]["node_id"], merged_data))
-                    processed_indices.add(rep_global)
-
-                cluster_indices = [idx for idx in cluster_indices if idx not in processed_indices and idx not in duplicate_indices]
-
+            # Process overflow indices
             for global_idx in overflow_indices:
                 if global_idx in processed_indices:
                     continue

@@ -22,6 +22,8 @@ construction:
     max_candidates: 50
     use_embeddings: true
     prompt_type: general
+    # Maximum number of concurrent LLM workers for parallel prompt processing
+    llm_max_workers: 5
     # Save intermediate results for debugging and analysis
     save_intermediate_results: false
     # Path to save intermediate results (optional, auto-generated if not specified)
