@@ -866,6 +866,18 @@ class KTBuilder:
     ) -> list:
         prompt = self._build_semantic_dedup_prompt(head_text, relation, head_context_lines, batch_entries)
 
+        # Log LLM input in the requested format
+        logger.info("=" * 80)
+        logger.info("LLM Semantic Deduplication Input:")
+        logger.info("Head and relation:")
+        logger.info(f"{head_text} | {relation}")
+        logger.info("")
+        logger.info("Tail:")
+        for idx, entry in enumerate(batch_entries):
+            description = entry.get("description") or "[NO DESCRIPTION]"
+            logger.info(f"{idx}: {description}")
+        logger.info("=" * 80)
+
         try:
             response = self.llm_client.call_api(prompt)
         except Exception as e:
@@ -929,6 +941,29 @@ class KTBuilder:
         for idx in range(len(batch_entries)):
             if idx not in assigned:
                 groups.append({"representative": idx, "members": [idx], "rationale": None})
+
+        # Log LLM output in the requested format
+        logger.info("=" * 80)
+        logger.info("LLM Semantic Deduplication Output:")
+        
+        # Check if output is unchanged (each tail in its own cluster)
+        is_unchanged = all(len(group.get("members", [])) == 1 for group in groups)
+        
+        if is_unchanged:
+            logger.info("未做更改")
+        else:
+            # Group outputs by cluster
+            for cluster_idx, group in enumerate(groups, start=1):
+                members = group.get("members", [])
+                if len(members) > 1:  # Only show clusters with multiple members
+                    logger.info(f"cluster{cluster_idx}:")
+                    for member_idx in members:
+                        if 0 <= member_idx < len(batch_entries):
+                            description = batch_entries[member_idx].get("description") or "[NO DESCRIPTION]"
+                            logger.info(f"{description},")
+                    logger.info("")
+        
+        logger.info("=" * 80)
 
         return groups
 
