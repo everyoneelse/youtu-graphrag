@@ -228,11 +228,9 @@ prompts:
         • Different information (even if related) → KEEP SEPARATE
         • Same information, different wording → MERGE
         
-        Examples across domains:
+        Examples:
         • "Capital: Paris" vs "Population: 2M" → Different information, KEEP SEPARATE
         • "Capital: Paris" vs "Capital city: Paris" → Same information, MERGE
-        • "定义：原因是X" vs "定义：表现为Y" → Different aspects, KEEP SEPARATE
-        • "定义：原因是X" vs "定义：因为X" → Same aspect, MERGE
       
       PROHIBITED MERGE REASONS (these are NOT valid reasons to merge):
       ✗ Shared relation: "Both satisfy R with H" → NOT sufficient for coreference
