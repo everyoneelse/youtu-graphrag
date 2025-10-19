@@ -216,13 +216,20 @@ prompts:
         • Different entities → KEEP SEPARATE (even if highly related)
       
       2. SUBSTITUTION TEST (CRITICAL): Can you replace one tail with the other in ALL contexts without losing or changing information?
-        • If substitution LOSES information → KEEP SEPARATE (they are complementary, not redundant)
-        • If substitution CHANGES information → KEEP SEPARATE (they convey different facts)
-        • If substitution PRESERVES all information → MERGE (they are truly equivalent)
+        • If substitution LOSES any detail/nuance → KEEP SEPARATE (they are complementary, not redundant)
+        • If substitution CHANGES any specific information → KEEP SEPARATE (they convey different facts)
+        • If substitution PRESERVES all information exactly → MERGE (they are truly equivalent)
         
         Key insight: COMPLEMENTARY ≠ REDUNDANT
         • Complementary: A describes aspect X, B describes aspect Y → Both are valuable, KEEP SEPARATE
         • Redundant: A and B both describe aspect X in the same way → MERGE
+        
+        ⚠️ CRITICAL: Pay attention to SPECIFIC DETAILS, not just high-level similarity
+        Even if two tails describe the same general phenomenon, keep them separate if they provide different specific details:
+        • Different locations: "at interface" vs "across region" → DIFFERENT information
+        • Different geometric properties: "straight lines" vs "curved patterns" → DIFFERENT shapes
+        • Different characteristics: "alternating contrast" vs "uniform intensity" → DIFFERENT features
+        • Different dimensions: "in phase-encoding direction" vs "in frequency direction" → DIFFERENT orientations
       
       3. INFORMATION CONTENT TEST: Do the two tails provide the same information?
         • Different information (even if related) → KEEP SEPARATE
@@ -231,12 +238,16 @@ prompts:
         Examples:
         • "Capital: Paris" vs "Population: 2M" → Different information, KEEP SEPARATE
         • "Capital: Paris" vs "Capital city: Paris" → Same information, MERGE
+        • "Pattern: stripes at boundary" vs "Pattern: stripes across region" → Different locations, KEEP SEPARATE
+        • "Pattern: vertical stripes" vs "Pattern: striped pattern oriented vertically" → Same information, MERGE
       
       PROHIBITED MERGE REASONS (these are NOT valid reasons to merge):
       ✗ Shared relation: "Both satisfy R with H" → NOT sufficient for coreference
       ✗ Semantic similarity: "X and Y are similar/related" → similarity ≠ identity
       ✗ Same category: "Both are type T" → category membership ≠ entity identity
-      ✗ Describing same concept: "X and Y both describe C" → complementary descriptions ≠ same description
+      ✗ Same general phenomenon: "Both describe phenomenon P" → complementary details ≠ identical description
+      ✗ Overlapping semantics: "Both mention aspect A" → if they differ in any other aspect, keep separate
+      ✗ High-level equivalence: "Both convey the same general idea" → different specific details matter
       ✗ Co-occurrence: "X and Y appear together" → contextual proximity ≠ coreference
       ✗ Functional relationship: "X causes/affects/contains Y" → relationship ≠ identity
       
@@ -248,13 +259,17 @@ prompts:
       DECISION PROCEDURE:
       For each pair of tails (Ti, Tj):
         1. REFERENT TEST: Do they refer to the same entity? (not just related entities)
-        2. SUBSTITUTION TEST: If I replace Ti with Tj everywhere, will I lose information?
-           → If YES (lose info) → KEEP SEPARATE
-           → If NO (no loss) → Proceed to step 3
-        3. INFORMATION TEST: Do they convey the same facts/properties/aspects?
-           → If NO (different aspects) → KEEP SEPARATE
-           → If YES (same aspect, just rephrased) → MERGE
-        4. If uncertain → KEEP SEPARATE (conservative principle)
+        2. DETAIL COMPARISON: List all specific details in Ti and all specific details in Tj
+           • If Ti contains details not in Tj → They provide complementary information
+           • If Tj contains details not in Ti → They provide complementary information
+           • Only if both contain exactly the same details → Proceed to step 3
+        3. SUBSTITUTION TEST: If I replace Ti with Tj everywhere, will I lose ANY detail?
+           → If YES (lose any detail) → KEEP SEPARATE
+           → If NO (truly identical) → MERGE
+        4. Final check: Are they just different wordings of identical information, or do they add complementary details?
+           → Complementary details → KEEP SEPARATE
+           → Identical information, different wording → MERGE
+        5. If uncertain → KEEP SEPARATE (conservative principle)
       
       CONSERVATIVE PRINCIPLE:
       Preserving valuable information > Eliminating redundancy
