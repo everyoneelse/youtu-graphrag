@@ -738,6 +738,35 @@ class KTBuilder:
 
         return f"{label}:{node_id}"
 
+    def _describe_node_for_clustering(self, node_id: str) -> str:
+        """Generate a simplified description for semantic clustering.
+        
+        This method excludes chunk_id and label information to focus on
+        the semantic content of the node for better clustering results.
+        """
+        node_data = self.graph.nodes.get(node_id, {})
+        properties = node_data.get("properties", {})
+
+        if isinstance(properties, dict):
+            name = properties.get("name") or properties.get("title")
+            extras = []
+            for key, value in properties.items():
+                # Skip name, chunk_id, and empty values
+                if key == "name" or key == "chunk id" or key == "chunk_id" or value in (None, ""):
+                    continue
+                extras.append(f"{key}: {value}")
+
+            extra_text = ", ".join(extras)
+            if name and extra_text:
+                return f"{name} ({extra_text})"
+            if name:
+                return name
+            if extra_text:
+                return extra_text
+
+        # Fallback to node name only
+        return properties.get("name") or properties.get("title") or node_id
+
     def _collect_node_chunk_ids(self, node_id: str) -> list:
         node_data = self.graph.nodes.get(node_id, {})
         properties = node_data.get("properties", {}) if isinstance(node_data, dict) else {}
@@ -1293,7 +1322,7 @@ class KTBuilder:
                 source_entity_name = None
 
                 if source_entity_id and source_entity_id in self.graph:
-                    source_entity_name = self._describe_node(source_entity_id)
+                    source_entity_name = self._describe_node_for_clustering(source_entity_id)
                     for chunk_id in self._collect_node_chunk_ids(source_entity_id):
                         if chunk_id:
                             chunk_ids.add(chunk_id)
@@ -1602,7 +1631,7 @@ class KTBuilder:
                     "node_id": tail_id,
                     "data": copy.deepcopy(data),
                     "raw_data": copy.deepcopy(data),
-                    "description": self._describe_node(tail_id),
+                    "description": self._describe_node_for_clustering(tail_id),
                     "context_chunk_ids": chunk_ids,
                     "context_summaries": self._summarize_contexts(chunk_ids),
                 }
