@@ -39,6 +39,34 @@ DEFAULT_SEMANTIC_DEDUP_PROMPT = (
     "}}\n"
 )
 
+DEFAULT_ATTRIBUTE_DEDUP_PROMPT = (
+    "You are a knowledge graph curation assistant. All listed triples share the same head entity and relation.\n"
+    "Your task is to identify and merge ONLY duplicate or redundant attribute values.\n\n"
+    "Head entity: {head}\n"
+    "Relation: {relation}\n\n"
+    "Head contexts:\n{head_context}\n\n"
+    "Candidate attribute values:\n"
+    "{candidates}\n\n"
+    "CRITICAL INSTRUCTIONS for attribute deduplication:\n"
+    "1. ONLY merge if attribute values are truly identical or redundant:\n"
+    "   - Same attribute expressed differently (e.g., 'height: 10cm' and 'height: 10 centimeters')\n"
+    "   - Complete redundancy (e.g., 'color is red' and 'red')\n\n"
+    "2. NEVER merge if:\n"
+    "   - Attributes describe different properties (even if related to the same entity)\n"
+    "   - Attributes have different values or measurements\n"
+    "   - Attributes describe different aspects or characteristics\n"
+    "   - Attributes come from the same context but convey different information\n\n"
+    "3. Choose the most complete and informative description as the representative.\n"
+    "4. Every input index must appear in exactly one group.\n"
+    "5. When in doubt, keep them separate - it's better to have duplicate attributes than to lose information.\n\n"
+    "Respond with strict JSON using this schema:\n"
+    "{{\n"
+    "  \"groups\": [\n"
+    "    {{\"members\": [1, 3], \"representative\": 3, \"rationale\": \"Why these attribute values are truly identical.\"}}\n"
+    "  ]\n"
+    "}}\n"
+)
+
 class KTBuilder:
     def __init__(self, dataset_name, schema_path=None, mode=None, config=None):
         if config is None:
@@ -693,6 +721,20 @@ class KTBuilder:
         return summaries
 
     def _cluster_candidate_tails(self, descriptions: list, threshold: float) -> list:
+        """
+        Cluster candidate descriptions using Average Linkage hierarchical clustering.
+        
+        This uses sklearn's AgglomerativeClustering with average linkage to ensure
+        that items are only clustered together if they have high average similarity
+        to all members of the cluster, avoiding the chaining effect of single linkage.
+        
+        Args:
+            descriptions: List of text descriptions to cluster
+            threshold: Similarity threshold (cosine similarity, 0-1)
+            
+        Returns:
+            List of clusters, where each cluster is a list of indices
+        """
         if len(descriptions) <= 1:
             return [list(range(len(descriptions)))]
 
@@ -706,21 +748,66 @@ class KTBuilder:
             logger.warning("Failed to encode descriptions for semantic dedup: %s: %s", type(e).__name__, e)
             return [list(range(len(descriptions)))]
 
-        clusters: list = []
-        for idx, vector in enumerate(embeddings):
-            vector_arr = np.asarray(vector, dtype=float)
-            assigned = False
-            for cluster in clusters:
-                if any(float(np.dot(existing_vec, vector_arr)) >= threshold for existing_vec in cluster["vectors"]):
-                    cluster["members"].append(idx)
-                    cluster["vectors"].append(vector_arr)
-                    assigned = True
-                    break
+        try:
+            from sklearn.cluster import AgglomerativeClustering
+            
+            # Convert embeddings to numpy array
+            embeddings = np.asarray(embeddings, dtype=float)
+            
+            # Compute cosine similarity matrix (embeddings are already normalized)
+            similarity_matrix = np.dot(embeddings, embeddings.T)
+            
+            # Convert similarity to distance: distance = 1 - similarity
+            distance_matrix = 1 - similarity_matrix
+            
+            # Ensure distance matrix is symmetric and has zero diagonal
+            distance_matrix = (distance_matrix + distance_matrix.T) / 2
+            np.fill_diagonal(distance_matrix, 0)
+            
+            # Convert similarity threshold to distance threshold
+            distance_threshold = 1 - threshold
+            
+            # Apply AgglomerativeClustering with average linkage
+            clustering = AgglomerativeClustering(
+                n_clusters=None,  # Don't specify number of clusters
+                distance_threshold=distance_threshold,  # Use distance threshold instead
+                linkage='average',  # Average linkage: mean distance between all pairs
+                metric='precomputed'  # Use our precomputed distance matrix
+            )
+            
+            labels = clustering.fit_predict(distance_matrix)
+            
+            # Convert cluster labels to list of index lists
+            clusters_dict = {}
+            for idx, label in enumerate(labels):
+                if label not in clusters_dict:
+                    clusters_dict[label] = []
+                clusters_dict[label].append(idx)
+            
+            return list(clusters_dict.values())
+            
+        except ImportError:
+            logger.warning("sklearn not available, falling back to simple single-linkage clustering")
+            # Fallback to original implementation if sklearn is not available
+            clusters: list = []
+            for idx, vector in enumerate(embeddings):
+                vector_arr = np.asarray(vector, dtype=float)
+                assigned = False
+                for cluster in clusters:
+                    if any(float(np.dot(existing_vec, vector_arr)) >= threshold for existing_vec in cluster["vectors"]):
+                        cluster["members"].append(idx)
+                        cluster["vectors"].append(vector_arr)
+                        assigned = True
+                        break
 
-            if not assigned:
-                clusters.append({"members": [idx], "vectors": [vector_arr]})
+                if not assigned:
+                    clusters.append({"members": [idx], "vectors": [vector_arr]})
 
-        return [cluster["members"] for cluster in clusters]
+            return [cluster["members"] for cluster in clusters]
+        except Exception as e:
+            logger.warning("Clustering failed: %s: %s, using fallback", type(e).__name__, e)
+            # If anything goes wrong, put all items in one cluster
+            return [list(range(len(descriptions)))]
 
     def _build_semantic_dedup_prompt(
         self,
@@ -742,7 +829,18 @@ class KTBuilder:
         relation_text = relation or "[UNKNOWN]"
         head_context_text = "\n".join(head_context_lines) if head_context_lines else "- (no context available)"
 
-        prompt_type = getattr(self._get_semantic_dedup_config(), "prompt_type", "general")
+        # Auto-detect prompt type based on relation
+        config = self._get_semantic_dedup_config()
+        prompt_type = getattr(config, "prompt_type", "general")
+        
+        # Use 'attribute' prompt for attribute-related relations
+        if prompt_type == "general":
+            attribute_relations = {"has_attribute", "attribute", "property", "has_property", "characteristic"}
+            relation_lower = relation.lower() if relation else ""
+            if relation_lower in attribute_relations or "attribute" in relation_lower:
+                prompt_type = "attribute"
+                logger.debug(f"Auto-selected 'attribute' prompt type for relation: {relation}")
+        
         prompt_kwargs = {
             "head": head_text or "[UNKNOWN_HEAD]",
             "relation": relation_text,
@@ -753,7 +851,11 @@ class KTBuilder:
         try:
             return self.config.get_prompt_formatted("semantic_dedup", prompt_type, **prompt_kwargs)
         except Exception:
-            return DEFAULT_SEMANTIC_DEDUP_PROMPT.format(**prompt_kwargs)
+            # Fallback to appropriate default prompt based on type
+            if prompt_type == "attribute":
+                return DEFAULT_ATTRIBUTE_DEDUP_PROMPT.format(**prompt_kwargs)
+            else:
+                return DEFAULT_SEMANTIC_DEDUP_PROMPT.format(**prompt_kwargs)
 
     def _llm_semantic_group(
         self,
@@ -1071,11 +1173,39 @@ class KTBuilder:
         threshold = getattr(config, "embedding_threshold", 0.85) or 0.85
         max_batch_size = max(1, int(getattr(config, "max_batch_size", 8) or 8))
         max_candidates = int(getattr(config, "max_candidates", 0) or 0)
+        
+        # Initialize intermediate results collector
+        save_intermediate = getattr(config, "save_intermediate_results", False)
+        intermediate_results = {
+            "dataset": self.dataset_name,
+            "config": {
+                "threshold": threshold,
+                "max_batch_size": max_batch_size,
+                "max_candidates": max_candidates,
+            },
+            "communities": []
+        } if save_intermediate else None
 
         for community_id, keyword_ids in community_to_keywords.items():
             keyword_ids = [kw for kw in keyword_ids if kw in self.graph]
             if len(keyword_ids) <= 1:
                 continue
+
+            # Initialize community result collector
+            community_result = {
+                "community_id": community_id,
+                "community_name": None,
+                "relation": "keyword_of",
+                "total_candidates": len(keyword_ids),
+                "candidates": [],
+                "clustering": {
+                    "method": "average_linkage",
+                    "threshold": threshold,
+                    "clusters": []
+                },
+                "llm_groups": [],
+                "final_merges": []
+            } if save_intermediate else None
 
             entries: list = []
             for kw_id in keyword_ids:
@@ -1126,8 +1256,40 @@ class KTBuilder:
             head_context_lines = self._summarize_contexts(list(community_chunk_ids))
             head_text = self._describe_node(community_id)
 
+            # Save community info to intermediate results
+            if save_intermediate:
+                community_result["community_name"] = head_text
+                community_result["head_contexts"] = head_context_lines
+                for entry in entries:
+                    community_result["candidates"].append({
+                        "index": entry["index"],
+                        "node_id": entry["node_id"],
+                        "description": entry["description"],
+                        "raw_name": entry["raw_name"],
+                        "source_entity_id": entry.get("source_entity_id"),
+                        "source_entity_name": entry.get("source_entity_name")
+                    })
+
             candidate_descriptions = [entry["description"] for entry in entries]
             initial_clusters = self._cluster_candidate_tails(candidate_descriptions, threshold)
+
+            # Save clustering results
+            if save_intermediate:
+                for cluster_idx, cluster in enumerate(initial_clusters):
+                    cluster_info = {
+                        "cluster_id": cluster_idx,
+                        "size": len(cluster),
+                        "member_indices": cluster,
+                        "members": [
+                            {
+                                "index": idx,
+                                "node_id": entries[idx]["node_id"],
+                                "description": entries[idx]["description"]
+                            }
+                            for idx in cluster if 0 <= idx < len(entries)
+                        ]
+                    }
+                    community_result["clustering"]["clusters"].append(cluster_info)
 
             processed_indices: set = set()
             duplicate_indices: set = set()
@@ -1135,6 +1297,12 @@ class KTBuilder:
             for cluster in initial_clusters:
                 cluster_indices = [idx for idx in cluster if 0 <= idx < len(entries)]
                 if not cluster_indices:
+                    continue
+
+                # Optimization: Skip LLM call for single-item clusters
+                # No semantic grouping needed when there's only one candidate
+                if len(cluster_indices) == 1:
+                    processed_indices.add(cluster_indices[0])
                     continue
 
                 overflow_indices = []
@@ -1147,6 +1315,33 @@ class KTBuilder:
                     batch_entries = [entries[i] for i in batch_indices]
 
                     groups = self._llm_semantic_group(head_text, "keyword_of", head_context_lines, batch_entries)
+
+                    # Save LLM groups result
+                    if save_intermediate:
+                        llm_result = {
+                            "cluster_id": initial_clusters.index([idx for idx in cluster if 0 <= idx < len(entries)]),
+                            "batch_indices": batch_indices,
+                            "batch_size": len(batch_indices),
+                            "groups": []
+                        }
+                        if groups:
+                            for group in groups:
+                                group_info = {
+                                    "members": group.get("members", []),
+                                    "representative": group.get("representative"),
+                                    "rationale": group.get("rationale"),
+                                    "member_details": [
+                                        {
+                                            "local_idx": m,
+                                            "global_idx": batch_indices[m] if 0 <= m < len(batch_indices) else None,
+                                            "description": entries[batch_indices[m]]["description"] if 0 <= m < len(batch_indices) else None
+                                        }
+                                        for m in group.get("members", [])
+                                        if 0 <= m < len(batch_indices)
+                                    ]
+                                }
+                                llm_result["groups"].append(group_info)
+                        community_result["llm_groups"].append(llm_result)
 
                     if not groups:
                         for idx in batch_indices:
@@ -1174,6 +1369,26 @@ class KTBuilder:
                             duplicate_indices.add(member_global)
 
                         if duplicates:
+                            # Save merge operation
+                            if save_intermediate:
+                                merge_info = {
+                                    "representative": {
+                                        "index": rep_global,
+                                        "node_id": entries[rep_global]["node_id"],
+                                        "description": entries[rep_global]["description"]
+                                    },
+                                    "duplicates": [
+                                        {
+                                            "index": d.get("index"),
+                                            "node_id": d["node_id"],
+                                            "description": d["description"]
+                                        }
+                                        for d in duplicates
+                                    ],
+                                    "rationale": group.get("rationale")
+                                }
+                                community_result["final_merges"].append(merge_info)
+                            
                             self._merge_keyword_nodes(
                                 entries[rep_global],
                                 duplicates,
@@ -1191,6 +1406,55 @@ class KTBuilder:
 
                 for idx in overflow_indices:
                     processed_indices.add(idx)
+            
+            # Save community result
+            if save_intermediate:
+                community_result["summary"] = {
+                    "total_candidates": len(entries),
+                    "total_clusters": len(initial_clusters),
+                    "single_item_clusters": sum(1 for c in initial_clusters if len(c) == 1),
+                    "multi_item_clusters": sum(1 for c in initial_clusters if len(c) > 1),
+                    "total_llm_calls": len(community_result["llm_groups"]),
+                    "total_merges": len(community_result["final_merges"]),
+                    "items_merged": sum(len(m["duplicates"]) for m in community_result["final_merges"])
+                }
+                intermediate_results["communities"].append(community_result)
+        
+        # Save intermediate results to file
+        if save_intermediate and intermediate_results:
+            import datetime
+            timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+            output_path = getattr(config, "intermediate_results_path", None)
+            
+            if not output_path:
+                output_path = f"output/dedup_intermediate/{self.dataset_name}_dedup_{timestamp}.json"
+            else:
+                # If path is a directory, add filename
+                if output_path.endswith('/'):
+                    output_path = f"{output_path}{self.dataset_name}_dedup_{timestamp}.json"
+            
+            # Ensure directory exists
+            output_dir = os.path.dirname(output_path)
+            if output_dir:
+                os.makedirs(output_dir, exist_ok=True)
+            
+            # Add summary statistics
+            intermediate_results["summary"] = {
+                "total_communities": len(intermediate_results["communities"]),
+                "total_candidates": sum(c["total_candidates"] for c in intermediate_results["communities"]),
+                "total_clusters": sum(len(c["clustering"]["clusters"]) for c in intermediate_results["communities"]),
+                "total_llm_calls": sum(len(c["llm_groups"]) for c in intermediate_results["communities"]),
+                "total_merges": sum(len(c["final_merges"]) for c in intermediate_results["communities"]),
+                "total_items_merged": sum(c["summary"]["items_merged"] for c in intermediate_results["communities"])
+            }
+            
+            try:
+                with open(output_path, 'w', encoding='utf-8') as f:
+                    json.dump(intermediate_results, f, indent=2, ensure_ascii=False)
+                logger.info(f"Saved deduplication intermediate results to: {output_path}")
+                logger.info(f"Summary: {intermediate_results['summary']}")
+            except Exception as e:
+                logger.warning(f"Failed to save intermediate results: {e}")
 
     def _deduplicate_exact(self, edges: list) -> list:
         unique_edges: list = []
@@ -1288,6 +1552,51 @@ class KTBuilder:
 
         max_batch_size = max(1, int(getattr(config, "max_batch_size", 8) or 8))
         max_candidates = int(getattr(config, "max_candidates", 0) or 0)
+        
+        # Initialize intermediate results collector for edge deduplication
+        save_intermediate = getattr(config, "save_intermediate_results", False)
+        edge_dedup_result = {
+            "head_id": head_id,
+            "head_name": head_text,
+            "relation": relation,
+            "total_edges": len(edges),
+            "candidates": [],
+            "clustering": {
+                "method": "average_linkage",
+                "threshold": threshold,
+                "clusters": []
+            },
+            "llm_groups": [],
+            "final_merges": []
+        } if save_intermediate else None
+        
+        # Save candidates info
+        if save_intermediate:
+            edge_dedup_result["head_contexts"] = head_context_lines
+            for entry in entries:
+                edge_dedup_result["candidates"].append({
+                    "index": entry["index"],
+                    "node_id": entry["node_id"],
+                    "description": entry["description"]
+                })
+
+        # Save clustering results
+        if save_intermediate:
+            for cluster_idx, cluster in enumerate(initial_clusters):
+                cluster_info = {
+                    "cluster_id": cluster_idx,
+                    "size": len(cluster),
+                    "member_indices": cluster,
+                    "members": [
+                        {
+                            "index": idx,
+                            "node_id": entries[idx]["node_id"],
+                            "description": entries[idx]["description"]
+                        }
+                        for idx in cluster if 0 <= idx < len(entries)
+                    ]
+                }
+                edge_dedup_result["clustering"]["clusters"].append(cluster_info)
 
         final_edges: list = []
         processed_indices: set = set()
@@ -1296,6 +1605,15 @@ class KTBuilder:
         for cluster in initial_clusters:
             cluster_indices = [idx for idx in cluster if idx not in processed_indices and idx not in duplicate_indices]
             if not cluster_indices:
+                continue
+
+            # Optimization: Skip LLM call for single-item clusters
+            # No semantic grouping needed when there's only one edge
+            if len(cluster_indices) == 1:
+                idx = cluster_indices[0]
+                entry = entries[idx]
+                final_edges.append((entry["node_id"], copy.deepcopy(entry["data"])))
+                processed_indices.add(idx)
                 continue
 
             overflow_indices = []
@@ -1314,6 +1632,33 @@ class KTBuilder:
                 batch_indices = cluster_indices[:max_batch_size]
                 batch_entries = [entries[i] for i in batch_indices]
                 groups = self._llm_semantic_group(head_text, relation, head_context_lines, batch_entries)
+
+                # Save LLM groups result
+                if save_intermediate:
+                    llm_result = {
+                        "cluster_id": initial_clusters.index([idx for idx in cluster if idx not in processed_indices and idx not in duplicate_indices][:len(cluster_indices)]) if cluster_indices else -1,
+                        "batch_indices": batch_indices,
+                        "batch_size": len(batch_indices),
+                        "groups": []
+                    }
+                    if groups:
+                        for group in groups:
+                            group_info = {
+                                "members": group.get("members", []),
+                                "representative": group.get("representative"),
+                                "rationale": group.get("rationale"),
+                                "member_details": [
+                                    {
+                                        "local_idx": m,
+                                        "global_idx": batch_indices[m] if 0 <= m < len(batch_indices) else None,
+                                        "description": entries[batch_indices[m]]["description"] if 0 <= m < len(batch_indices) else None
+                                    }
+                                    for m in group.get("members", [])
+                                    if 0 <= m < len(batch_indices)
+                                ]
+                            }
+                            llm_result["groups"].append(group_info)
+                    edge_dedup_result["llm_groups"].append(llm_result)
 
                 if not groups:
                     for global_idx in batch_indices:
@@ -1342,6 +1687,26 @@ class KTBuilder:
                         duplicates.append(entries[member_global])
                         duplicate_indices.add(member_global)
 
+                    # Save merge operation
+                    if save_intermediate and duplicates:
+                        merge_info = {
+                            "representative": {
+                                "index": rep_global,
+                                "node_id": entries[rep_global]["node_id"],
+                                "description": entries[rep_global]["description"]
+                            },
+                            "duplicates": [
+                                {
+                                    "index": d.get("index"),
+                                    "node_id": d["node_id"],
+                                    "description": d["description"]
+                                }
+                                for d in duplicates
+                            ],
+                            "rationale": group.get("rationale")
+                        }
+                        edge_dedup_result["final_merges"].append(merge_info)
+
                     merged_data = self._merge_duplicate_metadata(
                         entries[rep_global],
                         duplicates,
@@ -1367,6 +1732,24 @@ class KTBuilder:
             final_edges.append((entry["node_id"], copy.deepcopy(entry["data"])))
             processed_indices.add(idx)
 
+        # Save edge dedup result with summary
+        if save_intermediate:
+            edge_dedup_result["summary"] = {
+                "total_edges": len(edges),
+                "total_clusters": len(initial_clusters),
+                "single_item_clusters": sum(1 for c in initial_clusters if len(c) == 1),
+                "multi_item_clusters": sum(1 for c in initial_clusters if len(c) > 1),
+                "total_llm_calls": len(edge_dedup_result["llm_groups"]),
+                "total_merges": len(edge_dedup_result["final_merges"]),
+                "edges_merged": sum(len(m["duplicates"]) for m in edge_dedup_result["final_merges"]),
+                "final_edges": len(final_edges)
+            }
+            
+            # Accumulate to class-level collector
+            if not hasattr(self, '_edge_dedup_results'):
+                self._edge_dedup_results = []
+            self._edge_dedup_results.append(edge_dedup_result)
+
         return final_edges
 
     def triple_deduplicate(self):
@@ -1386,6 +1769,13 @@ class KTBuilder:
 
     def triple_deduplicate_semantic(self):
         """deduplicate triples in lv1 and lv2"""
+        
+        # Initialize edge dedup results collector
+        config = self._get_semantic_dedup_config()
+        save_intermediate = config and getattr(config, "save_intermediate_results", False)
+        if save_intermediate:
+            self._edge_dedup_results = []
+        
         new_graph = nx.MultiDiGraph()
 
         for node, node_data in self.graph.nodes(data=True):
@@ -1407,6 +1797,60 @@ class KTBuilder:
                 new_graph.add_edge(head, tail_id, **edge_data)
 
         self.graph = new_graph
+        
+        # Save edge deduplication intermediate results
+        if save_intermediate and hasattr(self, '_edge_dedup_results') and self._edge_dedup_results:
+            import datetime
+            timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+            output_path = getattr(config, "intermediate_results_path", None)
+            
+            if not output_path:
+                output_path = f"output/dedup_intermediate/{self.dataset_name}_edge_dedup_{timestamp}.json"
+            else:
+                # If path is a directory, add filename
+                if output_path.endswith('/'):
+                    output_path = f"{output_path}{self.dataset_name}_edge_dedup_{timestamp}.json"
+                else:
+                    # Add _edge suffix to distinguish from keyword dedup
+                    base, ext = os.path.splitext(output_path)
+                    output_path = f"{base}_edge_{timestamp}{ext}"
+            
+            # Ensure directory exists
+            output_dir = os.path.dirname(output_path)
+            if output_dir:
+                os.makedirs(output_dir, exist_ok=True)
+            
+            # Build complete results structure
+            edge_intermediate_results = {
+                "dataset": self.dataset_name,
+                "dedup_type": "edge_deduplication",
+                "config": {
+                    "threshold": getattr(config, "embedding_threshold", 0.85) or 0.85,
+                    "max_batch_size": max(1, int(getattr(config, "max_batch_size", 8) or 8)),
+                    "max_candidates": int(getattr(config, "max_candidates", 0) or 0),
+                },
+                "triples": self._edge_dedup_results,
+                "summary": {
+                    "total_triples": len(self._edge_dedup_results),
+                    "total_edges": sum(r["total_edges"] for r in self._edge_dedup_results),
+                    "total_clusters": sum(len(r["clustering"]["clusters"]) for r in self._edge_dedup_results),
+                    "total_llm_calls": sum(len(r["llm_groups"]) for r in self._edge_dedup_results),
+                    "total_merges": sum(len(r["final_merges"]) for r in self._edge_dedup_results),
+                    "total_edges_merged": sum(r["summary"]["edges_merged"] for r in self._edge_dedup_results),
+                    "final_total_edges": sum(r["summary"]["final_edges"] for r in self._edge_dedup_results)
+                }
+            }
+            
+            try:
+                with open(output_path, 'w', encoding='utf-8') as f:
+                    json.dump(edge_intermediate_results, f, indent=2, ensure_ascii=False)
+                logger.info(f"Saved edge deduplication intermediate results to: {output_path}")
+                logger.info(f"Summary: {edge_intermediate_results['summary']}")
+            except Exception as e:
+                logger.warning(f"Failed to save edge deduplication intermediate results: {e}")
+            
+            # Clean up
+            del self._edge_dedup_results
 
 
     def format_output(self) -> List[Dict[str, Any]]:
