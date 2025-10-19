@@ -1,0 +1,33 @@
+# 示例配置：启用去重中间结果保存
+# 基于 base_config.yaml，添加了中间结果保存配置
+
+construction:
+  semantic_dedup:
+    enabled: true
+    embedding_threshold: 0.85
+    max_batch_size: 8
+    max_candidates: 50
+    use_embeddings: true
+    prompt_type: general
+    
+    # ===== 中间结果保存配置 =====
+    # 启用中间结果保存（调试和分析时使用）
+    save_intermediate_results: true
+    
+    # 保存路径（可选，不指定则自动生成）
+    # 自动生成格式：output/dedup_intermediate/{dataset_name}_dedup_{timestamp}.json
+    intermediate_results_path: "output/dedup_intermediate/"
+    
+    # 提示：
+    # 1. 生产环境建议设置为 false 以提高性能
+    # 2. 大规模数据集可能产生较大的 JSON 文件
+    # 3. 中间结果包含原始文本，注意数据隐私
+
+# 使用方法:
+# 1. 复制此配置或在你的配置文件中添加 save_intermediate_results: true
+# 2. 运行知识图谱构建流程
+# 3. 在 output/dedup_intermediate/ 目录查看生成的 JSON 文件
+# 4. 使用 example_analyze_dedup_results.py 分析结果
+#
+# 示例：
+#   python example_analyze_dedup_results.py output/dedup_intermediate/hotpot_dedup_20251019_120000.json

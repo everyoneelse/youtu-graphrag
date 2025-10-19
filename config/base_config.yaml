@@ -22,6 +22,10 @@ construction:
     max_candidates: 50
     use_embeddings: true
     prompt_type: general
+    # Save intermediate results for debugging and analysis
+    save_intermediate_results: false
+    # Path to save intermediate results (optional, auto-generated if not specified)
+    # intermediate_results_path: "output/dedup_intermediate/"
 
 datasets:
   hotpot:
