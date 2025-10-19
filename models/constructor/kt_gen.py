@@ -693,6 +693,20 @@ class KTBuilder:
         return summaries
 
     def _cluster_candidate_tails(self, descriptions: list, threshold: float) -> list:
+        """
+        Cluster candidate descriptions using Average Linkage hierarchical clustering.
+        
+        This uses sklearn's AgglomerativeClustering with average linkage to ensure
+        that items are only clustered together if they have high average similarity
+        to all members of the cluster, avoiding the chaining effect of single linkage.
+        
+        Args:
+            descriptions: List of text descriptions to cluster
+            threshold: Similarity threshold (cosine similarity, 0-1)
+            
+        Returns:
+            List of clusters, where each cluster is a list of indices
+        """
         if len(descriptions) <= 1:
             return [list(range(len(descriptions)))]
 
@@ -706,21 +720,66 @@ class KTBuilder:
             logger.warning("Failed to encode descriptions for semantic dedup: %s: %s", type(e).__name__, e)
             return [list(range(len(descriptions)))]
 
-        clusters: list = []
-        for idx, vector in enumerate(embeddings):
-            vector_arr = np.asarray(vector, dtype=float)
-            assigned = False
-            for cluster in clusters:
-                if any(float(np.dot(existing_vec, vector_arr)) >= threshold for existing_vec in cluster["vectors"]):
-                    cluster["members"].append(idx)
-                    cluster["vectors"].append(vector_arr)
-                    assigned = True
-                    break
+        try:
+            from sklearn.cluster import AgglomerativeClustering
+            
+            # Convert embeddings to numpy array
+            embeddings = np.asarray(embeddings, dtype=float)
+            
+            # Compute cosine similarity matrix (embeddings are already normalized)
+            similarity_matrix = np.dot(embeddings, embeddings.T)
+            
+            # Convert similarity to distance: distance = 1 - similarity
+            distance_matrix = 1 - similarity_matrix
+            
+            # Ensure distance matrix is symmetric and has zero diagonal
+            distance_matrix = (distance_matrix + distance_matrix.T) / 2
+            np.fill_diagonal(distance_matrix, 0)
+            
+            # Convert similarity threshold to distance threshold
+            distance_threshold = 1 - threshold
+            
+            # Apply AgglomerativeClustering with average linkage
+            clustering = AgglomerativeClustering(
+                n_clusters=None,  # Don't specify number of clusters
+                distance_threshold=distance_threshold,  # Use distance threshold instead
+                linkage='average',  # Average linkage: mean distance between all pairs
+                metric='precomputed'  # Use our precomputed distance matrix
+            )
+            
+            labels = clustering.fit_predict(distance_matrix)
+            
+            # Convert cluster labels to list of index lists
+            clusters_dict = {}
+            for idx, label in enumerate(labels):
+                if label not in clusters_dict:
+                    clusters_dict[label] = []
+                clusters_dict[label].append(idx)
+            
+            return list(clusters_dict.values())
+            
+        except ImportError:
+            logger.warning("sklearn not available, falling back to simple single-linkage clustering")
+            # Fallback to original implementation if sklearn is not available
+            clusters: list = []
+            for idx, vector in enumerate(embeddings):
+                vector_arr = np.asarray(vector, dtype=float)
+                assigned = False
+                for cluster in clusters:
+                    if any(float(np.dot(existing_vec, vector_arr)) >= threshold for existing_vec in cluster["vectors"]):
+                        cluster["members"].append(idx)
+                        cluster["vectors"].append(vector_arr)
+                        assigned = True
+                        break
 
-            if not assigned:
-                clusters.append({"members": [idx], "vectors": [vector_arr]})
+                if not assigned:
+                    clusters.append({"members": [idx], "vectors": [vector_arr]})
 
-        return [cluster["members"] for cluster in clusters]
+            return [cluster["members"] for cluster in clusters]
+        except Exception as e:
+            logger.warning("Clustering failed: %s: %s, using fallback", type(e).__name__, e)
+            # If anything goes wrong, put all items in one cluster
+            return [list(range(len(descriptions)))]
 
     def _build_semantic_dedup_prompt(
         self,
