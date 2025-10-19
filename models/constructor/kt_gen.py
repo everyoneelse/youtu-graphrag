@@ -1196,6 +1196,12 @@ class KTBuilder:
                 if not cluster_indices:
                     continue
 
+                # Optimization: Skip LLM call for single-item clusters
+                # No semantic grouping needed when there's only one candidate
+                if len(cluster_indices) == 1:
+                    processed_indices.add(cluster_indices[0])
+                    continue
+
                 overflow_indices = []
                 if max_candidates and len(cluster_indices) > max_candidates:
                     overflow_indices = cluster_indices[max_candidates:]
