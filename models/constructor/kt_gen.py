@@ -920,7 +920,7 @@ class KTBuilder:
 
         return summaries
 
-    def _cluster_candidate_tails_with_llm(self, head_text: str, relation: str, descriptions: list, max_batch_size: int = 30) -> list:
+    def _cluster_candidate_tails_with_llm(self, head_text: str, relation: str, descriptions: list, max_batch_size: int = 30) -> tuple:
         """
         Cluster candidate tails using LLM for initial grouping.
         
@@ -934,13 +934,24 @@ class KTBuilder:
             max_batch_size: Maximum number of tails to send to LLM at once
             
         Returns:
-            List of clusters, where each cluster is a list of indices
+            Tuple of (clusters, cluster_details):
+                - clusters: List of clusters, where each cluster is a list of indices
+                - cluster_details: List of dicts with LLM's clustering rationale
         """
         if len(descriptions) <= 1:
-            return [list(range(len(descriptions)))]
+            single_cluster = [list(range(len(descriptions)))]
+            single_details = [{
+                "cluster_id": 0,
+                "members": list(range(len(descriptions))),
+                "description": "Single item, no clustering needed",
+                "llm_rationale": ""
+            }]
+            return single_cluster, single_details
         
         # If there are too many tails, batch them
         all_clusters = []
+        all_details = []
+        
         if len(descriptions) > max_batch_size:
             # Process in batches
             for batch_start in range(0, len(descriptions), max_batch_size):
@@ -948,9 +959,10 @@ class KTBuilder:
                 batch_descriptions = descriptions[batch_start:batch_end]
                 batch_offset = batch_start
                 
-                batch_clusters = self._llm_cluster_batch(head_text, relation, batch_descriptions, batch_offset)
+                batch_clusters, batch_details = self._llm_cluster_batch(head_text, relation, batch_descriptions, batch_offset)
                 all_clusters.extend(batch_clusters)
-            return all_clusters
+                all_details.extend(batch_details)
+            return all_clusters, all_details
         else:
             # Process all at once
             return self._llm_cluster_batch(head_text, relation, descriptions, 0)
@@ -1629,16 +1641,22 @@ class KTBuilder:
             # Use simplified descriptions for clustering
             candidate_descriptions = [entry["description_for_clustering"] for entry in entries]
             
+            # Initialize clustering details storage
+            llm_clustering_details = None
+            
             if clustering_method == "llm":
                 # Use LLM for initial clustering
                 logger.debug("Using LLM-based clustering for community '%s' with %d keywords", head_text, len(entries))
-                initial_clusters = self._cluster_candidate_tails_with_llm(head_text, "keyword_of", candidate_descriptions, llm_clustering_batch_size)
+                initial_clusters, llm_clustering_details = self._cluster_candidate_tails_with_llm(head_text, "keyword_of", candidate_descriptions, llm_clustering_batch_size)
             else:
                 # Use embedding-based clustering
                 initial_clusters = self._cluster_candidate_tails(candidate_descriptions, threshold)
 
             # Save clustering results
             if save_intermediate:
+                # Add clustering method info
+                community_result["clustering"]["method"] = clustering_method
+                
                 for cluster_idx, cluster in enumerate(initial_clusters):
                     cluster_info = {
                         "cluster_id": cluster_idx,
@@ -1653,6 +1671,13 @@ class KTBuilder:
                             for idx in cluster if 0 <= idx < len(entries)
                         ]
                     }
+                    
+                    # Add LLM clustering details if available
+                    if llm_clustering_details and cluster_idx < len(llm_clustering_details):
+                        detail = llm_clustering_details[cluster_idx]
+                        cluster_info["llm_description"] = detail.get("description", "")
+                        cluster_info["llm_rationale"] = detail.get("llm_rationale", "")
+                    
                     community_result["clustering"]["clusters"].append(cluster_info)
 
             processed_indices: set = set()
@@ -1919,10 +1944,13 @@ class KTBuilder:
         # Use simplified descriptions for clustering (without context, chunk_id, etc.)
         candidate_descriptions = [entry["description_for_clustering"] for entry in entries]
         
+        # Initialize clustering details storage
+        llm_clustering_details = None
+        
         if clustering_method == "llm":
             # Use LLM for initial clustering (more accurate but slower)
             logger.debug("Using LLM-based clustering for head '%s' relation '%s' with %d tails", head_text, relation, len(entries))
-            initial_clusters = self._cluster_candidate_tails_with_llm(head_text, relation, candidate_descriptions, llm_clustering_batch_size)
+            initial_clusters, llm_clustering_details = self._cluster_candidate_tails_with_llm(head_text, relation, candidate_descriptions, llm_clustering_batch_size)
         else:
             # Use embedding-based clustering (faster but less accurate)
             initial_clusters = self._cluster_candidate_tails(candidate_descriptions, threshold)
@@ -1959,6 +1987,9 @@ class KTBuilder:
 
         # Save clustering results
         if save_intermediate:
+            # Add clustering method info
+            edge_dedup_result["clustering"]["method"] = clustering_method
+            
             for cluster_idx, cluster in enumerate(initial_clusters):
                 cluster_info = {
                     "cluster_id": cluster_idx,
@@ -1973,6 +2004,13 @@ class KTBuilder:
                         for idx in cluster if 0 <= idx < len(entries)
                     ]
                 }
+                
+                # Add LLM clustering details if available
+                if llm_clustering_details and cluster_idx < len(llm_clustering_details):
+                    detail = llm_clustering_details[cluster_idx]
+                    cluster_info["llm_description"] = detail.get("description", "")
+                    cluster_info["llm_rationale"] = detail.get("llm_rationale", "")
+                
                 edge_dedup_result["clustering"]["clusters"].append(cluster_info)
 
         final_edges: list = []
