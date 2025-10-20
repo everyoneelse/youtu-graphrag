@@ -1,0 +1,57 @@
+# Example configuration with LLM-based clustering for tail deduplication
+# This configuration demonstrates how to use LLM instead of embeddings for initial clustering
+
+construction:
+  mode: noagent  # or "agent"
+  max_workers: 32
+  datasets_no_chunk: []
+  chunk_size: 1000
+  overlap: 200
+
+  semantic_dedup:
+    enabled: true
+    
+    # CLUSTERING METHOD CONFIGURATION
+    # Use "llm" for more accurate but slower clustering
+    # Use "embedding" for faster but potentially less accurate clustering
+    clustering_method: llm
+    
+    # Embedding-based clustering parameters (used when clustering_method = "embedding")
+    embedding_threshold: 0.85
+    use_embeddings: true
+    
+    # LLM-based clustering parameters (used when clustering_method = "llm")
+    # Maximum number of tails to send to LLM for clustering in one call
+    llm_clustering_batch_size: 30
+    
+    # Common parameters for both methods
+    max_batch_size: 8  # Max tails per LLM call for deduplication (after clustering)
+    max_candidates: 50  # Max tails to consider per (head, relation) pair
+    
+    prompt_type: general
+    
+    # Save intermediate results for debugging and analysis
+    save_intermediate_results: true
+    intermediate_results_path: "output/dedup_intermediate/"
+
+datasets:
+  demo:
+    corpus_path: data/demo/demo_corpus.json
+    qa_path: data/demo/demo.json
+    schema_path: schemas/demo.json
+    graph_output: output/graphs/demo_new.json
+
+llm:
+  api_key: ${LLM_API_KEY}
+  api_base: ${LLM_API_BASE}
+  model: ${LLM_MODEL}
+  temperature: 0.0
+  max_tokens: 4096
+  timeout: 60
+
+embeddings:
+  model_name: all-MiniLM-L6-v2
+
+tree_comm:
+  embedding_model: all-MiniLM-L6-v2
+  struct_weight: 0.5

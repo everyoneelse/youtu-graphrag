@@ -31,12 +31,16 @@ class TriggersConfig:
 class SemanticDedupConfig:
     """Semantic deduplication configuration"""
     enabled: bool = False
+    clustering_method: str = "embedding"  # "embedding" or "llm"
     embedding_threshold: float = 0.85
     max_batch_size: int = 8
     max_candidates: int = 50
+    llm_clustering_batch_size: int = 30
     use_embeddings: bool = True
     embedding_model: str = ""
     prompt_type: str = "general"
+    save_intermediate_results: bool = False
+    intermediate_results_path: str = ""
 
 
 @dataclass

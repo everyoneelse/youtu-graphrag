@@ -142,6 +142,54 @@ DEFAULT_ATTRIBUTE_DEDUP_PROMPT = (
     "}}\n"
 )
 
+DEFAULT_LLM_CLUSTERING_PROMPT = (
+    "You are a knowledge graph curation assistant performing initial clustering of tail entities.\n"
+    "All listed tail entities share the same head entity and relation.\n\n"
+    "Head entity: {head}\n"
+    "Relation: {relation}\n\n"
+    "Candidate tails:\n"
+    "{candidates}\n\n"
+    "TASK: Group these tails into PRELIMINARY CLUSTERS based on semantic similarity.\n"
+    "This is an initial clustering step - your goal is to group tails that MIGHT refer to the same entity.\n\n"
+    "CLUSTERING PRINCIPLE:\n"
+    "Group tails together if they are:\n"
+    "1. POTENTIALLY COREFERENT: Could refer to the same entity (e.g., 'NYC' and 'New York City')\n"
+    "2. SEMANTICALLY VERY SIMILAR: Very similar concepts that need further examination\n"
+    "3. LEXICALLY RELATED: Different expressions of potentially the same thing\n\n"
+    "KEEP SEPARATE if tails are:\n"
+    "1. CLEARLY DISTINCT: Obviously different entities (e.g., 'Paris' vs 'London')\n"
+    "2. SEMANTICALLY DIFFERENT: Different concepts (e.g., 'color' vs 'size')\n"
+    "3. UNRELATED: No clear semantic connection\n\n"
+    "CLUSTERING GUIDELINES:\n"
+    "- Be INCLUSIVE in this initial clustering - it's better to over-cluster than under-cluster\n"
+    "- Subsequent LLM refinement will separate false positives within clusters\n"
+    "- Focus on semantic similarity, not just string matching\n"
+    "- Group by meaning/concept rather than exact wording\n"
+    "- Each tail must appear in exactly ONE cluster\n\n"
+    "EXAMPLES:\n"
+    "✓ Cluster together: ['New York', 'NYC', 'New York City'] - potential coreference\n"
+    "✓ Cluster together: ['United States', 'USA', 'US', 'America'] - potential coreference\n"
+    "✓ Keep separate: ['Paris', 'London', 'Berlin'] - clearly distinct cities\n"
+    "✓ Keep separate: ['red', 'large', 'heavy'] - different property types\n\n"
+    "OUTPUT REQUIREMENTS:\n"
+    "1. Every input index must appear in exactly one cluster\n"
+    "2. Each cluster should contain semantically similar tails\n"
+    "3. Provide a brief description for each cluster explaining the grouping rationale\n\n"
+    "Respond with strict JSON using this schema:\n"
+    "{{\n"
+    "  \"clusters\": [\n"
+    "    {{\n"
+    "      \"members\": [1, 3, 5],\n"
+    "      \"description\": \"Brief explanation of why these tails are clustered together\"\n"
+    "    }},\n"
+    "    {{\n"
+    "      \"members\": [2],\n"
+    "      \"description\": \"This tail is semantically distinct from others\"\n"
+    "    }}\n"
+    "  ]\n"
+    "}}\n"
+)
+
 class KTBuilder:
     def __init__(self, dataset_name, schema_path=None, mode=None, config=None):
         if config is None:
@@ -824,6 +872,125 @@ class KTBuilder:
 
         return summaries
 
+    def _cluster_candidate_tails_with_llm(self, head_text: str, relation: str, descriptions: list, max_batch_size: int = 30) -> list:
+        """
+        Cluster candidate tails using LLM for initial grouping.
+        
+        This method uses LLM to perform semantic clustering based on tail descriptions only,
+        without context. It's more accurate than embedding-based clustering for complex cases.
+        
+        Args:
+            head_text: Description of the head entity
+            relation: The relation name
+            descriptions: List of tail descriptions to cluster
+            max_batch_size: Maximum number of tails to send to LLM at once
+            
+        Returns:
+            List of clusters, where each cluster is a list of indices
+        """
+        if len(descriptions) <= 1:
+            return [list(range(len(descriptions)))]
+        
+        # If there are too many tails, batch them
+        all_clusters = []
+        if len(descriptions) > max_batch_size:
+            # Process in batches
+            for batch_start in range(0, len(descriptions), max_batch_size):
+                batch_end = min(batch_start + max_batch_size, len(descriptions))
+                batch_descriptions = descriptions[batch_start:batch_end]
+                batch_offset = batch_start
+                
+                batch_clusters = self._llm_cluster_batch(head_text, relation, batch_descriptions, batch_offset)
+                all_clusters.extend(batch_clusters)
+            return all_clusters
+        else:
+            # Process all at once
+            return self._llm_cluster_batch(head_text, relation, descriptions, 0)
+    
+    def _llm_cluster_batch(self, head_text: str, relation: str, descriptions: list, index_offset: int = 0) -> list:
+        """
+        Use LLM to cluster a batch of tail descriptions.
+        
+        Args:
+            head_text: Description of the head entity
+            relation: The relation name
+            descriptions: List of tail descriptions to cluster
+            index_offset: Offset to add to indices (for batched processing)
+            
+        Returns:
+            List of clusters with adjusted indices
+        """
+        # Build candidate list for prompt
+        candidate_blocks = []
+        for idx, description in enumerate(descriptions, start=1):
+            candidate_blocks.append(f"[{idx}] {description}")
+        
+        candidates_text = "\n".join(candidate_blocks) if candidate_blocks else "[No candidates]"
+        
+        # Build prompt
+        prompt = DEFAULT_LLM_CLUSTERING_PROMPT.format(
+            head=head_text or "[UNKNOWN_HEAD]",
+            relation=relation or "[UNKNOWN_RELATION]",
+            candidates=candidates_text
+        )
+        
+        # Call LLM
+        try:
+            response = self.llm_client.call_api(prompt)
+        except Exception as e:
+            logger.warning("LLM clustering call failed: %s: %s, falling back to single cluster", type(e).__name__, e)
+            # Fallback: put all items in one cluster
+            return [[idx + index_offset for idx in range(len(descriptions))]]
+        
+        # Parse response
+        try:
+            parsed = json_repair.loads(response)
+        except Exception:
+            try:
+                parsed = json.loads(response)
+            except Exception as parse_error:
+                logger.warning("Failed to parse LLM clustering response: %s: %s, using fallback", type(parse_error).__name__, parse_error)
+                return [[idx + index_offset for idx in range(len(descriptions))]]
+        
+        clusters_raw = parsed.get("clusters") if isinstance(parsed, dict) else None
+        if not isinstance(clusters_raw, list):
+            logger.warning("LLM clustering response missing 'clusters' field, using fallback")
+            return [[idx + index_offset for idx in range(len(descriptions))]]
+        
+        # Convert LLM output to cluster format
+        clusters = []
+        assigned = set()
+        
+        for cluster_info in clusters_raw:
+            if not isinstance(cluster_info, dict):
+                continue
+            
+            members_raw = cluster_info.get("members")
+            if not isinstance(members_raw, list):
+                continue
+            
+            # Convert 1-based indices to 0-based and add offset
+            cluster_members = []
+            for member in members_raw:
+                try:
+                    member_idx = int(member) - 1  # Convert to 0-based
+                except (TypeError, ValueError):
+                    continue
+                if 0 <= member_idx < len(descriptions):
+                    adjusted_idx = member_idx + index_offset
+                    cluster_members.append(adjusted_idx)
+                    assigned.add(member_idx)
+            
+            if cluster_members:
+                clusters.append(cluster_members)
+        
+        # Add unassigned items as singleton clusters
+        for idx in range(len(descriptions)):
+            if idx not in assigned:
+                clusters.append([idx + index_offset])
+        
+        return clusters
+
     def _cluster_candidate_tails(self, descriptions: list, threshold: float) -> list:
         """
         Cluster candidate descriptions using Average Linkage hierarchical clustering.
@@ -1383,9 +1550,20 @@ class KTBuilder:
                         "source_entity_name": entry.get("source_entity_name")
                     })
 
-            # Use simplified descriptions for vector-based clustering
+            # Choose clustering method based on configuration
+            clustering_method = getattr(config, "clustering_method", "embedding")
+            llm_clustering_batch_size = getattr(config, "llm_clustering_batch_size", 30)
+            
+            # Use simplified descriptions for clustering
             candidate_descriptions = [entry["description_for_clustering"] for entry in entries]
-            initial_clusters = self._cluster_candidate_tails(candidate_descriptions, threshold)
+            
+            if clustering_method == "llm":
+                # Use LLM for initial clustering
+                logger.debug("Using LLM-based clustering for community '%s' with %d keywords", head_text, len(entries))
+                initial_clusters = self._cluster_candidate_tails_with_llm(head_text, "keyword_of", candidate_descriptions, llm_clustering_batch_size)
+            else:
+                # Use embedding-based clustering
+                initial_clusters = self._cluster_candidate_tails(candidate_descriptions, threshold)
 
             # Save clustering results
             if save_intermediate:
@@ -1661,10 +1839,21 @@ class KTBuilder:
 
         head_context_lines = self._summarize_contexts(list(head_chunk_ids))
 
+        # Choose clustering method based on configuration
+        clustering_method = getattr(config, "clustering_method", "embedding")
         threshold = getattr(config, "embedding_threshold", 0.85) or 0.85
-        # Use simplified descriptions for vector-based clustering
+        llm_clustering_batch_size = getattr(config, "llm_clustering_batch_size", 30)
+        
+        # Use simplified descriptions for clustering (without context, chunk_id, etc.)
         candidate_descriptions = [entry["description_for_clustering"] for entry in entries]
-        initial_clusters = self._cluster_candidate_tails(candidate_descriptions, threshold)
+        
+        if clustering_method == "llm":
+            # Use LLM for initial clustering (more accurate but slower)
+            logger.debug("Using LLM-based clustering for head '%s' relation '%s' with %d tails", head_text, relation, len(entries))
+            initial_clusters = self._cluster_candidate_tails_with_llm(head_text, relation, candidate_descriptions, llm_clustering_batch_size)
+        else:
+            # Use embedding-based clustering (faster but less accurate)
+            initial_clusters = self._cluster_candidate_tails(candidate_descriptions, threshold)
 
         max_batch_size = max(1, int(getattr(config, "max_batch_size", 8) or 8))
         max_candidates = int(getattr(config, "max_candidates", 0) or 0)

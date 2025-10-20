@@ -17,9 +17,15 @@ construction:
     struct_weight: 0.3
   semantic_dedup:
     enabled: false
+    # Clustering method for initial tail grouping: "embedding" or "llm"
+    # - embedding: Fast, uses sentence embeddings + hierarchical clustering
+    # - llm: More accurate, uses LLM to understand semantic similarity
+    clustering_method: embedding
     embedding_threshold: 0.85
     max_batch_size: 8
     max_candidates: 50
+    # Maximum number of tails to send to LLM for clustering at once (only for llm clustering)
+    llm_clustering_batch_size: 30
     use_embeddings: true
     prompt_type: general
     # Save intermediate results for debugging and analysis
