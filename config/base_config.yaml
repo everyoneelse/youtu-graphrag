@@ -32,6 +32,20 @@ construction:
     save_intermediate_results: false
     # Path to save intermediate results (optional, auto-generated if not specified)
     # intermediate_results_path: "output/dedup_intermediate/"
+    
+    # Dual LLM configuration: use different models for clustering and deduplication
+    # If not specified, both will use the default LLM configuration from environment variables
+    # This allows you to use a cheaper/faster model for clustering and a more powerful one for dedup
+    clustering_llm:
+      # model: "gpt-3.5-turbo"  # Cheaper model for clustering
+      # base_url: "https://api.openai.com/v1"
+      # api_key: "${CLUSTERING_LLM_API_KEY}"
+      # temperature: 0.3
+    dedup_llm:
+      # model: "gpt-4"  # More powerful model for final deduplication
+      # base_url: "https://api.openai.com/v1"
+      # api_key: "${DEDUP_LLM_API_KEY}"
+      # temperature: 0.0
 
 datasets:
   hotpot:

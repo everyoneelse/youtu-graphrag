@@ -1,0 +1,112 @@
+# Example configuration with dual LLM support for semantic deduplication
+# This allows using different models for clustering and deduplication tasks
+
+construction:
+  mode: noagent
+  max_workers: 32
+  datasets_no_chunk: []
+  chunk_size: 1000
+  overlap: 200
+
+  semantic_dedup:
+    enabled: true
+    
+    # Use LLM for clustering
+    clustering_method: llm
+    
+    # Embedding parameters (used when clustering_method = "embedding")
+    embedding_threshold: 0.85
+    use_embeddings: true
+    
+    # Batch sizes
+    max_batch_size: 8  # For deduplication
+    llm_clustering_batch_size: 30  # For clustering
+    max_candidates: 50
+    
+    prompt_type: general
+    
+    # Save intermediate results
+    save_intermediate_results: true
+    intermediate_results_path: "output/dedup_intermediate/"
+    
+    # ============================================================
+    # DUAL LLM CONFIGURATION
+    # ============================================================
+    # Use a cheaper/faster model for initial clustering
+    # and a more powerful model for final deduplication
+    
+    clustering_llm:
+      # Example: Use GPT-3.5-turbo for clustering (cheaper, faster)
+      model: "gpt-3.5-turbo"
+      base_url: "https://api.openai.com/v1"
+      api_key: "${CLUSTERING_LLM_API_KEY}"  # Or use direct API key
+      temperature: 0.3
+    
+    dedup_llm:
+      # Example: Use GPT-4 for deduplication (more accurate)
+      model: "gpt-4"
+      base_url: "https://api.openai.com/v1"
+      api_key: "${DEDUP_LLM_API_KEY}"  # Or use direct API key
+      temperature: 0.0
+    
+    # ============================================================
+    # ALTERNATIVE: Use DeepSeek models
+    # ============================================================
+    # clustering_llm:
+    #   model: "deepseek-chat"
+    #   base_url: "https://api.deepseek.com"
+    #   api_key: "${CLUSTERING_LLM_API_KEY}"
+    #   temperature: 0.3
+    # 
+    # dedup_llm:
+    #   model: "deepseek-chat"
+    #   base_url: "https://api.deepseek.com"
+    #   api_key: "${DEDUP_LLM_API_KEY}"
+    #   temperature: 0.0
+    
+    # ============================================================
+    # ALTERNATIVE: Use same model but different temperatures
+    # ============================================================
+    # clustering_llm:
+    #   model: "gpt-4"
+    #   base_url: "https://api.openai.com/v1"
+    #   api_key: "${LLM_API_KEY}"
+    #   temperature: 0.5  # Higher temperature for more creative clustering
+    # 
+    # dedup_llm:
+    #   model: "gpt-4"
+    #   base_url: "https://api.openai.com/v1"
+    #   api_key: "${LLM_API_KEY}"
+    #   temperature: 0.0  # Lower temperature for precise deduplication
+    
+    # ============================================================
+    # ALTERNATIVE: Use default LLM for both (leave configs empty)
+    # ============================================================
+    # If clustering_llm and dedup_llm are not specified or have empty model,
+    # the system will use the default LLM from environment variables:
+    # - LLM_MODEL
+    # - LLM_BASE_URL
+    # - LLM_API_KEY
+
+datasets:
+  demo:
+    corpus_path: data/demo/demo_corpus.json
+    qa_path: data/demo/demo.json
+    schema_path: schemas/demo.json
+    graph_output: output/graphs/demo_new.json
+
+# Default LLM configuration (used for construction and as fallback)
+# These are read from environment variables
+# LLM_MODEL: The default model name
+# LLM_BASE_URL: The default API base URL
+# LLM_API_KEY: The default API key
+
+embeddings:
+  model_name: all-MiniLM-L6-v2
+  batch_size: 32
+  device: cpu
+  max_length: 512
+
+tree_comm:
+  embedding_model: all-MiniLM-L6-v2
+  struct_weight: 0.5

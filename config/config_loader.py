@@ -28,6 +28,14 @@ class TriggersConfig:
     mode: str = "agent"  # "agent" or "noagent"
 
 @dataclass
+class LLMConfig:
+    """LLM configuration for a specific task"""
+    model: str = ""
+    base_url: str = ""
+    api_key: str = ""
+    temperature: float = 0.3
+
+@dataclass
 class SemanticDedupConfig:
     """Semantic deduplication configuration"""
     enabled: bool = False
@@ -41,6 +49,15 @@ class SemanticDedupConfig:
     prompt_type: str = "general"
     save_intermediate_results: bool = False
     intermediate_results_path: str = ""
+    # Dual LLM support: separate models for clustering and deduplication
+    clustering_llm: LLMConfig = None
+    dedup_llm: LLMConfig = None
+    
+    def __post_init__(self):
+        if self.clustering_llm is None:
+            self.clustering_llm = LLMConfig()
+        if self.dedup_llm is None:
+            self.dedup_llm = LLMConfig()
 
 
 @dataclass
@@ -203,8 +220,19 @@ class ConfigManager:
         construction_data = self.config_data.get("construction", {})
         tree_comm_data = construction_data.pop("tree_comm", {})
         semantic_dedup_data = construction_data.pop("semantic_dedup", {})
+        
+        # Parse LLM configs within semantic_dedup
+        clustering_llm_data = semantic_dedup_data.pop("clustering_llm", {})
+        dedup_llm_data = semantic_dedup_data.pop("dedup_llm", {})
+        
         self.construction = ConstructionConfig(**construction_data)
         self.construction.semantic_dedup = SemanticDedupConfig(**semantic_dedup_data)
+        
+        # Set LLM configs
+        if clustering_llm_data:
+            self.construction.semantic_dedup.clustering_llm = LLMConfig(**clustering_llm_data)
+        if dedup_llm_data:
+            self.construction.semantic_dedup.dedup_llm = LLMConfig(**dedup_llm_data)
         self.tree_comm = TreeCommConfig(**tree_comm_data)
         
         retrieval_data = self.config_data.get("retrieval", {})

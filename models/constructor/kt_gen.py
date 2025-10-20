@@ -203,10 +203,58 @@ class KTBuilder:
         self.datasets_no_chunk = config.construction.datasets_no_chunk
         self.token_len = 0
         self.lock = threading.Lock()
-        self.llm_client = call_llm_api.LLMCompletionCall()
+        
+        # Initialize LLM clients
+        self._init_llm_clients()
+        
         self.all_chunks = {}
         self.mode = mode or config.construction.mode
         self._semantic_dedup_embedder = None
+    
+    def _init_llm_clients(self):
+        """Initialize LLM clients for different tasks."""
+        # Default LLM client (for general construction tasks)
+        self.llm_client = call_llm_api.LLMCompletionCall()
+        
+        # Get semantic dedup config
+        semantic_config = getattr(self.config.construction, "semantic_dedup", None)
+        
+        if semantic_config:
+            # Clustering LLM client
+            clustering_llm_config = getattr(semantic_config, "clustering_llm", None)
+            if clustering_llm_config and clustering_llm_config.model:
+                # Use custom clustering LLM
+                self.clustering_llm_client = call_llm_api.LLMCompletionCall(
+                    model=clustering_llm_config.model or None,
+                    base_url=clustering_llm_config.base_url or None,
+                    api_key=clustering_llm_config.api_key or None,
+                    temperature=clustering_llm_config.temperature
+                )
+                logger.info(f"Initialized custom clustering LLM: {clustering_llm_config.model}")
+            else:
+                # Use default LLM for clustering
+                self.clustering_llm_client = self.llm_client
+                logger.info("Using default LLM for clustering")
+            
+            # Deduplication LLM client
+            dedup_llm_config = getattr(semantic_config, "dedup_llm", None)
+            if dedup_llm_config and dedup_llm_config.model:
+                # Use custom dedup LLM
+                self.dedup_llm_client = call_llm_api.LLMCompletionCall(
+                    model=dedup_llm_config.model or None,
+                    base_url=dedup_llm_config.base_url or None,
+                    api_key=dedup_llm_config.api_key or None,
+                    temperature=dedup_llm_config.temperature
+                )
+                logger.info(f"Initialized custom deduplication LLM: {dedup_llm_config.model}")
+            else:
+                # Use default LLM for deduplication
+                self.dedup_llm_client = self.llm_client
+                logger.info("Using default LLM for deduplication")
+        else:
+            # No semantic dedup config, use default for both
+            self.clustering_llm_client = self.llm_client
+            self.dedup_llm_client = self.llm_client
 
     def load_schema(self, schema_path) -> Dict[str, Any]:
         try:
@@ -934,9 +982,9 @@ class KTBuilder:
             candidates=candidates_text
         )
         
-        # Call LLM
+        # Call LLM (use clustering LLM client)
         try:
-            response = self.llm_client.call_api(prompt)
+            response = self.clustering_llm_client.call_api(prompt)
         except Exception as e:
             logger.warning("LLM clustering call failed: %s: %s, falling back to single cluster", type(e).__name__, e)
             # Fallback: put all items in one cluster
@@ -1138,7 +1186,8 @@ class KTBuilder:
         prompt = self._build_semantic_dedup_prompt(head_text, relation, head_context_lines, batch_entries)
 
         try:
-            response = self.llm_client.call_api(prompt)
+            # Use deduplication LLM client for semantic grouping
+            response = self.dedup_llm_client.call_api(prompt)
         except Exception as e:
             logger.warning("Semantic dedup LLM call failed: %s: %s", type(e).__name__, e)
             return []
