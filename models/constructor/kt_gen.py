@@ -738,6 +738,35 @@ class KTBuilder:
 
         return f"{label}:{node_id}"
 
+    def _describe_node_for_clustering(self, node_id: str) -> str:
+        """Generate a simplified description for semantic clustering.
+        
+        This method excludes chunk_id and label information to focus on
+        the semantic content of the node for better clustering results.
+        """
+        node_data = self.graph.nodes.get(node_id, {})
+        properties = node_data.get("properties", {})
+
+        if isinstance(properties, dict):
+            name = properties.get("name") or properties.get("title")
+            extras = []
+            for key, value in properties.items():
+                # Skip name, chunk_id, and empty values
+                if key == "name" or key == "chunk id" or key == "chunk_id" or value in (None, ""):
+                    continue
+                extras.append(f"{key}: {value}")
+
+            extra_text = ", ".join(extras)
+            if name and extra_text:
+                return f"{name} ({extra_text})"
+            if name:
+                return name
+            if extra_text:
+                return extra_text
+
+        # Fallback to node name only
+        return properties.get("name") or properties.get("title") or node_id
+
     def _collect_node_chunk_ids(self, node_id: str) -> list:
         node_data = self.graph.nodes.get(node_id, {})
         properties = node_data.get("properties", {}) if isinstance(node_data, dict) else {}
@@ -1290,29 +1319,38 @@ class KTBuilder:
 
                 chunk_ids = set(self._collect_node_chunk_ids(kw_id))
                 source_entity_id = keyword_mapping.get(kw_id)
-                source_entity_name = None
+                source_entity_name_full = None
+                source_entity_name_simple = None
 
                 if source_entity_id and source_entity_id in self.graph:
-                    source_entity_name = self._describe_node(source_entity_id)
+                    source_entity_name_full = self._describe_node(source_entity_id)  # Full for LLM
+                    source_entity_name_simple = self._describe_node_for_clustering(source_entity_id)  # Simple for clustering
                     for chunk_id in self._collect_node_chunk_ids(source_entity_id):
                         if chunk_id:
                             chunk_ids.add(chunk_id)
 
-                description = raw_name
-                if source_entity_name and source_entity_name not in description:
-                    description = f"{raw_name} (from {source_entity_name})"
+                # Full description for LLM prompt
+                description_full = raw_name
+                if source_entity_name_full and source_entity_name_full not in description_full:
+                    description_full = f"{raw_name} (from {source_entity_name_full})"
+                
+                # Simplified description for vector clustering
+                description_simple = raw_name
+                if source_entity_name_simple and source_entity_name_simple not in description_simple:
+                    description_simple = f"{raw_name} (from {source_entity_name_simple})"
 
                 context_summaries = self._summarize_contexts(list(chunk_ids))
 
                 entries.append(
                     {
                         "node_id": kw_id,
-                        "description": description,
+                        "description": description_full,  # Full for LLM
+                        "description_for_clustering": description_simple,  # Simple for clustering
                         "raw_name": raw_name,
                         "chunk_ids": list(chunk_ids),
                         "context_summaries": context_summaries,
                         "source_entity_id": source_entity_id,
-                        "source_entity_name": source_entity_name,
+                        "source_entity_name": source_entity_name_full,
                     }
                 )
 
@@ -1345,7 +1383,8 @@ class KTBuilder:
                         "source_entity_name": entry.get("source_entity_name")
                     })
 
-            candidate_descriptions = [entry["description"] for entry in entries]
+            # Use simplified descriptions for vector-based clustering
+            candidate_descriptions = [entry["description_for_clustering"] for entry in entries]
             initial_clusters = self._cluster_candidate_tails(candidate_descriptions, threshold)
 
             # Save clustering results
@@ -1602,7 +1641,8 @@ class KTBuilder:
                     "node_id": tail_id,
                     "data": copy.deepcopy(data),
                     "raw_data": copy.deepcopy(data),
-                    "description": self._describe_node(tail_id),
+                    "description": self._describe_node(tail_id),  # Full description for LLM
+                    "description_for_clustering": self._describe_node_for_clustering(tail_id),  # Simplified for clustering
                     "context_chunk_ids": chunk_ids,
                     "context_summaries": self._summarize_contexts(chunk_ids),
                 }
@@ -1622,7 +1662,8 @@ class KTBuilder:
         head_context_lines = self._summarize_contexts(list(head_chunk_ids))
 
         threshold = getattr(config, "embedding_threshold", 0.85) or 0.85
-        candidate_descriptions = [entry["description"] for entry in entries]
+        # Use simplified descriptions for vector-based clustering
+        candidate_descriptions = [entry["description_for_clustering"] for entry in entries]
         initial_clusters = self._cluster_candidate_tails(candidate_descriptions, threshold)
 
         max_batch_size = max(1, int(getattr(config, "max_batch_size", 8) or 8))
