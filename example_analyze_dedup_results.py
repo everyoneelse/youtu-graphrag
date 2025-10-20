@@ -52,15 +52,29 @@ def analyze_dedup_results(filepath):
     cluster_sizes = []
     single_clusters = 0
     multi_clusters = 0
+    clustering_method = None
+    llm_clustering_used = False
     
     for comm in results['communities']:
-        for cluster in comm['clustering']['clusters']:
+        clustering = comm.get('clustering', {})
+        method = clustering.get('method', 'unknown')
+        
+        if clustering_method is None:
+            clustering_method = method
+        
+        if method == 'llm':
+            llm_clustering_used = True
+        
+        for cluster in clustering.get('clusters', []):
             size = cluster['size']
             cluster_sizes.append(size)
             if size == 1:
                 single_clusters += 1
             else:
                 multi_clusters += 1
+    
+    if clustering_method:
+        print(f"  聚类方法: {clustering_method}")
     
     print(f"  单项 clusters: {single_clusters} ({single_clusters/len(cluster_sizes)*100:.1f}%)")
     print(f"  多项 clusters: {multi_clusters} ({multi_clusters/len(cluster_sizes)*100:.1f}%)")
@@ -96,10 +110,26 @@ def analyze_dedup_results(filepath):
     for idx, comm in enumerate(results['communities'][:3]):
         print(f"\n--- Community {idx+1}: {comm['community_name']} ---")
         print(f"候选项数: {comm['total_candidates']}")
-        print(f"聚类结果: {comm['summary']['total_clusters']} clusters")
+        
+        # 显示聚类信息
+        clustering = comm.get('clustering', {})
+        method = clustering.get('method', 'unknown')
+        print(f"聚类方法: {method}")
+        print(f"聚类结果: {len(clustering.get('clusters', []))} clusters")
         print(f"  - 单项: {comm['summary']['single_item_clusters']}")
         print(f"  - 多项: {comm['summary']['multi_item_clusters']}")
-        print(f"LLM 调用: {comm['summary']['total_llm_calls']} 次")
+        
+        # 如果是 LLM 聚类，显示聚类描述
+        if method == 'llm':
+            print(f"\nLLM 聚类描述:")
+            shown = 0
+            for cluster in clustering.get('clusters', []):
+                if cluster['size'] > 1 and cluster.get('llm_description') and shown < 2:
+                    print(f"  • Cluster {cluster['cluster_id']} ({cluster['size']} 项):")
+                    print(f"    {cluster['llm_description']}")
+                    shown += 1
+        
+        print(f"\nLLM 去重调用: {comm['summary']['total_llm_calls']} 次")
         print(f"最终合并: {comm['summary']['total_merges']} 次，去重 {comm['summary']['items_merged']} 项")
         
         # 显示具体的合并操作

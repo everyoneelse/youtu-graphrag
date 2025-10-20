@@ -17,15 +17,35 @@ construction:
     struct_weight: 0.3
   semantic_dedup:
     enabled: false
+    # Clustering method for initial tail grouping: "embedding" or "llm"
+    # - embedding: Fast, uses sentence embeddings + hierarchical clustering
+    # - llm: More accurate, uses LLM to understand semantic similarity
+    clustering_method: embedding
     embedding_threshold: 0.85
     max_batch_size: 8
     max_candidates: 50
+    # Maximum number of tails to send to LLM for clustering at once (only for llm clustering)
+    llm_clustering_batch_size: 30
     use_embeddings: true
     prompt_type: general
     # Save intermediate results for debugging and analysis
     save_intermediate_results: false
     # Path to save intermediate results (optional, auto-generated if not specified)
     # intermediate_results_path: "output/dedup_intermediate/"
+    
+    # Dual LLM configuration: use different models for clustering and deduplication
+    # If not specified, both will use the default LLM configuration from environment variables
+    # This allows you to use a cheaper/faster model for clustering and a more powerful one for dedup
+    clustering_llm:
+      # model: "gpt-3.5-turbo"  # Cheaper model for clustering
+      # base_url: "https://api.openai.com/v1"
+      # api_key: "${CLUSTERING_LLM_API_KEY}"
+      # temperature: 0.3
+    dedup_llm:
+      # model: "gpt-4"  # More powerful model for final deduplication
+      # base_url: "https://api.openai.com/v1"
+      # api_key: "${DEDUP_LLM_API_KEY}"
+      # temperature: 0.0
 
 datasets:
   hotpot:
