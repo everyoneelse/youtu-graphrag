@@ -28,6 +28,7 @@ class TriggersConfig:
     mode: str = "agent"  # "agent" or "noagent"
 
 @dataclass
+@dataclass
 class SemanticDedupConfig:
     """Semantic deduplication configuration"""
     enabled: bool = False
@@ -37,6 +38,9 @@ class SemanticDedupConfig:
     use_embeddings: bool = True
     embedding_model: str = ""
     prompt_type: str = "general"
+    enable_sub_clustering: bool = True  # Enable recursive sub-clustering for large clusters
+    save_intermediate_results: bool = False
+    intermediate_results_path: str = ""
 
 
 @dataclass

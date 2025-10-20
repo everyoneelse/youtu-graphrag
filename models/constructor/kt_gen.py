@@ -1668,6 +1668,8 @@ class KTBuilder:
 
         max_batch_size = max(1, int(getattr(config, "max_batch_size", 8) or 8))
         max_candidates = int(getattr(config, "max_candidates", 0) or 0)
+        # Enable recursive sub-clustering for large clusters to ensure proper deduplication
+        enable_sub_clustering = getattr(config, "enable_sub_clustering", True)
         
         # Initialize intermediate results collector for edge deduplication
         save_intermediate = getattr(config, "save_intermediate_results", False)
@@ -1732,17 +1734,36 @@ class KTBuilder:
                 processed_indices.add(idx)
                 continue
 
+            # Handle large clusters with sub-clustering to avoid losing deduplication opportunities
             overflow_indices = []
             if max_candidates and len(cluster_indices) > max_candidates:
-                overflow_indices = cluster_indices[max_candidates:]
-                cluster_indices = cluster_indices[:max_candidates]
-                logger.debug(
-                    "Semantic dedup limited LLM candidates for head '%s' relation '%s' to %d of %d items",
-                    head_text,
-                    relation,
-                    max_candidates,
-                    len(cluster),
-                )
+                if enable_sub_clustering:
+                    # Instead of simple truncation, perform recursive sub-clustering
+                    # This ensures semantically similar tails can still be merged even in large clusters
+                    overflow_indices = cluster_indices[max_candidates:]
+                    cluster_indices = cluster_indices[:max_candidates]
+                    
+                    logger.info(
+                        "Cluster for head '%s' relation '%s' has %d items (exceeds max_candidates=%d). "
+                        "Main batch: %d items, overflow batch: %d items. Will process overflow with sub-clustering.",
+                        head_text,
+                        relation,
+                        len(cluster),
+                        max_candidates,
+                        len(cluster_indices),
+                        len(overflow_indices)
+                    )
+                else:
+                    # Original behavior: simple truncation
+                    overflow_indices = cluster_indices[max_candidates:]
+                    cluster_indices = cluster_indices[:max_candidates]
+                    logger.debug(
+                        "Semantic dedup limited LLM candidates for head '%s' relation '%s' to %d of %d items",
+                        head_text,
+                        relation,
+                        max_candidates,
+                        len(cluster),
+                    )
 
             while cluster_indices:
                 batch_indices = cluster_indices[:max_batch_size]
@@ -1834,12 +1855,144 @@ class KTBuilder:
 
                 cluster_indices = [idx for idx in cluster_indices if idx not in processed_indices and idx not in duplicate_indices]
 
-            for global_idx in overflow_indices:
-                if global_idx in processed_indices:
-                    continue
-                entry = entries[global_idx]
-                final_edges.append((entry["node_id"], copy.deepcopy(entry["data"])))
-                processed_indices.add(global_idx)
+            # Process overflow indices with sub-clustering for better deduplication
+            if overflow_indices and enable_sub_clustering:
+                # Perform recursive sub-clustering on overflow items
+                overflow_descriptions = [entries[idx]["description_for_clustering"] for idx in overflow_indices]
+                # Use a slightly higher threshold for sub-clustering to create smaller, more precise clusters
+                sub_threshold = min(threshold + 0.05, 0.95)  # Increase threshold by 5% but cap at 0.95
+                overflow_sub_clusters = self._cluster_candidate_tails(overflow_descriptions, sub_threshold)
+                
+                logger.debug(
+                    "Sub-clustering overflow items: %d items split into %d sub-clusters (threshold=%.2f)",
+                    len(overflow_indices),
+                    len(overflow_sub_clusters),
+                    sub_threshold
+                )
+                
+                # Process each sub-cluster
+                for sub_cluster_local_indices in overflow_sub_clusters:
+                    # Map local indices back to global indices
+                    sub_cluster_global_indices = [overflow_indices[local_idx] for local_idx in sub_cluster_local_indices 
+                                                  if local_idx < len(overflow_indices)]
+                    
+                    # Filter out already processed indices
+                    sub_cluster_global_indices = [idx for idx in sub_cluster_global_indices 
+                                                  if idx not in processed_indices and idx not in duplicate_indices]
+                    
+                    if not sub_cluster_global_indices:
+                        continue
+                    
+                    # Single item sub-clusters don't need LLM processing
+                    if len(sub_cluster_global_indices) == 1:
+                        idx = sub_cluster_global_indices[0]
+                        entry = entries[idx]
+                        final_edges.append((entry["node_id"], copy.deepcopy(entry["data"])))
+                        processed_indices.add(idx)
+                        continue
+                    
+                    # For multi-item sub-clusters, process them in batches
+                    while sub_cluster_global_indices:
+                        sub_batch_indices = sub_cluster_global_indices[:max_batch_size]
+                        sub_batch_entries = [entries[i] for i in sub_batch_indices]
+                        sub_groups = self._llm_semantic_group(head_text, relation, head_context_lines, sub_batch_entries)
+                        
+                        # Save LLM groups result for overflow sub-clusters
+                        if save_intermediate:
+                            llm_result = {
+                                "cluster_id": f"overflow_subcluster",
+                                "batch_indices": sub_batch_indices,
+                                "batch_size": len(sub_batch_indices),
+                                "groups": []
+                            }
+                            if sub_groups:
+                                for group in sub_groups:
+                                    group_info = {
+                                        "members": group.get("members", []),
+                                        "representative": group.get("representative"),
+                                        "rationale": group.get("rationale"),
+                                        "member_details": [
+                                            {
+                                                "local_idx": m,
+                                                "global_idx": sub_batch_indices[m] if 0 <= m < len(sub_batch_indices) else None,
+                                                "description": entries[sub_batch_indices[m]]["description"] if 0 <= m < len(sub_batch_indices) else None
+                                            }
+                                            for m in group.get("members", [])
+                                            if 0 <= m < len(sub_batch_indices)
+                                        ]
+                                    }
+                                    llm_result["groups"].append(group_info)
+                            edge_dedup_result["llm_groups"].append(llm_result)
+                        
+                        if not sub_groups:
+                            # No groups identified, keep all items separate
+                            for global_idx in sub_batch_indices:
+                                entry = entries[global_idx]
+                                final_edges.append((entry["node_id"], copy.deepcopy(entry["data"])))
+                                processed_indices.add(global_idx)
+                            sub_cluster_global_indices = sub_cluster_global_indices[len(sub_batch_indices):]
+                            continue
+                        
+                        # Merge duplicates within each group
+                        for group in sub_groups:
+                            rep_local = group.get("representative")
+                            if rep_local is None or rep_local < 0 or rep_local >= len(sub_batch_indices):
+                                continue
+                            
+                            rep_global = sub_batch_indices[rep_local]
+                            if rep_global in processed_indices:
+                                continue
+                            
+                            duplicates = []
+                            for member_local in group.get("members", []):
+                                if member_local < 0 or member_local >= len(sub_batch_indices):
+                                    continue
+                                member_global = sub_batch_indices[member_local]
+                                if member_global == rep_global or member_global in processed_indices:
+                                    continue
+                                duplicates.append(entries[member_global])
+                                duplicate_indices.add(member_global)
+                            
+                            # Save merge operation
+                            if save_intermediate and duplicates:
+                                merge_info = {
+                                    "representative": {
+                                        "index": rep_global,
+                                        "node_id": entries[rep_global]["node_id"],
+                                        "description": entries[rep_global]["description"]
+                                    },
+                                    "duplicates": [
+                                        {
+                                            "index": d.get("index"),
+                                            "node_id": d["node_id"],
+                                            "description": d["description"]
+                                        }
+                                        for d in duplicates
+                                    ],
+                                    "rationale": group.get("rationale"),
+                                    "source": "overflow_subcluster"
+                                }
+                                edge_dedup_result["final_merges"].append(merge_info)
+                            
+                            merged_data = self._merge_duplicate_metadata(
+                                entries[rep_global],
+                                duplicates,
+                                group.get("rationale"),
+                            )
+                            
+                            final_edges.append((entries[rep_global]["node_id"], merged_data))
+                            processed_indices.add(rep_global)
+                        
+                        sub_cluster_global_indices = [idx for idx in sub_cluster_global_indices 
+                                                      if idx not in processed_indices and idx not in duplicate_indices]
+            else:
+                # Fallback: original behavior for overflow (no sub-clustering)
+                for global_idx in overflow_indices:
+                    if global_idx in processed_indices:
+                        continue
+                    entry = entries[global_idx]
+                    final_edges.append((entry["node_id"], copy.deepcopy(entry["data"])))
+                    processed_indices.add(global_idx)
 
         for entry in entries:
             idx = entry["index"]
