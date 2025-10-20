@@ -187,6 +187,7 @@ def main() -> None:
         logger.info("Running keyword semantic deduplication")
         keyword_mapping = _build_keyword_mapping(deduper.graph)
         if keyword_mapping:
+            logger.info(f"检测到 {len(keyword_mapping)} 个关键词待去重")
             deduper._deduplicate_keyword_nodes(keyword_mapping)
         else:
             logger.info("No keyword mapping detected; skipping keyword deduplication")
