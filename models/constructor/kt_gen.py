@@ -955,7 +955,7 @@ class KTBuilder:
             # Process all at once
             return self._llm_cluster_batch(head_text, relation, descriptions, 0)
     
-    def _llm_cluster_batch(self, head_text: str, relation: str, descriptions: list, index_offset: int = 0) -> list:
+    def _llm_cluster_batch(self, head_text: str, relation: str, descriptions: list, index_offset: int = 0) -> tuple:
         """
         Use LLM to cluster a batch of tail descriptions.
         
@@ -966,7 +966,9 @@ class KTBuilder:
             index_offset: Offset to add to indices (for batched processing)
             
         Returns:
-            List of clusters with adjusted indices
+            Tuple of (clusters, cluster_details):
+                - clusters: List of clusters with adjusted indices
+                - cluster_details: List of dicts with clustering rationale from LLM
         """
         # Build candidate list for prompt
         candidate_blocks = []
@@ -988,7 +990,9 @@ class KTBuilder:
         except Exception as e:
             logger.warning("LLM clustering call failed: %s: %s, falling back to single cluster", type(e).__name__, e)
             # Fallback: put all items in one cluster
-            return [[idx + index_offset for idx in range(len(descriptions))]]
+            fallback_cluster = [[idx + index_offset for idx in range(len(descriptions))]]
+            fallback_details = [{"description": "Fallback cluster (LLM call failed)", "members": fallback_cluster[0]}]
+            return fallback_cluster, fallback_details
         
         # Parse response
         try:
@@ -998,18 +1002,23 @@ class KTBuilder:
                 parsed = json.loads(response)
             except Exception as parse_error:
                 logger.warning("Failed to parse LLM clustering response: %s: %s, using fallback", type(parse_error).__name__, parse_error)
-                return [[idx + index_offset for idx in range(len(descriptions))]]
+                fallback_cluster = [[idx + index_offset for idx in range(len(descriptions))]]
+                fallback_details = [{"description": "Fallback cluster (parse failed)", "members": fallback_cluster[0]}]
+                return fallback_cluster, fallback_details
         
         clusters_raw = parsed.get("clusters") if isinstance(parsed, dict) else None
         if not isinstance(clusters_raw, list):
             logger.warning("LLM clustering response missing 'clusters' field, using fallback")
-            return [[idx + index_offset for idx in range(len(descriptions))]]
+            fallback_cluster = [[idx + index_offset for idx in range(len(descriptions))]]
+            fallback_details = [{"description": "Fallback cluster (invalid response)", "members": fallback_cluster[0]}]
+            return fallback_cluster, fallback_details
         
-        # Convert LLM output to cluster format
+        # Convert LLM output to cluster format and preserve details
         clusters = []
+        cluster_details = []
         assigned = set()
         
-        for cluster_info in clusters_raw:
+        for cluster_idx, cluster_info in enumerate(clusters_raw):
             if not isinstance(cluster_info, dict):
                 continue
             
@@ -1031,13 +1040,27 @@ class KTBuilder:
             
             if cluster_members:
                 clusters.append(cluster_members)
+                # Save the LLM's description/rationale for this cluster
+                cluster_details.append({
+                    "cluster_id": cluster_idx,
+                    "members": cluster_members,
+                    "description": cluster_info.get("description", "No description provided"),
+                    "llm_rationale": cluster_info.get("description", "")
+                })
         
         # Add unassigned items as singleton clusters
         for idx in range(len(descriptions)):
             if idx not in assigned:
-                clusters.append([idx + index_offset])
+                singleton_idx = idx + index_offset
+                clusters.append([singleton_idx])
+                cluster_details.append({
+                    "cluster_id": len(clusters) - 1,
+                    "members": [singleton_idx],
+                    "description": "Singleton cluster (unassigned by LLM)",
+                    "llm_rationale": ""
+                })
         
-        return clusters
+        return clusters, cluster_details
 
     def _cluster_candidate_tails(self, descriptions: list, threshold: float) -> list:
         """
