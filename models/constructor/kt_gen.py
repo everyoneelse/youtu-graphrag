@@ -1287,6 +1287,64 @@ class KTBuilder:
 
         return groups
 
+    def _concurrent_llm_calls(self, prompts_with_metadata: list) -> list:
+        """
+        Concurrently process multiple LLM prompts.
+        
+        Args:
+            prompts_with_metadata: List of dicts with keys:
+                - 'type': 'clustering' or 'semantic'
+                - 'prompt': the prompt string
+                - 'metadata': additional metadata for processing results
+                
+        Returns:
+            List of dicts with keys:
+                - 'type': same as input
+                - 'response': raw LLM response
+                - 'metadata': same as input
+                - 'error': error message if failed (None if successful)
+        """
+        if not prompts_with_metadata:
+            return []
+        
+        results = []
+        
+        def _call_single_llm(item):
+            """Call LLM for a single prompt."""
+            prompt_type = item.get('type')
+            prompt = item.get('prompt')
+            metadata = item.get('metadata', {})
+            
+            result = {
+                'type': prompt_type,
+                'metadata': metadata,
+                'response': None,
+                'error': None
+            }
+            
+            try:
+                # Choose appropriate client based on type
+                if prompt_type == 'clustering':
+                    response = self.clustering_llm_client.call_api(prompt)
+                elif prompt_type == 'semantic':
+                    response = self.dedup_llm_client.call_api(prompt)
+                else:
+                    raise ValueError(f"Unknown prompt type: {prompt_type}")
+                
+                result['response'] = response
+            except Exception as e:
+                result['error'] = f"{type(e).__name__}: {e}"
+                logger.warning("LLM call failed for type %s: %s", prompt_type, result['error'])
+            
+            return result
+        
+        # Use ThreadPoolExecutor for concurrent API calls
+        max_workers = min(10, len(prompts_with_metadata))  # Limit concurrent requests
+        with futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+            results = list(executor.map(_call_single_llm, prompts_with_metadata))
+        
+        return results
+
     def _merge_duplicate_metadata(self, base_entry: dict, duplicates: list, rationale: str = None):
         if isinstance(base_entry, dict):
             base_data = base_entry.get("data", {})
@@ -1936,28 +1994,337 @@ class KTBuilder:
 
         head_context_lines = self._summarize_contexts(list(head_chunk_ids))
 
-        # Choose clustering method based on configuration
+        # Get configuration parameters
         clustering_method = getattr(config, "clustering_method", "embedding")
         threshold = getattr(config, "embedding_threshold", 0.85) or 0.85
         llm_clustering_batch_size = getattr(config, "llm_clustering_batch_size", 30)
+        max_batch_size = max(1, int(getattr(config, "max_batch_size", 8) or 8))
+        max_candidates = int(getattr(config, "max_candidates", 0) or 0)
         
         # Use simplified descriptions for clustering (without context, chunk_id, etc.)
         candidate_descriptions = [entry["description_for_clustering"] for entry in entries]
         
-        # Initialize clustering details storage
+        # ============================================================
+        # PHASE 1: Collect all prompts (clustering + semantic grouping)
+        # ============================================================
+        prompts_to_process = []
+        
+        # 1.1: Collect clustering prompts (if using LLM clustering)
+        clustering_prompt_indices = []  # Track which prompts are for clustering
+        initial_clusters = None
         llm_clustering_details = None
         
         if clustering_method == "llm":
-            # Use LLM for initial clustering (more accurate but slower)
-            logger.debug("Using LLM-based clustering for head '%s' relation '%s' with %d tails", head_text, relation, len(entries))
-            initial_clusters, llm_clustering_details = self._cluster_candidate_tails_with_llm(head_text, relation, candidate_descriptions, llm_clustering_batch_size)
+            logger.debug("Collecting LLM clustering prompts for head '%s' relation '%s' with %d tails", 
+                        head_text, relation, len(entries))
+            
+            # Build clustering prompts (may be batched)
+            descriptions = candidate_descriptions
+            if len(descriptions) > llm_clustering_batch_size:
+                # Need multiple batches for clustering
+                for batch_start in range(0, len(descriptions), llm_clustering_batch_size):
+                    batch_end = min(batch_start + llm_clustering_batch_size, len(descriptions))
+                    batch_descriptions = descriptions[batch_start:batch_end]
+                    batch_offset = batch_start
+                    
+                    # Build clustering prompt
+                    candidate_blocks = []
+                    for idx, description in enumerate(batch_descriptions, start=1):
+                        candidate_blocks.append(f"[{idx}] {description}")
+                    candidates_text = "\n".join(candidate_blocks) if candidate_blocks else "[No candidates]"
+                    
+                    prompt = DEFAULT_LLM_CLUSTERING_PROMPT.format(
+                        head=head_text or "[UNKNOWN_HEAD]",
+                        relation=relation or "[UNKNOWN_RELATION]",
+                        candidates=candidates_text
+                    )
+                    
+                    clustering_prompt_idx = len(prompts_to_process)
+                    clustering_prompt_indices.append(clustering_prompt_idx)
+                    prompts_to_process.append({
+                        'type': 'clustering',
+                        'prompt': prompt,
+                        'metadata': {
+                            'batch_start': batch_start,
+                            'batch_end': batch_end,
+                            'batch_offset': batch_offset,
+                            'descriptions': batch_descriptions
+                        }
+                    })
+            else:
+                # Single batch for clustering
+                candidate_blocks = []
+                for idx, description in enumerate(descriptions, start=1):
+                    candidate_blocks.append(f"[{idx}] {description}")
+                candidates_text = "\n".join(candidate_blocks) if candidate_blocks else "[No candidates]"
+                
+                prompt = DEFAULT_LLM_CLUSTERING_PROMPT.format(
+                    head=head_text or "[UNKNOWN_HEAD]",
+                    relation=relation or "[UNKNOWN_RELATION]",
+                    candidates=candidates_text
+                )
+                
+                clustering_prompt_idx = len(prompts_to_process)
+                clustering_prompt_indices.append(clustering_prompt_idx)
+                prompts_to_process.append({
+                    'type': 'clustering',
+                    'prompt': prompt,
+                    'metadata': {
+                        'batch_start': 0,
+                        'batch_end': len(descriptions),
+                        'batch_offset': 0,
+                        'descriptions': descriptions
+                    }
+                })
         else:
-            # Use embedding-based clustering (faster but less accurate)
+            # Use embedding-based clustering (no prompts needed)
             initial_clusters = self._cluster_candidate_tails(candidate_descriptions, threshold)
-
-        max_batch_size = max(1, int(getattr(config, "max_batch_size", 8) or 8))
-        max_candidates = int(getattr(config, "max_candidates", 0) or 0)
         
+        # 1.2: Collect semantic grouping prompts (prepare for each cluster batch)
+        # We need to predict which batches will be processed for semantic grouping
+        # For now, we'll collect prompts after getting clustering results
+        # So this phase is split into two sub-phases
+        
+        # ============================================================
+        # PHASE 2A: Process clustering prompts (if any)
+        # ============================================================
+        if clustering_method == "llm" and prompts_to_process:
+            logger.debug("Processing %d clustering prompt(s) concurrently", len(prompts_to_process))
+            clustering_results = self._concurrent_llm_calls(prompts_to_process)
+            
+            # Parse clustering results
+            all_clusters = []
+            all_details = []
+            
+            for result in clustering_results:
+                if result['error']:
+                    # Fallback for failed clustering
+                    metadata = result['metadata']
+                    batch_descriptions = metadata['descriptions']
+                    batch_offset = metadata['batch_offset']
+                    fallback_cluster = [[idx + batch_offset for idx in range(len(batch_descriptions))]]
+                    fallback_details = [{"description": f"Fallback cluster (LLM call failed: {result['error']})", 
+                                       "members": fallback_cluster[0]}]
+                    all_clusters.extend(fallback_cluster)
+                    all_details.extend(fallback_details)
+                    continue
+                
+                # Parse clustering response
+                response = result['response']
+                metadata = result['metadata']
+                batch_offset = metadata['batch_offset']
+                batch_descriptions = metadata['descriptions']
+                
+                try:
+                    parsed = json_repair.loads(response)
+                except Exception:
+                    try:
+                        parsed = json.loads(response)
+                    except Exception as parse_error:
+                        logger.warning("Failed to parse LLM clustering response: %s: %s, using fallback", 
+                                     type(parse_error).__name__, parse_error)
+                        fallback_cluster = [[idx + batch_offset for idx in range(len(batch_descriptions))]]
+                        fallback_details = [{"description": "Fallback cluster (parse failed)", 
+                                           "members": fallback_cluster[0]}]
+                        all_clusters.extend(fallback_cluster)
+                        all_details.extend(fallback_details)
+                        continue
+                
+                clusters_raw = parsed.get("clusters") if isinstance(parsed, dict) else None
+                if not isinstance(clusters_raw, list):
+                    logger.warning("LLM clustering response missing 'clusters' field, using fallback")
+                    fallback_cluster = [[idx + batch_offset for idx in range(len(batch_descriptions))]]
+                    fallback_details = [{"description": "Fallback cluster (invalid response)", 
+                                       "members": fallback_cluster[0]}]
+                    all_clusters.extend(fallback_cluster)
+                    all_details.extend(fallback_details)
+                    continue
+                
+                # Convert LLM output to cluster format
+                assigned = set()
+                for cluster_idx, cluster_info in enumerate(clusters_raw):
+                    if not isinstance(cluster_info, dict):
+                        continue
+                    
+                    members_raw = cluster_info.get("members")
+                    if not isinstance(members_raw, list):
+                        continue
+                    
+                    cluster_members = []
+                    for member in members_raw:
+                        try:
+                            member_idx = int(member) - 1  # Convert to 0-based
+                        except (TypeError, ValueError):
+                            continue
+                        if 0 <= member_idx < len(batch_descriptions):
+                            adjusted_idx = member_idx + batch_offset
+                            cluster_members.append(adjusted_idx)
+                            assigned.add(member_idx)
+                    
+                    if cluster_members:
+                        all_clusters.append(cluster_members)
+                        detail = {
+                            "description": cluster_info.get("description", ""),
+                            "llm_rationale": cluster_info.get("rationale", ""),
+                            "members": cluster_members
+                        }
+                        all_details.append(detail)
+                
+                # Add unassigned items as singleton clusters
+                for idx in range(len(batch_descriptions)):
+                    if idx not in assigned:
+                        adjusted_idx = idx + batch_offset
+                        all_clusters.append([adjusted_idx])
+                        all_details.append({
+                            "description": f"Singleton cluster for item {adjusted_idx}",
+                            "members": [adjusted_idx]
+                        })
+            
+            initial_clusters = all_clusters
+            llm_clustering_details = all_details
+        
+        # ============================================================
+        # PHASE 2B: Collect semantic grouping prompts based on clusters
+        # ============================================================
+        semantic_prompts = []
+        semantic_prompt_metadata = []  # Store metadata for each semantic prompt
+        
+        for cluster_idx, cluster in enumerate(initial_clusters):
+            cluster_indices = cluster.copy()
+            
+            # Skip single-item clusters (no grouping needed)
+            if len(cluster_indices) <= 1:
+                continue
+            
+            # Apply max_candidates limit
+            overflow_indices = []
+            if max_candidates and len(cluster_indices) > max_candidates:
+                overflow_indices = cluster_indices[max_candidates:]
+                cluster_indices = cluster_indices[:max_candidates]
+            
+            # Batch the cluster into semantic grouping batches
+            while cluster_indices:
+                batch_indices = cluster_indices[:max_batch_size]
+                batch_entries = [entries[i] for i in batch_indices]
+                
+                # Build semantic grouping prompt
+                prompt = self._build_semantic_dedup_prompt(head_text, relation, head_context_lines, batch_entries)
+                
+                semantic_prompts.append({
+                    'type': 'semantic',
+                    'prompt': prompt,
+                    'metadata': {
+                        'cluster_idx': cluster_idx,
+                        'batch_indices': batch_indices,
+                        'overflow_indices': overflow_indices,
+                        'original_cluster': cluster
+                    }
+                })
+                
+                cluster_indices = cluster_indices[len(batch_indices):]
+        
+        # ============================================================
+        # PHASE 3: Process all semantic grouping prompts concurrently
+        # ============================================================
+        semantic_results = []
+        if semantic_prompts:
+            logger.debug("Processing %d semantic grouping prompt(s) concurrently", len(semantic_prompts))
+            semantic_results = self._concurrent_llm_calls(semantic_prompts)
+        
+        # Parse semantic grouping results
+        semantic_groups_by_batch = []
+        for result in semantic_results:
+            metadata = result['metadata']
+            batch_indices = metadata['batch_indices']
+            batch_entries = [entries[i] for i in batch_indices]
+            
+            if result['error']:
+                # Fallback: no grouping
+                logger.warning("Semantic grouping LLM call failed for batch: %s", result['error'])
+                semantic_groups_by_batch.append({
+                    'groups': [],
+                    'metadata': metadata
+                })
+                continue
+            
+            # Parse semantic grouping response
+            response = result['response']
+            try:
+                parsed = json_repair.loads(response)
+            except Exception:
+                try:
+                    parsed = json.loads(response)
+                except Exception as parse_error:
+                    logger.warning("Failed to parse semantic dedup LLM response: %s: %s", 
+                                 type(parse_error).__name__, parse_error)
+                    semantic_groups_by_batch.append({
+                        'groups': [],
+                        'metadata': metadata
+                    })
+                    continue
+            
+            groups_raw = parsed.get("groups") if isinstance(parsed, dict) else None
+            if not isinstance(groups_raw, list):
+                semantic_groups_by_batch.append({
+                    'groups': [],
+                    'metadata': metadata
+                })
+                continue
+            
+            # Convert to group format
+            groups = []
+            assigned = set()
+            for group in groups_raw:
+                if not isinstance(group, dict):
+                    continue
+                
+                members_raw = group.get("members")
+                if not isinstance(members_raw, list):
+                    continue
+                
+                normalized_members = []
+                for member in members_raw:
+                    try:
+                        member_idx = int(member) - 1
+                    except (TypeError, ValueError):
+                        continue
+                    if 0 <= member_idx < len(batch_entries):
+                        normalized_members.append(member_idx)
+                
+                if not normalized_members:
+                    continue
+                
+                rep_raw = group.get("representative")
+                try:
+                    rep_idx = int(rep_raw) - 1 if rep_raw is not None else None
+                except (TypeError, ValueError):
+                    rep_idx = None
+                
+                if rep_idx is None or rep_idx not in normalized_members:
+                    rep_idx = normalized_members[0]
+                
+                rationale = group.get("rationale")
+                groups.append({
+                    "representative": rep_idx,
+                    "members": normalized_members,
+                    "rationale": rationale,
+                })
+                assigned.update(normalized_members)
+            
+            # Add unassigned items as singleton groups
+            for idx in range(len(batch_entries)):
+                if idx not in assigned:
+                    groups.append({"representative": idx, "members": [idx], "rationale": None})
+            
+            semantic_groups_by_batch.append({
+                'groups': groups,
+                'metadata': metadata
+            })
+        
+        # ============================================================
+        # PHASE 4: Process results and build final edges
+        # ============================================================
+
         # Initialize intermediate results collector for edge deduplication
         save_intermediate = getattr(config, "save_intermediate_results", False)
         edge_dedup_result = {
@@ -2013,45 +2380,48 @@ class KTBuilder:
                 
                 edge_dedup_result["clustering"]["clusters"].append(cluster_info)
 
+        # Build final edges from semantic grouping results
         final_edges: list = []
         processed_indices: set = set()
         duplicate_indices: set = set()
-
-        for cluster in initial_clusters:
+        
+        # Create a mapping from cluster_idx to semantic results
+        semantic_results_map = {}
+        for batch_result in semantic_groups_by_batch:
+            metadata = batch_result['metadata']
+            cluster_idx = metadata['cluster_idx']
+            if cluster_idx not in semantic_results_map:
+                semantic_results_map[cluster_idx] = []
+            semantic_results_map[cluster_idx].append(batch_result)
+        
+        # Process each cluster
+        for cluster_idx, cluster in enumerate(initial_clusters):
             cluster_indices = [idx for idx in cluster if idx not in processed_indices and idx not in duplicate_indices]
             if not cluster_indices:
                 continue
-
+            
             # Optimization: Skip LLM call for single-item clusters
-            # No semantic grouping needed when there's only one edge
             if len(cluster_indices) == 1:
                 idx = cluster_indices[0]
                 entry = entries[idx]
                 final_edges.append((entry["node_id"], copy.deepcopy(entry["data"])))
                 processed_indices.add(idx)
                 continue
-
-            overflow_indices = []
-            if max_candidates and len(cluster_indices) > max_candidates:
-                overflow_indices = cluster_indices[max_candidates:]
-                cluster_indices = cluster_indices[:max_candidates]
-                logger.debug(
-                    "Semantic dedup limited LLM candidates for head '%s' relation '%s' to %d of %d items",
-                    head_text,
-                    relation,
-                    max_candidates,
-                    len(cluster),
-                )
-
-            while cluster_indices:
-                batch_indices = cluster_indices[:max_batch_size]
-                batch_entries = [entries[i] for i in batch_indices]
-                groups = self._llm_semantic_group(head_text, relation, head_context_lines, batch_entries)
-
+            
+            # Get semantic grouping results for this cluster
+            cluster_semantic_results = semantic_results_map.get(cluster_idx, [])
+            
+            # Process each batch result for this cluster
+            for batch_result in cluster_semantic_results:
+                groups = batch_result['groups']
+                metadata = batch_result['metadata']
+                batch_indices = metadata['batch_indices']
+                overflow_indices = metadata.get('overflow_indices', [])
+                
                 # Save LLM groups result
                 if save_intermediate:
                     llm_result = {
-                        "cluster_id": initial_clusters.index([idx for idx in cluster if idx not in processed_indices and idx not in duplicate_indices][:len(cluster_indices)]) if cluster_indices else -1,
+                        "cluster_id": cluster_idx,
                         "batch_indices": batch_indices,
                         "batch_size": len(batch_indices),
                         "groups": []
@@ -2074,71 +2444,73 @@ class KTBuilder:
                             }
                             llm_result["groups"].append(group_info)
                     edge_dedup_result["llm_groups"].append(llm_result)
-
+                
+                # Process groups
                 if not groups:
+                    # No grouping, add all batch items as separate edges
                     for global_idx in batch_indices:
+                        if global_idx not in processed_indices:
+                            entry = entries[global_idx]
+                            final_edges.append((entry["node_id"], copy.deepcopy(entry["data"])))
+                            processed_indices.add(global_idx)
+                else:
+                    # Process each group
+                    for group in groups:
+                        rep_local = group.get("representative")
+                        if rep_local is None or rep_local < 0 or rep_local >= len(batch_indices):
+                            continue
+                        
+                        rep_global = batch_indices[rep_local]
+                        if rep_global in processed_indices:
+                            continue
+                        
+                        # Collect duplicates
+                        duplicates = []
+                        for member_local in group.get("members", []):
+                            if member_local < 0 or member_local >= len(batch_indices):
+                                continue
+                            member_global = batch_indices[member_local]
+                            if member_global == rep_global or member_global in processed_indices:
+                                continue
+                            duplicates.append(entries[member_global])
+                            duplicate_indices.add(member_global)
+                        
+                        # Save merge operation
+                        if save_intermediate and duplicates:
+                            merge_info = {
+                                "representative": {
+                                    "index": rep_global,
+                                    "node_id": entries[rep_global]["node_id"],
+                                    "description": entries[rep_global]["description"]
+                                },
+                                "duplicates": [
+                                    {
+                                        "index": d.get("index"),
+                                        "node_id": d["node_id"],
+                                        "description": d["description"]
+                                    }
+                                    for d in duplicates
+                                ],
+                                "rationale": group.get("rationale")
+                            }
+                            edge_dedup_result["final_merges"].append(merge_info)
+                        
+                        # Merge metadata and add to final edges
+                        merged_data = self._merge_duplicate_metadata(
+                            entries[rep_global],
+                            duplicates,
+                            group.get("rationale"),
+                        )
+                        
+                        final_edges.append((entries[rep_global]["node_id"], merged_data))
+                        processed_indices.add(rep_global)
+                
+                # Process overflow indices (items that exceeded max_candidates)
+                for global_idx in overflow_indices:
+                    if global_idx not in processed_indices:
                         entry = entries[global_idx]
                         final_edges.append((entry["node_id"], copy.deepcopy(entry["data"])))
                         processed_indices.add(global_idx)
-                    cluster_indices = cluster_indices[len(batch_indices):]
-                    continue
-
-                for group in groups:
-                    rep_local = group.get("representative")
-                    if rep_local is None or rep_local < 0 or rep_local >= len(batch_indices):
-                        continue
-
-                    rep_global = batch_indices[rep_local]
-                    if rep_global in processed_indices:
-                        continue
-
-                    duplicates = []
-                    for member_local in group.get("members", []):
-                        if member_local < 0 or member_local >= len(batch_indices):
-                            continue
-                        member_global = batch_indices[member_local]
-                        if member_global == rep_global or member_global in processed_indices:
-                            continue
-                        duplicates.append(entries[member_global])
-                        duplicate_indices.add(member_global)
-
-                    # Save merge operation
-                    if save_intermediate and duplicates:
-                        merge_info = {
-                            "representative": {
-                                "index": rep_global,
-                                "node_id": entries[rep_global]["node_id"],
-                                "description": entries[rep_global]["description"]
-                            },
-                            "duplicates": [
-                                {
-                                    "index": d.get("index"),
-                                    "node_id": d["node_id"],
-                                    "description": d["description"]
-                                }
-                                for d in duplicates
-                            ],
-                            "rationale": group.get("rationale")
-                        }
-                        edge_dedup_result["final_merges"].append(merge_info)
-
-                    merged_data = self._merge_duplicate_metadata(
-                        entries[rep_global],
-                        duplicates,
-                        group.get("rationale"),
-                    )
-
-                    final_edges.append((entries[rep_global]["node_id"], merged_data))
-                    processed_indices.add(rep_global)
-
-                cluster_indices = [idx for idx in cluster_indices if idx not in processed_indices and idx not in duplicate_indices]
-
-            for global_idx in overflow_indices:
-                if global_idx in processed_indices:
-                    continue
-                entry = entries[global_idx]
-                final_edges.append((entry["node_id"], copy.deepcopy(entry["data"])))
-                processed_indices.add(global_idx)
 
         for entry in entries:
             idx = entry["index"]
