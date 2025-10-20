@@ -1542,7 +1542,8 @@ class KTBuilder:
         } if save_intermediate else None
 
         for community_id, keyword_ids in community_to_keywords.items():
-            keyword_ids = [kw for kw in keyword_ids if kw in self.graph]
+            # Deduplicate keyword_ids to prevent duplicate keywords in the same community
+            keyword_ids = list(dict.fromkeys([kw for kw in keyword_ids if kw in self.graph]))
             if len(keyword_ids) <= 1:
                 continue
 
