@@ -1525,6 +1525,10 @@ class KTBuilder:
         if not community_to_keywords:
             return
 
+        # 打印待处理的关键词总数
+        total_keywords = sum(len(kws) for kws in community_to_keywords.values())
+        logger.info(f"开始关键词去重，共 {len(community_to_keywords)} 个社区，总计 {total_keywords} 个关键词待处理")
+
         threshold = getattr(config, "embedding_threshold", 0.85) or 0.85
         max_batch_size = max(1, int(getattr(config, "max_batch_size", 8) or 8))
         max_candidates = int(getattr(config, "max_candidates", 0) or 0)
@@ -1545,6 +1549,9 @@ class KTBuilder:
             keyword_ids = [kw for kw in keyword_ids if kw in self.graph]
             if len(keyword_ids) <= 1:
                 continue
+
+            # 打印当前社区待处理的关键词数量
+            logger.info(f"处理社区 {community_id}，包含 {len(keyword_ids)} 个关键词")
 
             # Initialize community result collector
             community_result = {
