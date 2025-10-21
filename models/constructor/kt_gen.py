@@ -12,6 +12,7 @@ import nanoid
 import networkx as nx
 import tiktoken
 import json_repair
+from tqdm import tqdm
 
 from config import get_config
 from utils import call_llm_api, graph_processor, tree_comm
@@ -1338,10 +1339,34 @@ class KTBuilder:
             
             return result
         
-        # Use ThreadPoolExecutor for concurrent API calls
+        # Use ThreadPoolExecutor for concurrent API calls with progress bar
         max_workers = min(10, len(prompts_with_metadata))  # Limit concurrent requests
+        
+        # Submit all tasks and collect futures
         with futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
-            results = list(executor.map(_call_single_llm, prompts_with_metadata))
+            # Submit all tasks
+            future_to_item = {
+                executor.submit(_call_single_llm, item): item 
+                for item in prompts_with_metadata
+            }
+            
+            # Collect results with progress bar
+            results = []
+            with tqdm(total=len(prompts_with_metadata), desc="Processing LLM calls", unit="call") as pbar:
+                for future in futures.as_completed(future_to_item):
+                    try:
+                        result = future.result()
+                        results.append(result)
+                    except Exception as e:
+                        # This shouldn't happen as exceptions are caught in _call_single_llm
+                        logger.error(f"Unexpected error in concurrent call: {e}")
+                        results.append({
+                            'type': 'unknown',
+                            'metadata': {},
+                            'response': None,
+                            'error': str(e)
+                        })
+                    pbar.update(1)
         
         return results
 
