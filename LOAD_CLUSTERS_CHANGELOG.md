@@ -6,6 +6,10 @@
 ## 功能概述
 添加了从文件加载之前保存的LLM clustering结果的功能，允许跳过clustering阶段，直接进行semantic deduplication。
 
+支持两种类型的去重：
+1. **Keyword Deduplication**: 关键词节点去重
+2. **Edge/Triple Deduplication**: 三元组边去重
+
 ## 修改的文件
 
 ### 1. `offline_semantic_dedup.py`

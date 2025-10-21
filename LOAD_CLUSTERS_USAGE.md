@@ -2,9 +2,14 @@
 
 ## 功能说明
 
-该功能允许你跳过LLM clustering阶段，直接使用之前保存的cluster结果进行semantic deduplication。这在以下场景中特别有用：
+该功能允许你跳过LLM clustering阶段，直接使用之前保存的cluster结果进行semantic deduplication。支持两种类型的去重：
 
-1. **节省成本**: 避免重复调用LLM进行clustering
+1. **Keyword Deduplication**: 关键词节点的去重
+2. **Edge/Triple Deduplication**: 三元组边的去重
+
+这在以下场景中特别有用：
+
+1. **节省成本**: 避免重复调用LLM进行clustering，可节省50%-70%的LLM调用
 2. **调试优化**: 可以使用相同的cluster结果，多次调试semantic dedup参数
 3. **分阶段处理**: 先完成clustering，再单独运行semantic dedup
 
@@ -51,7 +56,11 @@ python3 offline_semantic_dedup.py \
 
 ## Cluster结果文件格式
 
-保存的cluster结果文件包含以下结构：
+保存的cluster结果文件有两种类型：
+
+### 1. Keyword Deduplication结果
+
+文件名格式: `{dataset}_keyword_dedup_{timestamp}.json`
 
 ```json
 {
@@ -95,10 +104,61 @@ python3 offline_semantic_dedup.py \
 }
 ```
 
+### 2. Edge/Triple Deduplication结果
+
+文件名格式: `{dataset}_edge_dedup_{timestamp}.json`
+
+```json
+{
+  "dataset": "demo",
+  "dedup_type": "edge_deduplication",
+  "config": {
+    "threshold": 0.85,
+    "max_batch_size": 8,
+    "max_candidates": 50,
+    "clustering_method": "llm"
+  },
+  "triples": [
+    {
+      "head_id": "entity_1",
+      "head_name": "Entity 1",
+      "relation": "related_to",
+      "total_edges": 15,
+      "clustering": {
+        "method": "llm",
+        "clusters": [
+          {
+            "cluster_id": 0,
+            "size": 4,
+            "member_indices": [0, 3, 7, 9],
+            "llm_description": "相似的关系描述",
+            "llm_rationale": "这些边指向语义相同的实体",
+            "members": [
+              {
+                "index": 0,
+                "node_id": "entity_2",
+                "description": "Entity 2"
+              }
+            ]
+          }
+        ]
+      }
+    }
+  ],
+  "summary": {
+    "total_triples": 20,
+    "total_edges": 300,
+    "total_clusters": 80
+  }
+}
+```
+
 ## 工作原理
 
 1. **加载阶段**: 脚本读取之前保存的cluster结果JSON文件
-2. **匹配阶段**: 根据community_id匹配当前图谱中的社区和保存的cluster信息
+2. **匹配阶段**: 
+   - Keyword dedup: 根据 `community_id` 匹配社区和cluster信息
+   - Edge dedup: 根据 `(head_id, relation)` 匹配三元组组和cluster信息
 3. **跳过Clustering**: 直接使用加载的cluster结果，跳过LLM clustering调用
 4. **Semantic Dedup**: 正常执行semantic deduplication阶段
 5. **保存结果**: 输出去重后的知识图谱
@@ -106,8 +166,12 @@ python3 offline_semantic_dedup.py \
 ## 注意事项
 
 1. **图谱一致性**: 确保使用的图谱与保存cluster结果时的图谱一致或兼容
-2. **Community匹配**: 如果某个community在cluster文件中找不到，会使用fallback策略（所有成员作为单个cluster）
-3. **配置兼容**: semantic dedup的配置参数（如max_batch_size）可以与clustering时不同，允许独立调优
+2. **自动识别类型**: 脚本会自动识别cluster文件类型（keyword或edge），并应用到对应的去重阶段
+3. **匹配机制**: 
+   - Keyword dedup: 如果某个community找不到对应cluster，会使用fallback策略（所有成员作为单个cluster）
+   - Edge dedup: 如果某个(head, relation)组合找不到对应cluster，会使用fallback策略
+4. **配置兼容**: semantic dedup的配置参数（如max_batch_size）可以与clustering时不同，允许独立调优
+5. **混合使用**: 可以同时加载keyword和edge的cluster结果，或只加载其中一个
 
 ## 示例场景
 
@@ -166,7 +230,7 @@ A: 会跳过该community，并记录warning日志。
 A: 可以。clustering配置（如clustering_method, llm_clustering_batch_size）会被忽略，但semantic dedup配置（如max_batch_size）仍然生效。
 
 **Q: 支持edge deduplication吗？**  
-A: 当前版本主要支持keyword deduplication。Edge deduplication暂不支持加载预保存的cluster。
+A: 是的！现在同时支持keyword和edge deduplication的cluster加载。系统会自动识别cluster文件类型并应用到对应的去重阶段。
 
 **Q: 性能提升如何？**  
 A: 跳过clustering阶段可以节省50%-70%的LLM调用次数，具体取决于你的数据规模和clustering配置。
