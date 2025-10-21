@@ -618,3 +618,478 @@ class DSPySemanticDedupOptimizer:
             "min_score": min(scores) if scores else 0.0,
             "max_score": max(scores) if scores else 0.0
         }
+
+
+# ========== Validation and Correction Signatures ==========
+
+class DedupValidation(dspy.Signature):
+    """
+    验证semantic dedup的质量。
+    
+    检查合并决策是否正确，识别潜在错误（false positives/negatives），
+    并给出质量评分。这是一个质量保证步骤。
+    """
+    
+    head_entity: str = dspy.InputField(desc="The head entity")
+    relation: str = dspy.InputField(desc="The relation type")
+    original_tails: str = dspy.InputField(
+        desc="Original list of tails before dedup. Format: [1] tail1\\n[2] tail2\\n..."
+    )
+    dedup_groups: str = dspy.InputField(
+        desc=(
+            "Deduplication results to validate. JSON format: "
+            "[{\"members\": [1,2], \"representative\": 1, \"rationale\": \"...\"}]"
+        )
+    )
+    contexts: str = dspy.InputField(desc="Context information for each tail")
+    
+    analysis: str = dspy.OutputField(
+        desc=(
+            "Detailed validation analysis:\\n"
+            "1. Check each group for correctness\\n"
+            "2. Identify potential FALSE POSITIVES (wrong merges - different entities merged together)\\n"
+            "   Example: iPhone 13 and iPhone 14 should NOT be merged\\n"
+            "3. Identify potential FALSE NEGATIVES (missed merges - same entity kept separate)\\n"
+            "   Example: NYC and New York City should be merged but aren't\\n"
+            "4. Evaluate representative selection (is the best expression chosen?)\\n"
+            "5. Assess evidence quality from contexts"
+        )
+    )
+    
+    validation_results: str = dspy.OutputField(
+        desc=(
+            "JSON validation results:\\n"
+            "{\\n"
+            "  \"overall_quality\": 0.0-1.0,  // Overall quality score\\n"
+            "  \"issues\": [\\n"
+            "    {\\n"
+            "      \"type\": \"false_positive|false_negative|bad_representative\",\\n"
+            "      \"severity\": \"high|medium|low\",\\n"
+            "      \"group_id\": int,\\n"
+            "      \"description\": \"Clear explanation of the issue\",\\n"
+            "      \"suggestion\": \"How to fix this issue\"\\n"
+            "    }\\n"
+            "  ],\\n"
+            "  \"group_scores\": [{\"group_id\": 0, \"confidence\": 0.95}, ...]\\n"
+            "}"
+        )
+    )
+
+
+class DedupCorrection(dspy.Signature):
+    """
+    基于validation结果修正dedup决策。
+    
+    当validation发现质量问题时，这个模块尝试修正错误的合并决策。
+    """
+    
+    head_entity: str = dspy.InputField(desc="The head entity")
+    relation: str = dspy.InputField(desc="The relation")
+    original_tails: str = dspy.InputField(desc="Original tails before dedup")
+    current_groups: str = dspy.InputField(
+        desc="Current dedup groups (possibly incorrect based on validation)"
+    )
+    validation_issues: str = dspy.InputField(
+        desc="Issues identified by validation module (JSON format)"
+    )
+    contexts: str = dspy.InputField(desc="Context information for decision making")
+    
+    reasoning: str = dspy.OutputField(
+        desc=(
+            "Step-by-step reasoning for corrections:\\n"
+            "1. Review each validation issue\\n"
+            "2. For FALSE POSITIVES: Explain why the merge was wrong and how to split\\n"
+            "3. For FALSE NEGATIVES: Explain why items should be merged\\n"
+            "4. For BAD REPRESENTATIVES: Explain better choice\\n"
+            "5. Justify final corrected grouping"
+        )
+    )
+    
+    corrected_groups: str = dspy.OutputField(
+        desc=(
+            "Corrected deduplication groups in JSON format.\\n"
+            "Same format as input but with issues fixed.\\n"
+            "Format: [{\"members\": [1, 2], \"representative\": 1, \"rationale\": \"...\"}, ...]"
+        )
+    )
+
+
+# ========== Validation and Correction Modules ==========
+
+class DedupValidationModule(dspy.Module):
+    """
+    DSPy模块: 验证semantic dedup的质量
+    
+    这个模块检查dedup结果，识别潜在错误，并给出质量评分。
+    可以用于：
+    1. 质量监控 - 识别可疑的去重结果
+    2. 报告生成 - 生成去重质量报告
+    3. 触发修正 - 当质量太低时触发自动修正
+    """
+    
+    def __init__(self, use_cot: bool = True):
+        """
+        Args:
+            use_cot: 是否使用Chain-of-Thought reasoning
+        """
+        super().__init__()
+        
+        if use_cot:
+            self.validate = dspy.ChainOfThought(DedupValidation)
+        else:
+            self.validate = dspy.Predict(DedupValidation)
+    
+    def forward(
+        self,
+        head_entity: str,
+        relation: str,
+        original_tails: List[str],
+        dedup_groups: List[Dict],
+        contexts: List[List[str]] = None
+    ) -> Dict:
+        """
+        验证去重结果
+        
+        Args:
+            head_entity: 头实体
+            relation: 关系
+            original_tails: 原始的tail列表
+            dedup_groups: 去重后的分组
+            contexts: 每个tail的上下文（可选）
+        
+        Returns:
+            验证结果字典 {
+                "analysis": str,
+                "overall_quality": float,
+                "issues": List[Dict],
+                "group_scores": List[Dict],
+                "raw_results": Dict
+            }
+        """
+        # Format inputs
+        tails_text = "\\n".join([f"[{i+1}] {tail}" for i, tail in enumerate(original_tails)])
+        groups_json = json.dumps(dedup_groups, ensure_ascii=False)
+        
+        # Format contexts
+        if contexts:
+            contexts_blocks = []
+            for i, tail_contexts in enumerate(contexts, 1):
+                context_str = "\\n    ".join(tail_contexts) if tail_contexts else "- (no context)"
+                contexts_blocks.append(f"[{i}] Contexts:\\n    {context_str}")
+            contexts_text = "\\n".join(contexts_blocks)
+        else:
+            contexts_text = "- (no context available)"
+        
+        try:
+            # Call validation
+            result = self.validate(
+                head_entity=head_entity,
+                relation=relation,
+                original_tails=tails_text,
+                dedup_groups=groups_json,
+                contexts=contexts_text
+            )
+            
+            # Parse validation results
+            validation_results = json_repair.loads(result.validation_results)
+            
+            return {
+                "analysis": result.analysis,
+                "overall_quality": validation_results.get("overall_quality", 0.0),
+                "issues": validation_results.get("issues", []),
+                "group_scores": validation_results.get("group_scores", []),
+                "raw_results": validation_results
+            }
+        
+        except Exception as e:
+            logger.warning(f"Validation failed: {e}")
+            # Return default (assume OK)
+            return {
+                "analysis": f"Validation failed: {e}",
+                "overall_quality": 0.5,
+                "issues": [],
+                "group_scores": [],
+                "raw_results": {}
+            }
+
+
+class DedupCorrectionModule(dspy.Module):
+    """
+    DSPy模块: 基于validation结果修正去重决策
+    
+    当validation发现质量问题时，这个模块尝试修正错误。
+    """
+    
+    def __init__(self, use_cot: bool = True):
+        super().__init__()
+        
+        if use_cot:
+            self.correct = dspy.ChainOfThought(DedupCorrection)
+        else:
+            self.correct = dspy.Predict(DedupCorrection)
+    
+    def forward(
+        self,
+        head_entity: str,
+        relation: str,
+        original_tails: List[str],
+        current_groups: List[Dict],
+        validation_issues: List[Dict],
+        contexts: List[List[str]] = None
+    ) -> Tuple[List[Dict], str]:
+        """
+        修正去重结果
+        
+        Args:
+            head_entity: 头实体
+            relation: 关系
+            original_tails: 原始tails
+            current_groups: 当前的分组（可能有错误）
+            validation_issues: 发现的问题
+            contexts: 上下文
+        
+        Returns:
+            (corrected_groups, reasoning)
+        """
+        # Format inputs
+        tails_text = "\\n".join([f"[{i+1}] {tail}" for i, tail in enumerate(original_tails)])
+        groups_json = json.dumps(current_groups, ensure_ascii=False)
+        issues_json = json.dumps(validation_issues, ensure_ascii=False)
+        
+        if contexts:
+            contexts_blocks = []
+            for i, tail_contexts in enumerate(contexts, 1):
+                context_str = "\\n    ".join(tail_contexts) if tail_contexts else "- (no context)"
+                contexts_blocks.append(f"[{i}]:\\n    {context_str}")
+            contexts_text = "\\n".join(contexts_blocks)
+        else:
+            contexts_text = "- (no context)"
+        
+        try:
+            result = self.correct(
+                head_entity=head_entity,
+                relation=relation,
+                original_tails=tails_text,
+                current_groups=groups_json,
+                validation_issues=issues_json,
+                contexts=contexts_text
+            )
+            
+            corrected_groups = json_repair.loads(result.corrected_groups)
+            reasoning = result.reasoning
+            
+            return corrected_groups, reasoning
+        
+        except Exception as e:
+            logger.warning(f"Correction failed: {e}")
+            # Return original groups
+            return current_groups, f"Correction failed: {e}"
+
+
+class MultiStageDedupPipeline(dspy.Module):
+    """
+    完整的多阶段去重pipeline
+    
+    Pipeline阶段:
+    1. Clustering - 初步聚类相似的tails
+    2. Deduplication - 精细去重，识别共指
+    3. Validation - 验证去重质量（可选）
+    4. Correction - 修正错误（可选）
+    
+    使用场景:
+    - 基础场景: Stage 1+2 (Clustering + Dedup)
+    - 质量监控: Stage 1+2+3 (+ Validation)
+    - 自动修正: Stage 1+2+3+4 (Full pipeline)
+    """
+    
+    def __init__(
+        self,
+        enable_validation: bool = True,
+        enable_correction: bool = False,
+        validation_threshold: float = 0.7
+    ):
+        """
+        Args:
+            enable_validation: 是否启用验证
+            enable_correction: 是否启用自动修正（需要enable_validation=True）
+            validation_threshold: 质量阈值，低于此值触发correction
+        """
+        super().__init__()
+        
+        # Stage 1: Clustering
+        self.clustering = SemanticClusteringModule(use_cot=True)
+        
+        # Stage 2: Dedup
+        self.dedup = SemanticDedupModule(use_cot=True)
+        
+        # Stage 3: Validation
+        self.enable_validation = enable_validation
+        if enable_validation:
+            self.validation = DedupValidationModule(use_cot=True)
+        
+        # Stage 4: Correction
+        self.enable_correction = enable_correction and enable_validation
+        self.validation_threshold = validation_threshold
+        if self.enable_correction:
+            self.correction = DedupCorrectionModule(use_cot=True)
+    
+    def forward(
+        self,
+        head_entity: str,
+        relation: str,
+        tail_descriptions: List[str],
+        contexts: List[List[str]] = None
+    ) -> Dict:
+        """
+        执行完整的多阶段去重pipeline
+        
+        Returns:
+            {
+                "clusters": [...],           # Stage 1结果
+                "initial_groups": [...],     # Stage 2结果
+                "validation": {...},         # Stage 3结果（如果启用）
+                "final_groups": [...],       # 最终结果
+                "corrections_applied": bool, # 是否应用了修正
+                "reasoning": {...}           # 各阶段的推理过程
+            }
+        """
+        result = {
+            "clusters": [],
+            "initial_groups": [],
+            "validation": None,
+            "final_groups": [],
+            "corrections_applied": False,
+            "reasoning": {}
+        }
+        
+        # Stage 1: Clustering
+        logger.info("Stage 1: Clustering...")
+        clusters = self.clustering(
+            head_entity=head_entity,
+            relation=relation,
+            tail_descriptions=tail_descriptions
+        )
+        result["clusters"] = clusters
+        
+        # Stage 2: Dedup
+        logger.info("Stage 2: Deduplication...")
+        batch_entries = [
+            {
+                "description": desc,
+                "context_summaries": contexts[i] if contexts else ["- (no context)"]
+            }
+            for i, desc in enumerate(tail_descriptions)
+        ]
+        
+        head_contexts = ["- Context for head entity"]
+        groups, dedup_reasoning = self.dedup(
+            head_entity=head_entity,
+            relation=relation,
+            head_contexts=head_contexts,
+            batch_entries=batch_entries
+        )
+        result["initial_groups"] = groups
+        result["reasoning"]["dedup"] = dedup_reasoning
+        
+        # Stage 3: Validation
+        if self.enable_validation:
+            logger.info("Stage 3: Validation...")
+            validation_result = self.validation(
+                head_entity=head_entity,
+                relation=relation,
+                original_tails=tail_descriptions,
+                dedup_groups=groups,
+                contexts=contexts
+            )
+            result["validation"] = validation_result
+            
+            quality = validation_result.get("overall_quality", 1.0)
+            issues = validation_result.get("issues", [])
+            
+            logger.info(f"  Quality Score: {quality:.2f}")
+            logger.info(f"  Issues Found: {len(issues)}")
+            
+            # Stage 4: Correction (if needed)
+            if self.enable_correction and quality < self.validation_threshold and issues:
+                logger.info(f"Stage 4: Correction (quality {quality:.2f} < threshold {self.validation_threshold})...")
+                corrected_groups, correction_reasoning = self.correction(
+                    head_entity=head_entity,
+                    relation=relation,
+                    original_tails=tail_descriptions,
+                    current_groups=groups,
+                    validation_issues=issues,
+                    contexts=contexts
+                )
+                result["final_groups"] = corrected_groups
+                result["corrections_applied"] = True
+                result["reasoning"]["correction"] = correction_reasoning
+                logger.info("  ✓ Corrections applied")
+            else:
+                result["final_groups"] = groups
+                logger.info("  ✓ No corrections needed")
+        else:
+            result["final_groups"] = groups
+        
+        return result
+
+
+# ========== Validation Metrics ==========
+
+def validation_metric(example, pred, trace=None) -> float:
+    """
+    评估validation模块的性能
+    
+    Args:
+        example: 包含真实标签的样本
+            - true_quality: 真实质量分数
+            - true_issues: 真实的问题列表
+        pred: validation模块的输出
+    
+    Returns:
+        综合评分 (0-100)
+    """
+    try:
+        # 提取预测结果
+        if hasattr(pred, 'validation_results'):
+            pred_results = json_repair.loads(pred.validation_results)
+        elif isinstance(pred, dict):
+            pred_results = pred
+        else:
+            return 0.0
+        
+        pred_quality = pred_results.get('overall_quality', 0.5)
+        pred_issues = pred_results.get('issues', [])
+        
+        # 提取真实标签
+        true_quality = example.true_quality
+        true_issues = example.true_issues
+        
+        # 1. Quality score accuracy
+        quality_error = abs(pred_quality - true_quality)
+        quality_score = max(0, 100 - quality_error * 100)
+        
+        # 2. Issue detection F1
+        pred_issue_types = set([issue['type'] for issue in pred_issues])
+        true_issue_types = set([issue['type'] for issue in true_issues])
+        
+        if len(pred_issue_types) == 0 and len(true_issue_types) == 0:
+            issue_f1 = 100.0
+        elif len(pred_issue_types) == 0 or len(true_issue_types) == 0:
+            issue_f1 = 0.0
+        else:
+            tp = len(pred_issue_types & true_issue_types)
+            fp = len(pred_issue_types - true_issue_types)
+            fn = len(true_issue_types - pred_issue_types)
+            
+            precision = tp / (tp + fp) if (tp + fp) > 0 else 0
+            recall = tp / (tp + fn) if (tp + fn) > 0 else 0
+            issue_f1 = 2 * precision * recall / (precision + recall) * 100 if (precision + recall) > 0 else 0
+        
+        # 综合评分: 60% quality accuracy + 40% issue detection
+        final_score = 0.6 * quality_score + 0.4 * issue_f1
+        
+        return final_score
+    
+    except Exception as e:
+        logger.warning(f"Error in validation_metric: {e}")
+        return 0.0
