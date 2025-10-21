@@ -43,12 +43,24 @@ class OfflineSemanticDeduper(KTBuilder):
         self.llm_client = call_llm_api.LLMCompletionCall()
         self.all_chunks: Dict[str, str] = {}
         self._semantic_dedup_embedder = None
+        self.preloaded_clusters = None  # For loading previously saved cluster results
 
     # Expose protected helpers for external script usage while keeping the
     # original implementations in ``KTBuilder`` intact.
     triple_deduplicate = KTBuilder.triple_deduplicate
     _deduplicate_keyword_nodes = KTBuilder._deduplicate_keyword_nodes
     _semantic_dedup_enabled = KTBuilder._semantic_dedup_enabled
+    
+    def load_cluster_results(self, cluster_file: Path) -> None:
+        """Load previously saved clustering results from intermediate results file."""
+        if not cluster_file.exists():
+            raise FileNotFoundError(f"Cluster results file not found: {cluster_file}")
+        
+        logger.info(f"Loading cluster results from {cluster_file}")
+        with cluster_file.open("r", encoding="utf-8") as f:
+            self.preloaded_clusters = json.load(f)
+        
+        logger.info(f"Loaded cluster results with {len(self.preloaded_clusters.get('communities', []))} communities")
 
 
 def _load_chunk_mapping(path: Path) -> Dict[str, str]:
@@ -152,6 +164,11 @@ def _parse_args() -> argparse.Namespace:
         action="store_true",
         help="Force-enable semantic dedup even if disabled in the configuration",
     )
+    parser.add_argument(
+        "--load-clusters",
+        type=Path,
+        help="Path to previously saved clustering results JSON file (skip clustering and only run semantic dedup)",
+    )
     return parser.parse_args()
 
 
@@ -167,6 +184,11 @@ def main() -> None:
             raise RuntimeError("Failed to force-enable semantic dedup in configuration") from e
 
     deduper = OfflineSemanticDeduper(config)
+
+    # Load previously saved cluster results if provided
+    if args.load_clusters:
+        deduper.load_cluster_results(args.load_clusters)
+        logger.info("Cluster results loaded. Will skip clustering phase and only run semantic dedup.")
 
     logger.info("Loading graph from %s", args.graph)
     deduper.graph = graph_processor.load_graph_from_json(str(args.graph))

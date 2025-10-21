@@ -1669,7 +1669,11 @@ class KTBuilder:
         # ================================================================
         clustering_prompts = []
         
-        if clustering_method == "llm":
+        # Check if we have preloaded clusters to skip clustering phase
+        if hasattr(self, 'preloaded_clusters') and self.preloaded_clusters:
+            logger.info("Using preloaded cluster results, skipping clustering phase...")
+            self._apply_preloaded_clusters(dedup_communities, self.preloaded_clusters)
+        elif clustering_method == "llm":
             logger.info("Collecting all keyword clustering prompts...")
             for comm_idx, community_data in enumerate(dedup_communities):
                 prompts = self._collect_clustering_prompts(community_data)
