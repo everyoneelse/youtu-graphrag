@@ -1,0 +1,89 @@
+================================================================================
+完整的LLM Clustering Prompt示例
+（这是实际发送给LLM API的完整文本内容）
+================================================================================
+
+You are a knowledge graph curation assistant performing initial clustering of tail entities.
+All listed tail entities share the same head entity and relation.
+
+Head entity: Barack Obama
+Relation: worksAt
+
+Candidate tails:
+[1] White House
+[2] The White House
+[3] 1600 Pennsylvania Avenue
+[4] University of Chicago
+[5] Harvard Law School
+[6] United States Government
+[7] US Government
+[8] Federal Government
+
+TASK: Group these tails into PRELIMINARY CLUSTERS based on semantic similarity.
+This is an initial clustering step - your goal is to group tails that MIGHT refer to the same entity.
+
+CLUSTERING PRINCIPLE:
+Group tails together if they are:
+1. POTENTIALLY COREFERENT: Could refer to the same entity (e.g., 'NYC' and 'New York City')
+2. SEMANTICALLY VERY SIMILAR: Very similar concepts that need further examination
+3. LEXICALLY RELATED: Different expressions of potentially the same thing
+
+KEEP SEPARATE if tails are:
+1. CLEARLY DISTINCT: Obviously different entities (e.g., 'Paris' vs 'London')
+2. SEMANTICALLY DIFFERENT: Different concepts (e.g., 'color' vs 'size')
+3. UNRELATED: No clear semantic connection
+
+CLUSTERING GUIDELINES:
+- Be INCLUSIVE in this initial clustering - it's better to over-cluster than under-cluster
+- Subsequent LLM refinement will separate false positives within clusters
+- Focus on semantic similarity, not just string matching
+- Group by meaning/concept rather than exact wording
+- Each tail must appear in exactly ONE cluster
+
+EXAMPLES:
+✓ Cluster together: ['New York', 'NYC', 'New York City'] - potential coreference
+✓ Cluster together: ['United States', 'USA', 'US', 'America'] - potential coreference
+✓ Keep separate: ['Paris', 'London', 'Berlin'] - clearly distinct cities
+✓ Keep separate: ['red', 'large', 'heavy'] - different property types
+
+OUTPUT REQUIREMENTS:
+1. Every input index must appear in exactly one cluster
+2. Each cluster should contain semantically similar tails
+3. Provide a brief description for each cluster explaining the grouping rationale
+
+Respond with strict JSON using this schema:
+{
+  "clusters": [
+    {
+      "members": [1, 3, 5],
+      "description": "Brief explanation of why these tails are clustered together"
+    },
+    {
+      "members": [2],
+      "description": "This tail is semantically distinct from others"
+    }
+  ]
+}
+
+
+================================================================================
+说明：
+================================================================================
+
+上面这段文本就是完整的prompt，它由以下部分组成：
+
+1. 固定的模板文本（来自 DEFAULT_LLM_CLUSTERING_PROMPT）
+2. 填充的变量：
+   - {head} = "Barack Obama"
+   - {relation} = "worksAt"
+   - {candidates} = 格式化后的候选列表
+
+3. 代码位置：models/constructor/kt_gen.py 第993-997行
+   prompt = DEFAULT_LLM_CLUSTERING_PROMPT.format(
+       head=head_text or "[UNKNOWN_HEAD]",
+       relation=relation or "[UNKNOWN_RELATION]",
+       candidates=candidates_text
+   )
+
+4. 这个完整的字符串会通过以下方式发送给LLM：
+   response = self.clustering_llm_client.call_api(prompt)
