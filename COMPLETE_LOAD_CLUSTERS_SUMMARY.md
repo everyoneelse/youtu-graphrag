@@ -14,16 +14,17 @@
 ## 修改的文件清单
 
 ### 1. `offline_semantic_dedup.py`
-- ✅ 添加 `preloaded_clusters` 属性
-- ✅ 实现 `load_cluster_results()` 方法
-- ✅ 添加 `--load-clusters` 命令行参数
-- ✅ 在 `main()` 中集成cluster加载逻辑
+- ✅ 添加两个独立属性: `preloaded_keyword_clusters` 和 `preloaded_edge_clusters`
+- ✅ 实现 `load_keyword_cluster_results()` 方法
+- ✅ 实现 `load_edge_cluster_results()` 方法
+- ✅ 添加两个独立的命令行参数: `--load-keyword-clusters` 和 `--load-edge-clusters`
+- ✅ 在 `main()` 中集成两种cluster的加载逻辑
 
 ### 2. `models/constructor/kt_gen.py`
 - ✅ 实现 `_apply_preloaded_clusters()` 方法（keyword dedup）
 - ✅ 实现 `_apply_preloaded_clusters_for_edges()` 方法（edge dedup）
-- ✅ 修改 `_deduplicate_keyword_nodes()` 的PHASE 2
-- ✅ 修改 `triple_deduplicate_semantic()` 的PHASE 2
+- ✅ 修改 `_deduplicate_keyword_nodes()` 的PHASE 2，检查 `preloaded_keyword_clusters`
+- ✅ 修改 `triple_deduplicate_semantic()` 的PHASE 2，检查 `preloaded_edge_clusters`
 
 ### 3. 文档
 - ✅ `LOAD_CLUSTERS_USAGE.md` - 详细使用指南
@@ -65,20 +66,29 @@ elif clustering_method == "llm":
 ### 基本用法
 
 ```bash
-# 使用保存的keyword dedup cluster
+# 只使用keyword cluster（跳过keyword clustering）
 python3 offline_semantic_dedup.py \
     --graph output/graphs/demo_new.json \
     --chunks output/chunks/demo.txt \
     --output output/graphs/demo_deduped.json \
-    --load-clusters output/dedup_intermediate/demo_keyword_dedup_20251021_123456.json \
+    --load-keyword-clusters output/dedup_intermediate/demo_keyword_dedup_20251021_123456.json \
     --force-enable
 
-# 使用保存的edge dedup cluster
+# 只使用edge cluster（跳过edge clustering）
 python3 offline_semantic_dedup.py \
     --graph output/graphs/demo_new.json \
     --chunks output/chunks/demo.txt \
     --output output/graphs/demo_deduped.json \
-    --load-clusters output/dedup_intermediate/demo_edge_dedup_20251021_123456.json \
+    --load-edge-clusters output/dedup_intermediate/demo_edge_dedup_20251021_123456.json \
+    --force-enable
+
+# 同时使用两种cluster（跳过所有clustering）
+python3 offline_semantic_dedup.py \
+    --graph output/graphs/demo_new.json \
+    --chunks output/chunks/demo.txt \
+    --output output/graphs/demo_deduped.json \
+    --load-keyword-clusters output/dedup_intermediate/demo_keyword_dedup_20251021_123456.json \
+    --load-edge-clusters output/dedup_intermediate/demo_edge_dedup_20251021_123456.json \
     --force-enable
 ```
 

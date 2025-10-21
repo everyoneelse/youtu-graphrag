@@ -34,14 +34,36 @@ construction:
 
 ### 第二步：使用保存的Cluster结果
 
-使用 `offline_semantic_dedup.py` 脚本，添加 `--load-clusters` 参数：
+使用 `offline_semantic_dedup.py` 脚本，根据需要添加对应的参数：
 
+#### 只加载Keyword Clusters
 ```bash
 python3 offline_semantic_dedup.py \
     --graph output/graphs/demo_new.json \
     --chunks output/chunks/demo.txt \
     --output output/graphs/demo_deduped_v2.json \
-    --load-clusters output/dedup_intermediate/demo_keyword_dedup_20251021_123456.json \
+    --load-keyword-clusters output/dedup_intermediate/demo_keyword_dedup_20251021_123456.json \
+    --force-enable
+```
+
+#### 只加载Edge Clusters
+```bash
+python3 offline_semantic_dedup.py \
+    --graph output/graphs/demo_new.json \
+    --chunks output/chunks/demo.txt \
+    --output output/graphs/demo_deduped_v2.json \
+    --load-edge-clusters output/dedup_intermediate/demo_edge_dedup_20251021_123456.json \
+    --force-enable
+```
+
+#### 同时加载Keyword和Edge Clusters
+```bash
+python3 offline_semantic_dedup.py \
+    --graph output/graphs/demo_new.json \
+    --chunks output/chunks/demo.txt \
+    --output output/graphs/demo_deduped_v2.json \
+    --load-keyword-clusters output/dedup_intermediate/demo_keyword_dedup_20251021_123456.json \
+    --load-edge-clusters output/dedup_intermediate/demo_edge_dedup_20251021_123456.json \
     --force-enable
 ```
 
@@ -50,7 +72,8 @@ python3 offline_semantic_dedup.py \
 - `--graph`: 输入的知识图谱JSON文件
 - `--chunks`: chunk文件或目录
 - `--output`: 输出的去重后图谱文件
-- `--load-clusters`: **新增参数** - 之前保存的cluster结果JSON文件路径
+- `--load-keyword-clusters`: **新增参数** - 之前保存的keyword cluster结果JSON文件路径
+- `--load-edge-clusters`: **新增参数** - 之前保存的edge cluster结果JSON文件路径
 - `--force-enable`: 强制启用semantic dedup（即使配置中禁用）
 - `--config`: （可选）自定义配置文件
 
@@ -166,16 +189,20 @@ python3 offline_semantic_dedup.py \
 ## 注意事项
 
 1. **图谱一致性**: 确保使用的图谱与保存cluster结果时的图谱一致或兼容
-2. **自动识别类型**: 脚本会自动识别cluster文件类型（keyword或edge），并应用到对应的去重阶段
+2. **独立参数**: keyword和edge cluster使用两个独立的参数，可以分别加载
 3. **匹配机制**: 
    - Keyword dedup: 如果某个community找不到对应cluster，会使用fallback策略（所有成员作为单个cluster）
    - Edge dedup: 如果某个(head, relation)组合找不到对应cluster，会使用fallback策略
 4. **配置兼容**: semantic dedup的配置参数（如max_batch_size）可以与clustering时不同，允许独立调优
-5. **混合使用**: 可以同时加载keyword和edge的cluster结果，或只加载其中一个
+5. **灵活组合**: 
+   - 可以只加载keyword clusters（跳过keyword clustering）
+   - 可以只加载edge clusters（跳过edge clustering）
+   - 可以同时加载两者（跳过所有clustering）
+   - 可以都不加载（完整运行）
 
 ## 示例场景
 
-### 场景1: 优化Semantic Dedup参数
+### 场景1: 优化Keyword Dedup参数
 
 ```bash
 # 第一次运行：完整的clustering + dedup
@@ -185,16 +212,26 @@ python3 offline_semantic_dedup.py \
     --output output/graphs/demo_dedup_v1.json \
     --config config/my_config.yaml
 
-# 保存的cluster结果: output/dedup_intermediate/demo_keyword_dedup_20251021_120000.json
+# 保存的cluster结果: 
+#   - output/dedup_intermediate/demo_keyword_dedup_20251021_120000.json
+#   - output/dedup_intermediate/demo_edge_dedup_20251021_120000.json
 
-# 第二次运行：调整dedup参数，使用已有cluster
-# 修改配置文件中的 max_batch_size 或其他dedup参数
+# 第二次运行：只调整keyword dedup参数，使用已有keyword cluster
 python3 offline_semantic_dedup.py \
     --graph output/graphs/demo.json \
     --chunks output/chunks/demo.txt \
     --output output/graphs/demo_dedup_v2.json \
-    --load-clusters output/dedup_intermediate/demo_keyword_dedup_20251021_120000.json \
+    --load-keyword-clusters output/dedup_intermediate/demo_keyword_dedup_20251021_120000.json \
     --config config/my_config_v2.yaml
+
+# 第三次运行：同时使用两个cluster文件，只调整semantic dedup阶段的参数
+python3 offline_semantic_dedup.py \
+    --graph output/graphs/demo.json \
+    --chunks output/chunks/demo.txt \
+    --output output/graphs/demo_dedup_v3.json \
+    --load-keyword-clusters output/dedup_intermediate/demo_keyword_dedup_20251021_120000.json \
+    --load-edge-clusters output/dedup_intermediate/demo_edge_dedup_20251021_120000.json \
+    --config config/my_config_v3.yaml
 ```
 
 ### 场景2: 分阶段处理大规模数据
@@ -209,7 +246,26 @@ python3 offline_semantic_dedup.py \
     --graph output/graphs/large_dataset_new.json \
     --chunks output/chunks/large_dataset.txt \
     --output output/graphs/large_dataset_deduped.json \
-    --load-clusters output/dedup_intermediate/large_dataset_keyword_dedup_xxx.json
+    --load-keyword-clusters output/dedup_intermediate/large_dataset_keyword_dedup_xxx.json \
+    --load-edge-clusters output/dedup_intermediate/large_dataset_edge_dedup_xxx.json
+```
+
+### 场景3: 只优化其中一种去重
+
+```bash
+# 只重新运行keyword dedup，保留edge clustering结果
+python3 offline_semantic_dedup.py \
+    --graph output/graphs/demo.json \
+    --chunks output/chunks/demo.txt \
+    --output output/graphs/demo_keyword_optimized.json \
+    --load-keyword-clusters output/dedup_intermediate/demo_keyword_dedup_xxx.json
+
+# 只重新运行edge dedup，保留keyword clustering结果
+python3 offline_semantic_dedup.py \
+    --graph output/graphs/demo.json \
+    --chunks output/chunks/demo.txt \
+    --output output/graphs/demo_edge_optimized.json \
+    --load-edge-clusters output/dedup_intermediate/demo_edge_dedup_xxx.json
 ```
 
 ## 技术细节

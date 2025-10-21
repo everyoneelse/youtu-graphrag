@@ -1669,10 +1669,10 @@ class KTBuilder:
         # ================================================================
         clustering_prompts = []
         
-        # Check if we have preloaded clusters to skip clustering phase
-        if hasattr(self, 'preloaded_clusters') and self.preloaded_clusters:
-            logger.info("Using preloaded cluster results, skipping clustering phase...")
-            self._apply_preloaded_clusters(dedup_communities, self.preloaded_clusters)
+        # Check if we have preloaded keyword clusters to skip clustering phase
+        if hasattr(self, 'preloaded_keyword_clusters') and self.preloaded_keyword_clusters:
+            logger.info("Using preloaded keyword cluster results, skipping clustering phase...")
+            self._apply_preloaded_clusters(dedup_communities, self.preloaded_keyword_clusters)
         elif clustering_method == "llm":
             logger.info("Collecting all keyword clustering prompts...")
             for comm_idx, community_data in enumerate(dedup_communities):
@@ -3655,10 +3655,10 @@ class KTBuilder:
         clustering_prompts = []
         clustering_method = getattr(config, "clustering_method", "embedding")
         
-        # Check if we have preloaded clusters to skip clustering phase
-        if hasattr(self, 'preloaded_clusters') and self.preloaded_clusters:
-            logger.info("Using preloaded cluster results for edge deduplication, skipping clustering phase...")
-            self._apply_preloaded_clusters_for_edges(dedup_groups, self.preloaded_clusters)
+        # Check if we have preloaded edge clusters to skip clustering phase
+        if hasattr(self, 'preloaded_edge_clusters') and self.preloaded_edge_clusters:
+            logger.info("Using preloaded edge cluster results, skipping clustering phase...")
+            self._apply_preloaded_clusters_for_edges(dedup_groups, self.preloaded_edge_clusters)
         elif clustering_method == "llm":
             logger.info("Collecting all clustering prompts...")
             for group_idx, group_data in enumerate(dedup_groups):

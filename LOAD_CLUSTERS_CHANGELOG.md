@@ -15,66 +15,73 @@
 ### 1. `offline_semantic_dedup.py`
 
 **修改内容:**
-- 在 `OfflineSemanticDeduper` 类中添加 `preloaded_clusters` 属性
-- 添加 `load_cluster_results()` 方法，用于从JSON文件加载cluster结果
-- 在 `_parse_args()` 中添加 `--load-clusters` 命令行参数
-- 在 `main()` 函数中添加cluster加载逻辑
+- 在 `OfflineSemanticDeduper` 类中添加两个独立属性:
+  - `preloaded_keyword_clusters`: 存储keyword dedup cluster结果
+  - `preloaded_edge_clusters`: 存储edge dedup cluster结果
+- 添加 `load_keyword_cluster_results()` 方法，用于加载keyword cluster
+- 添加 `load_edge_cluster_results()` 方法，用于加载edge cluster
+- 在 `_parse_args()` 中添加两个独立的命令行参数:
+  - `--load-keyword-clusters`: 加载keyword cluster文件
+  - `--load-edge-clusters`: 加载edge cluster文件
+- 在 `main()` 函数中添加两种cluster的加载逻辑
 
 **关键代码:**
 ```python
 # 新增属性
-self.preloaded_clusters = None
+self.preloaded_keyword_clusters = None  # For keyword dedup
+self.preloaded_edge_clusters = None     # For edge dedup
 
 # 新增方法
-def load_cluster_results(self, cluster_file: Path) -> None:
-    """Load previously saved clustering results from intermediate results file."""
+def load_keyword_cluster_results(self, cluster_file: Path) -> None:
+    """Load keyword clustering results."""
+    ...
+
+def load_edge_cluster_results(self, cluster_file: Path) -> None:
+    """Load edge clustering results."""
     ...
 
 # 新增命令行参数
-parser.add_argument(
-    "--load-clusters",
-    type=Path,
-    help="Path to previously saved clustering results JSON file"
-)
+parser.add_argument("--load-keyword-clusters", type=Path, ...)
+parser.add_argument("--load-edge-clusters", type=Path, ...)
 ```
 
 ### 2. `models/constructor/kt_gen.py`
 
 **修改内容:**
-- 添加 `_apply_preloaded_clusters()` 方法，用于将预加载的cluster应用到keyword dedup的community数据
-- 添加 `_apply_preloaded_clusters_for_edges()` 方法，用于将预加载的cluster应用到edge dedup的group数据
-- 修改 `_deduplicate_keyword_nodes()` 方法的PHASE 2，检查是否有预加载的cluster
-- 修改 `triple_deduplicate_semantic()` 方法的PHASE 2，检查是否有预加载的cluster
-- 如果有预加载cluster，跳过clustering阶段，直接使用预加载的结果
+- 添加 `_apply_preloaded_clusters()` 方法，用于将预加载的keyword cluster应用到community数据
+- 添加 `_apply_preloaded_clusters_for_edges()` 方法，用于将预加载的edge cluster应用到group数据
+- 修改 `_deduplicate_keyword_nodes()` 方法的PHASE 2，检查 `preloaded_keyword_clusters`
+- 修改 `triple_deduplicate_semantic()` 方法的PHASE 2，检查 `preloaded_edge_clusters`
+- 如果有对应的预加载cluster，跳过相应的clustering阶段
 
 **关键代码:**
 ```python
 # 新增方法 - Keyword Dedup
 def _apply_preloaded_clusters(self, dedup_communities: list, preloaded_data: dict) -> None:
     """
-    Apply preloaded cluster results to communities, skipping the clustering phase.
+    Apply preloaded keyword cluster results to communities.
     """
     ...
 
 # 新增方法 - Edge Dedup
 def _apply_preloaded_clusters_for_edges(self, dedup_groups: list, preloaded_data: dict) -> None:
     """
-    Apply preloaded cluster results to edge deduplication groups.
+    Apply preloaded edge cluster results to edge groups.
     """
     ...
 
 # 修改Keyword Dedup的PHASE 2逻辑
-if hasattr(self, 'preloaded_clusters') and self.preloaded_clusters:
-    logger.info("Using preloaded cluster results, skipping clustering phase...")
-    self._apply_preloaded_clusters(dedup_communities, self.preloaded_clusters)
+if hasattr(self, 'preloaded_keyword_clusters') and self.preloaded_keyword_clusters:
+    logger.info("Using preloaded keyword cluster results, skipping clustering phase...")
+    self._apply_preloaded_clusters(dedup_communities, self.preloaded_keyword_clusters)
 elif clustering_method == "llm":
     # 原有的clustering逻辑
     ...
 
 # 修改Edge Dedup的PHASE 2逻辑
-if hasattr(self, 'preloaded_clusters') and self.preloaded_clusters:
-    logger.info("Using preloaded cluster results for edge deduplication, skipping clustering phase...")
-    self._apply_preloaded_clusters_for_edges(dedup_groups, self.preloaded_clusters)
+if hasattr(self, 'preloaded_edge_clusters') and self.preloaded_edge_clusters:
+    logger.info("Using preloaded edge cluster results, skipping clustering phase...")
+    self._apply_preloaded_clusters_for_edges(dedup_groups, self.preloaded_edge_clusters)
 elif clustering_method == "llm":
     # 原有的clustering逻辑
     ...
@@ -83,17 +90,42 @@ elif clustering_method == "llm":
 ## 使用示例
 
 ### 基本用法
+
+#### 只加载keyword clusters
 ```bash
 python3 offline_semantic_dedup.py \
     --graph output/graphs/demo_new.json \
     --chunks output/chunks/demo.txt \
     --output output/graphs/demo_deduped.json \
-    --load-clusters output/dedup_intermediate/demo_keyword_dedup_20251021_123456.json \
+    --load-keyword-clusters output/dedup_intermediate/demo_keyword_dedup_20251021_123456.json \
+    --force-enable
+```
+
+#### 只加载edge clusters
+```bash
+python3 offline_semantic_dedup.py \
+    --graph output/graphs/demo_new.json \
+    --chunks output/chunks/demo.txt \
+    --output output/graphs/demo_deduped.json \
+    --load-edge-clusters output/dedup_intermediate/demo_edge_dedup_20251021_123456.json \
+    --force-enable
+```
+
+#### 同时加载两种clusters
+```bash
+python3 offline_semantic_dedup.py \
+    --graph output/graphs/demo_new.json \
+    --chunks output/chunks/demo.txt \
+    --output output/graphs/demo_deduped.json \
+    --load-keyword-clusters output/dedup_intermediate/demo_keyword_dedup_20251021_123456.json \
+    --load-edge-clusters output/dedup_intermediate/demo_edge_dedup_20251021_123456.json \
     --force-enable
 ```
 
 ### 参数说明
-- `--load-clusters`: 指向之前保存的cluster结果JSON文件的路径
+- `--load-keyword-clusters`: 指向keyword cluster结果JSON文件的路径
+- `--load-edge-clusters`: 指向edge cluster结果JSON文件的路径
+- 可以单独使用其中一个，也可以同时使用两个
 - 其他参数保持不变
 
 ## 优势
