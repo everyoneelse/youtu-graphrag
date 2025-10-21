@@ -41,23 +41,40 @@ parser.add_argument(
 ### 2. `models/constructor/kt_gen.py`
 
 **修改内容:**
-- 添加 `_apply_preloaded_clusters()` 方法，用于将预加载的cluster应用到community数据
+- 添加 `_apply_preloaded_clusters()` 方法，用于将预加载的cluster应用到keyword dedup的community数据
+- 添加 `_apply_preloaded_clusters_for_edges()` 方法，用于将预加载的cluster应用到edge dedup的group数据
 - 修改 `_deduplicate_keyword_nodes()` 方法的PHASE 2，检查是否有预加载的cluster
+- 修改 `triple_deduplicate_semantic()` 方法的PHASE 2，检查是否有预加载的cluster
 - 如果有预加载cluster，跳过clustering阶段，直接使用预加载的结果
 
 **关键代码:**
 ```python
-# 新增方法
+# 新增方法 - Keyword Dedup
 def _apply_preloaded_clusters(self, dedup_communities: list, preloaded_data: dict) -> None:
     """
     Apply preloaded cluster results to communities, skipping the clustering phase.
     """
     ...
 
-# 修改PHASE 2逻辑
+# 新增方法 - Edge Dedup
+def _apply_preloaded_clusters_for_edges(self, dedup_groups: list, preloaded_data: dict) -> None:
+    """
+    Apply preloaded cluster results to edge deduplication groups.
+    """
+    ...
+
+# 修改Keyword Dedup的PHASE 2逻辑
 if hasattr(self, 'preloaded_clusters') and self.preloaded_clusters:
     logger.info("Using preloaded cluster results, skipping clustering phase...")
     self._apply_preloaded_clusters(dedup_communities, self.preloaded_clusters)
+elif clustering_method == "llm":
+    # 原有的clustering逻辑
+    ...
+
+# 修改Edge Dedup的PHASE 2逻辑
+if hasattr(self, 'preloaded_clusters') and self.preloaded_clusters:
+    logger.info("Using preloaded cluster results for edge deduplication, skipping clustering phase...")
+    self._apply_preloaded_clusters_for_edges(dedup_groups, self.preloaded_clusters)
 elif clustering_method == "llm":
     # 原有的clustering逻辑
     ...
@@ -95,14 +112,28 @@ python3 offline_semantic_dedup.py \
 ## 技术细节
 
 ### Cluster数据匹配逻辑
+
+#### Keyword Deduplication
 1. 根据 `community_id` 匹配当前图谱中的community和保存的cluster
-2. 提取cluster的 `member_indices`、`llm_description`、`llm_rationale`
-3. 填充到 `community_data` 的 `initial_clusters` 和 `llm_clustering_details`
-4. 后续semantic dedup阶段正常使用这些cluster信息
+2. 从 `communities` 数组中提取对应的cluster信息
+3. 提取cluster的 `member_indices`、`llm_description`、`llm_rationale`
+4. 填充到 `community_data` 的 `initial_clusters` 和 `llm_clustering_details`
+
+#### Edge Deduplication
+1. 根据 `(head_id, relation)` 组合匹配当前图谱中的edge group和保存的cluster
+2. 从 `triples` 数组中提取对应的cluster信息
+3. 提取cluster的 `member_indices`、`llm_description`、`llm_rationale`
+4. 填充到 `group_data` 的 `initial_clusters` 和 `llm_clustering_details`
+
+### 自动识别机制
+系统通过检查JSON文件的结构自动识别cluster类型：
+- 包含 `communities` 字段 → Keyword dedup cluster
+- 包含 `triples` 字段 → Edge dedup cluster
+- 两者都可以同时加载和使用
 
 ### Fallback策略
 当找不到匹配的cluster数据时：
-- 将该community的所有成员作为单个cluster
+- 将该community/group的所有成员作为单个cluster
 - 记录warning日志
 - 继续处理，不会中断整个流程
 
@@ -115,10 +146,11 @@ python3 offline_semantic_dedup.py \
 
 ## 后续改进建议
 
-1. **支持Edge Deduplication**: 扩展到支持edge dedup的cluster加载
+1. ✅ **支持Edge Deduplication**: 已完成！现在支持edge dedup的cluster加载
 2. **验证功能**: 添加cluster文件与图谱的兼容性验证
 3. **统计信息**: 在日志中输出更详细的匹配统计信息
-4. **部分加载**: 支持只加载特定community的cluster结果
+4. **部分加载**: 支持只加载特定community/group的cluster结果
+5. **合并加载**: 支持同时加载多个cluster文件（例如，分别从不同时间点保存的结果）
 
 ## 相关文档
 
