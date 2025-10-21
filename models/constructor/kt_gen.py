@@ -1761,6 +1761,86 @@ class KTBuilder:
             except Exception as e:
                 logger.warning(f"Failed to save intermediate results: {e}")
 
+    def _apply_preloaded_clusters(self, dedup_communities: list, preloaded_data: dict) -> None:
+        """
+        Apply preloaded cluster results to communities, skipping the clustering phase.
+        
+        Args:
+            dedup_communities: List of community data dicts to populate with cluster info
+            preloaded_data: Previously saved intermediate results containing cluster info
+        """
+        logger.info("Applying preloaded cluster results...")
+        
+        # Build a mapping from community_id to preloaded community data
+        preloaded_communities = {}
+        for comm_data in preloaded_data.get("communities", []):
+            comm_id = comm_data.get("community_id")
+            if comm_id:
+                preloaded_communities[comm_id] = comm_data
+        
+        matched_count = 0
+        for community_data in dedup_communities:
+            comm_id = community_data.get("community_id")
+            preloaded_comm = preloaded_communities.get(comm_id)
+            
+            if not preloaded_comm:
+                logger.warning(f"No preloaded cluster data found for community {comm_id}, using fallback single cluster")
+                # Fallback: treat all as one cluster
+                entries = community_data.get('entries', [])
+                community_data['initial_clusters'] = [[e['index'] for e in entries]]
+                community_data['llm_clustering_details'] = [{
+                    "description": "Fallback cluster (no preloaded data)",
+                    "llm_rationale": "",
+                    "members": [e['index'] for e in entries]
+                }]
+                continue
+            
+            # Extract cluster information from preloaded data
+            clustering_info = preloaded_comm.get("clustering", {})
+            clusters_data = clustering_info.get("clusters", [])
+            
+            if not clusters_data:
+                logger.warning(f"No cluster data in preloaded results for community {comm_id}")
+                entries = community_data.get('entries', [])
+                community_data['initial_clusters'] = [[e['index'] for e in entries]]
+                community_data['llm_clustering_details'] = [{
+                    "description": "Fallback cluster (empty preloaded data)",
+                    "llm_rationale": "",
+                    "members": [e['index'] for e in entries]
+                }]
+                continue
+            
+            # Convert preloaded cluster data to the format expected by semantic dedup
+            initial_clusters = []
+            llm_clustering_details = []
+            
+            for cluster_info in clusters_data:
+                member_indices = cluster_info.get("member_indices", [])
+                if member_indices:
+                    initial_clusters.append(member_indices)
+                    llm_clustering_details.append({
+                        "description": cluster_info.get("llm_description", ""),
+                        "llm_rationale": cluster_info.get("llm_rationale", ""),
+                        "members": member_indices
+                    })
+            
+            if not initial_clusters:
+                logger.warning(f"No valid clusters extracted from preloaded data for community {comm_id}")
+                entries = community_data.get('entries', [])
+                community_data['initial_clusters'] = [[e['index'] for e in entries]]
+                community_data['llm_clustering_details'] = [{
+                    "description": "Fallback cluster (no valid clusters)",
+                    "llm_rationale": "",
+                    "members": [e['index'] for e in entries]
+                }]
+                continue
+            
+            community_data['initial_clusters'] = initial_clusters
+            community_data['llm_clustering_details'] = llm_clustering_details
+            matched_count += 1
+            
+        logger.info(f"Successfully applied preloaded clusters to {matched_count}/{len(dedup_communities)} communities")
+
     def _prepare_keyword_dedup_community(self, community_id: str, keyword_ids: list, 
                                          keyword_mapping: dict, config) -> dict:
         """
