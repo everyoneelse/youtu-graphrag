@@ -43,12 +43,38 @@ class OfflineSemanticDeduper(KTBuilder):
         self.llm_client = call_llm_api.LLMCompletionCall()
         self.all_chunks: Dict[str, str] = {}
         self._semantic_dedup_embedder = None
+        self.preloaded_keyword_clusters = None  # For loading keyword dedup cluster results
+        self.preloaded_edge_clusters = None  # For loading edge dedup cluster results
 
     # Expose protected helpers for external script usage while keeping the
     # original implementations in ``KTBuilder`` intact.
     triple_deduplicate = KTBuilder.triple_deduplicate
     _deduplicate_keyword_nodes = KTBuilder._deduplicate_keyword_nodes
     _semantic_dedup_enabled = KTBuilder._semantic_dedup_enabled
+    
+    def load_keyword_cluster_results(self, cluster_file: Path) -> None:
+        """Load previously saved keyword clustering results from intermediate results file."""
+        if not cluster_file.exists():
+            raise FileNotFoundError(f"Keyword cluster results file not found: {cluster_file}")
+        
+        logger.info(f"Loading keyword cluster results from {cluster_file}")
+        with cluster_file.open("r", encoding="utf-8") as f:
+            self.preloaded_keyword_clusters = json.load(f)
+        
+        num_communities = len(self.preloaded_keyword_clusters.get('communities', []))
+        logger.info(f"Loaded keyword cluster results with {num_communities} communities")
+    
+    def load_edge_cluster_results(self, cluster_file: Path) -> None:
+        """Load previously saved edge clustering results from intermediate results file."""
+        if not cluster_file.exists():
+            raise FileNotFoundError(f"Edge cluster results file not found: {cluster_file}")
+        
+        logger.info(f"Loading edge cluster results from {cluster_file}")
+        with cluster_file.open("r", encoding="utf-8") as f:
+            self.preloaded_edge_clusters = json.load(f)
+        
+        num_triples = len(self.preloaded_edge_clusters.get('triples', []))
+        logger.info(f"Loaded edge cluster results with {num_triples} triple groups")
 
 
 def _load_chunk_mapping(path: Path) -> Dict[str, str]:
@@ -152,6 +178,16 @@ def _parse_args() -> argparse.Namespace:
         action="store_true",
         help="Force-enable semantic dedup even if disabled in the configuration",
     )
+    parser.add_argument(
+        "--load-keyword-clusters",
+        type=Path,
+        help="Path to previously saved keyword clustering results JSON file (skip keyword clustering and only run semantic dedup)",
+    )
+    parser.add_argument(
+        "--load-edge-clusters",
+        type=Path,
+        help="Path to previously saved edge clustering results JSON file (skip edge clustering and only run semantic dedup)",
+    )
     return parser.parse_args()
 
 
@@ -167,6 +203,15 @@ def main() -> None:
             raise RuntimeError("Failed to force-enable semantic dedup in configuration") from e
 
     deduper = OfflineSemanticDeduper(config)
+
+    # Load previously saved cluster results if provided
+    if args.load_keyword_clusters:
+        deduper.load_keyword_cluster_results(args.load_keyword_clusters)
+        logger.info("Keyword cluster results loaded. Will skip keyword clustering phase and only run semantic dedup.")
+    
+    if args.load_edge_clusters:
+        deduper.load_edge_cluster_results(args.load_edge_clusters)
+        logger.info("Edge cluster results loaded. Will skip edge clustering phase and only run semantic dedup.")
 
     logger.info("Loading graph from %s", args.graph)
     deduper.graph = graph_processor.load_graph_from_json(str(args.graph))

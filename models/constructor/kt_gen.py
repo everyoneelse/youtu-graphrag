@@ -1669,7 +1669,11 @@ class KTBuilder:
         # ================================================================
         clustering_prompts = []
         
-        if clustering_method == "llm":
+        # Check if we have preloaded keyword clusters to skip clustering phase
+        if hasattr(self, 'preloaded_keyword_clusters') and self.preloaded_keyword_clusters:
+            logger.info("Using preloaded keyword cluster results, skipping clustering phase...")
+            self._apply_preloaded_clusters(dedup_communities, self.preloaded_keyword_clusters)
+        elif clustering_method == "llm":
             logger.info("Collecting all keyword clustering prompts...")
             for comm_idx, community_data in enumerate(dedup_communities):
                 prompts = self._collect_clustering_prompts(community_data)
@@ -1756,6 +1760,170 @@ class KTBuilder:
                 logger.info(f"Summary: {intermediate_results['summary']}")
             except Exception as e:
                 logger.warning(f"Failed to save intermediate results: {e}")
+
+    def _apply_preloaded_clusters(self, dedup_communities: list, preloaded_data: dict) -> None:
+        """
+        Apply preloaded cluster results to communities, skipping the clustering phase.
+        
+        Args:
+            dedup_communities: List of community data dicts to populate with cluster info
+            preloaded_data: Previously saved intermediate results containing cluster info
+        """
+        logger.info("Applying preloaded cluster results...")
+        
+        # Build a mapping from community_id to preloaded community data
+        preloaded_communities = {}
+        for comm_data in preloaded_data.get("communities", []):
+            comm_id = comm_data.get("community_id")
+            if comm_id:
+                preloaded_communities[comm_id] = comm_data
+        
+        matched_count = 0
+        for community_data in dedup_communities:
+            comm_id = community_data.get("community_id")
+            preloaded_comm = preloaded_communities.get(comm_id)
+            
+            if not preloaded_comm:
+                logger.warning(f"No preloaded cluster data found for community {comm_id}, using fallback single cluster")
+                # Fallback: treat all as one cluster
+                entries = community_data.get('entries', [])
+                community_data['initial_clusters'] = [[e['index'] for e in entries]]
+                community_data['llm_clustering_details'] = [{
+                    "description": "Fallback cluster (no preloaded data)",
+                    "llm_rationale": "",
+                    "members": [e['index'] for e in entries]
+                }]
+                continue
+            
+            # Extract cluster information from preloaded data
+            clustering_info = preloaded_comm.get("clustering", {})
+            clusters_data = clustering_info.get("clusters", [])
+            
+            if not clusters_data:
+                logger.warning(f"No cluster data in preloaded results for community {comm_id}")
+                entries = community_data.get('entries', [])
+                community_data['initial_clusters'] = [[e['index'] for e in entries]]
+                community_data['llm_clustering_details'] = [{
+                    "description": "Fallback cluster (empty preloaded data)",
+                    "llm_rationale": "",
+                    "members": [e['index'] for e in entries]
+                }]
+                continue
+            
+            # Convert preloaded cluster data to the format expected by semantic dedup
+            initial_clusters = []
+            llm_clustering_details = []
+            
+            for cluster_info in clusters_data:
+                member_indices = cluster_info.get("member_indices", [])
+                if member_indices:
+                    initial_clusters.append(member_indices)
+                    llm_clustering_details.append({
+                        "description": cluster_info.get("llm_description", ""),
+                        "llm_rationale": cluster_info.get("llm_rationale", ""),
+                        "members": member_indices
+                    })
+            
+            if not initial_clusters:
+                logger.warning(f"No valid clusters extracted from preloaded data for community {comm_id}")
+                entries = community_data.get('entries', [])
+                community_data['initial_clusters'] = [[e['index'] for e in entries]]
+                community_data['llm_clustering_details'] = [{
+                    "description": "Fallback cluster (no valid clusters)",
+                    "llm_rationale": "",
+                    "members": [e['index'] for e in entries]
+                }]
+                continue
+            
+            community_data['initial_clusters'] = initial_clusters
+            community_data['llm_clustering_details'] = llm_clustering_details
+            matched_count += 1
+            
+        logger.info(f"Successfully applied preloaded clusters to {matched_count}/{len(dedup_communities)} communities")
+
+    def _apply_preloaded_clusters_for_edges(self, dedup_groups: list, preloaded_data: dict) -> None:
+        """
+        Apply preloaded cluster results to edge deduplication groups, skipping the clustering phase.
+        
+        Args:
+            dedup_groups: List of edge group data dicts to populate with cluster info
+            preloaded_data: Previously saved intermediate results containing cluster info
+        """
+        logger.info("Applying preloaded cluster results for edge deduplication...")
+        
+        # Build a mapping from (head_id, relation) to preloaded triple data
+        preloaded_triples = {}
+        for triple_data in preloaded_data.get("triples", []):
+            head_id = triple_data.get("head_id")
+            relation = triple_data.get("relation")
+            if head_id and relation:
+                key = (head_id, relation)
+                preloaded_triples[key] = triple_data
+        
+        matched_count = 0
+        for group_data in dedup_groups:
+            head_id = group_data.get("head_id")
+            relation = group_data.get("relation")
+            key = (head_id, relation)
+            preloaded_triple = preloaded_triples.get(key)
+            
+            if not preloaded_triple:
+                logger.warning(f"No preloaded cluster data found for ({head_id}, {relation}), using fallback single cluster")
+                # Fallback: treat all as one cluster
+                entries = group_data.get('entries', [])
+                group_data['initial_clusters'] = [[e['index'] for e in entries]]
+                group_data['llm_clustering_details'] = [{
+                    "description": "Fallback cluster (no preloaded data)",
+                    "llm_rationale": "",
+                    "members": [e['index'] for e in entries]
+                }]
+                continue
+            
+            # Extract cluster information from preloaded data
+            clustering_info = preloaded_triple.get("clustering", {})
+            clusters_data = clustering_info.get("clusters", [])
+            
+            if not clusters_data:
+                logger.warning(f"No cluster data in preloaded results for ({head_id}, {relation})")
+                entries = group_data.get('entries', [])
+                group_data['initial_clusters'] = [[e['index'] for e in entries]]
+                group_data['llm_clustering_details'] = [{
+                    "description": "Fallback cluster (empty preloaded data)",
+                    "llm_rationale": "",
+                    "members": [e['index'] for e in entries]
+                }]
+                continue
+            
+            # Convert preloaded cluster data to the format expected by semantic dedup
+            initial_clusters = []
+            llm_clustering_details = []
+            
+            for cluster_info in clusters_data:
+                member_indices = cluster_info.get("member_indices", [])
+                if member_indices:
+                    initial_clusters.append(member_indices)
+                    llm_clustering_details.append({
+                        "description": cluster_info.get("llm_description", ""),
+                        "llm_rationale": cluster_info.get("llm_rationale", ""),
+                        "members": member_indices
+                    })
+            
+            if not initial_clusters:
+                logger.warning(f"No valid clusters extracted from preloaded data for ({head_id}, {relation})")
+                entries = group_data.get('entries', [])
+                group_data['initial_clusters'] = [[e['index'] for e in entries]]
+                group_data['llm_clustering_details'] = [{
+                    "description": "Fallback cluster (no valid clusters)",
+                    "llm_rationale": "",
+                    "members": [e['index'] for e in entries]
+                }]
+                continue
+            
+            group_data['initial_clusters'] = initial_clusters
+            group_data['llm_clustering_details'] = llm_clustering_details
+            matched_count += 1
+            
+        logger.info(f"Successfully applied preloaded clusters to {matched_count}/{len(dedup_groups)} edge groups")
 
     def _prepare_keyword_dedup_community(self, community_id: str, keyword_ids: list, 
                                          keyword_mapping: dict, config) -> dict:
@@ -3487,7 +3655,11 @@ class KTBuilder:
         clustering_prompts = []
         clustering_method = getattr(config, "clustering_method", "embedding")
         
-        if clustering_method == "llm":
+        # Check if we have preloaded edge clusters to skip clustering phase
+        if hasattr(self, 'preloaded_edge_clusters') and self.preloaded_edge_clusters:
+            logger.info("Using preloaded edge cluster results, skipping clustering phase...")
+            self._apply_preloaded_clusters_for_edges(dedup_groups, self.preloaded_edge_clusters)
+        elif clustering_method == "llm":
             logger.info("Collecting all clustering prompts...")
             for group_idx, group_data in enumerate(dedup_groups):
                 prompts = self._collect_clustering_prompts(group_data)
