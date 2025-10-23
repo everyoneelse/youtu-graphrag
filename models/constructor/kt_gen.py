@@ -202,8 +202,12 @@ DEFAULT_SEMANTIC_DEDUP_VALIDATION_PROMPT = (
     "    {{\"members\": [...], \"representative\": N, \"rationale\": \"...\"}}\n"
     "  ]\n"
     "}}\n\n"
-    "IMPORTANT: corrected_groups should contain ALL groups (both corrected and unchanged).\n"
-    "Do not omit groups that were already consistent.\n\n"
+    "IMPORTANT about corrected_groups:\n"
+    "1. Must contain ALL groups (both corrected and unchanged)\n"
+    "2. Do not omit groups that were already consistent\n"
+    "3. Member indices must be valid (0 to N-1 where N is the number of candidates)\n"
+    "4. All original items must be present exactly once across all groups\n"
+    "5. Do not invent new indices or skip existing ones\n\n"
     "If all groups are consistent, return:\n"
     "{{\n"
     "  \"has_inconsistencies\": false,\n"
@@ -1199,20 +1203,29 @@ class KTBuilder:
                     "validation_corrected": True
                 })
         
-        # Verify we got all items covered
+        # Verify we got all items covered (and no extra items)
         all_items = set(range(len(original_candidates)))
         covered_items = set()
         for group in corrected_groups:
             covered_items.update(group['members'])
         
         missing_items = all_items - covered_items
-        if missing_items:
+        extra_items = covered_items - all_items
+        
+        if missing_items or extra_items:
+            error_parts = []
+            if missing_items:
+                error_parts.append(f"missing items {sorted(missing_items)}")
+            if extra_items:
+                error_parts.append(f"invalid items {sorted(extra_items)} (out of range)")
+            error_msg = ", ".join(error_parts)
+            
             logger.warning(
-                "LLM validation output missing items %s. Keeping original groups to avoid data loss.",
-                sorted(missing_items)
+                "LLM validation output has data integrity issues: %s. Keeping original groups to avoid data loss.",
+                error_msg
             )
             validation_report['corrected'] = False
-            validation_report['error'] = f"Missing items in corrected_groups: {sorted(missing_items)}"
+            validation_report['error'] = f"Data integrity issues in corrected_groups: {error_msg}"
             return groups, validation_report
         
         validation_report['corrected'] = True
