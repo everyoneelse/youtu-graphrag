@@ -168,7 +168,7 @@ DEFAULT_SEMANTIC_DEDUP_VALIDATION_PROMPT = (
     "DEDUPLICATION RESULTS TO VALIDATE:\n"
     "{dedup_results}\n\n"
     "CORE TASK:\n"
-    "Check if each group's 'rationale' is LOGICALLY CONSISTENT with its 'members' array.\n\n"
+    "Check if each group's 'rationale' is LOGICALLY CONSISTENT with its 'members' array AND with other groups.\n\n"
     "CONSISTENCY PRINCIPLE:\n"
     "A group is CONSISTENT when:\n"
     "  ✅ The rationale accurately describes WHY the members are grouped together\n"
@@ -179,19 +179,29 @@ DEFAULT_SEMANTIC_DEDUP_VALIDATION_PROMPT = (
     "  ❌ Rationale and members contradict each other\n"
     "  ❌ Rationale says \"same as group X\" but members don't include group X's items\n"
     "  ❌ Rationale claims equivalence to other items not in the group\n"
-    "  ❌ Rationale says \"should be merged\" but items are in separate groups\n"
+    "  ❌ Rationale says \"should be merged\" / \"can be merged\" / \"equivalent\" but items are in separate groups\n"
+    "  ❌ Rationale says items are \"same/identical/consistent/无差异/可合并\" with other group members but not merged\n"
     "  ❌ ANY logical mismatch between what rationale says and what members show\n\n"
+    "CRITICAL: SINGLE-MEMBER GROUP VALIDATION\n"
+    "Pay SPECIAL ATTENTION to groups with only 1 member:\n"
+    "  🔍 If a single-member group's rationale says it \"is the same as\" / \"equivalent to\" / \"should merge with\" / \"与...一致\" / \"可合并\" any other group(s),\n"
+    "     this is a CLEAR INCONSISTENCY - the groups MUST be merged!\n"
+    "  🔍 Even if a group has only 1 member, its rationale can still indicate it should be merged with others\n"
+    "  🔍 Do NOT skip validation just because a group has 1 member - check its rationale against ALL other groups\n\n"
     "VALIDATION APPROACH:\n"
-    "1. Read each group's rationale carefully\n"
-    "2. Check if the members array matches the rationale's claim\n"
-    "3. If rationale mentions other groups/items, verify the relationship\n"
-    "4. Use your understanding of semantics and coreference\n"
-    "5. Consider the INTENT behind the rationale\n\n"
+    "1. Read EVERY group's rationale carefully, including single-member groups\n"
+    "2. For each group, check if the rationale mentions other groups or items\n"
+    "3. If rationale mentions relationships with other groups, verify they are actually merged\n"
+    "4. Look for phrases like: \"same as\", \"equivalent to\", \"should merge\", \"can be merged\", \"一致\", \"相同\", \"可合并\", \"无差异\"\n"
+    "5. Use your understanding of semantics and coreference\n"
+    "6. Consider the INTENT behind the rationale\n\n"
     "IMPORTANT:\n"
+    "- VALIDATE ALL GROUPS, including single-member groups\n"
     "- Do NOT limit yourself to predefined patterns - find ANY inconsistency\n"
     "- Use common sense and logical reasoning\n"
     "- Consider context from the original candidates\n"
-    "- Focus on SEMANTIC consistency between rationale and members\n\n"
+    "- Focus on SEMANTIC consistency between rationale and members\n"
+    "- Check CROSS-GROUP relationships mentioned in rationales\n\n"
     "OUTPUT FORMAT:\n"
     "Respond with strict JSON:\n"
     "{{\n"
@@ -218,7 +228,8 @@ DEFAULT_SEMANTIC_DEDUP_VALIDATION_PROMPT = (
     "  \"inconsistencies\": [],\n"
     "  \"corrected_groups\": null\n"
     "}}\n\n"
-    "EXAMPLE (for reference only - find ANY type of inconsistency):\n\n"
+    "EXAMPLES (for reference only - find ANY type of inconsistency):\n\n"
+    "Example 1 - Single member claiming equivalence:\n"
     "Input groups:\n"
     "- Group 0: {{members: [0, 1], representative: 0, rationale: \"These two refer to the same entity\"}}\n"
     "- Group 1: {{members: [2], representative: 2, rationale: \"This is the same entity as items 0 and 1\"}}\n\n"
@@ -235,6 +246,25 @@ DEFAULT_SEMANTIC_DEDUP_VALIDATION_PROMPT = (
     "  }}],\n"
     "  \"corrected_groups\": [\n"
     "    {{\"members\": [0, 1, 2], \"representative\": 0, \"rationale\": \"These three expressions refer to the same entity\"}}\n"
+    "  ]\n"
+    "}}\n\n"
+    "Example 2 - Chinese text with merge claim:\n"
+    "Input groups:\n"
+    "- Group 0: {{members: [0, 1], representative: 0, rationale: \"增加相位编码步数与增加相位编码方向的分辨率指同一操作，信息完全一致，可互换使用\"}}\n"
+    "- Group 1: {{members: [2], representative: 2, rationale: \"增加相位编码方向的矩阵即扩大相位编码步数，与组0所指操作完全一致，信息无差异，可合并\"}}\n\n"
+    "Analysis: Group 1's rationale explicitly states it's \"完全一致\" (completely identical) and \"可合并\" (can be merged) with Group 0.\n"
+    "This is inconsistent - they should be in the same group.\n\n"
+    "Output:\n"
+    "{{\n"
+    "  \"has_inconsistencies\": true,\n"
+    "  \"inconsistencies\": [{{\n"
+    "    \"group_ids\": [1, 0],\n"
+    "    \"issue_type\": \"rationale_claims_merge_but_separate\",\n"
+    "    \"description\": \"Group 1 rationale says it's identical and should merge with Group 0, but they are in separate groups\",\n"
+    "    \"suggested_fix\": \"merge group 1 into group 0\"\n"
+    "  }}],\n"
+    "  \"corrected_groups\": [\n"
+    "    {{\"members\": [0, 1, 2], \"representative\": 0, \"rationale\": \"这些表述指同一操作，信息完全一致，可互换使用\"}}\n"
     "  ]\n"
     "}}\n"
 )
@@ -4023,31 +4053,107 @@ class KTBuilder:
                             "rationale": None
                         })
                 
-                # ============================================================
-                # Two-step validation: Validate semantic dedup results
-                # ============================================================
-                # Extract candidate descriptions for this batch
-                batch_entries = [entries[i] for i in batch_indices]
-                candidate_descriptions = [entry['description'] for entry in batch_entries]
+                semantic_groups[key] = {
+                    'groups': groups,
+                    'batch_indices': batch_indices,
+                    'overflow_indices': overflow_indices,
+                }
+            
+            # ============================================================
+            # Two-step validation: Validate semantic dedup results for entire cluster
+            # ============================================================
+            # Now validate all groups across all batches of this cluster together
+            # This allows detection of inconsistencies across batches
+            
+            # Collect all groups from all clusters for validation
+            for cluster_idx in set(metadata['cluster_idx'] for metadata in [r['metadata'] for r in results]):
+                # Get all batches for this cluster
+                cluster_batches = {k: v for k, v in semantic_groups.items() if k[0] == cluster_idx}
                 
-                # Get head and relation info from group_data
+                if not cluster_batches:
+                    continue
+                
+                # Collect all groups and build global index mapping
+                all_groups_for_validation = []
+                global_to_local_map = {}  # Maps global candidate index to (batch_key, local_idx)
+                local_to_global_map = {}  # Maps (batch_key, local_idx) to global candidate index
+                global_candidates = []     # All candidate descriptions in global order
+                
+                for batch_key in sorted(cluster_batches.keys(), key=lambda x: x[1]):  # Sort by batch_num
+                    batch_data = cluster_batches[batch_key]
+                    batch_indices = batch_data['batch_indices']
+                    batch_groups = batch_data['groups']
+                    
+                    # Build index mappings for this batch
+                    for local_idx, global_idx in enumerate(batch_indices):
+                        global_to_local_map[global_idx] = (batch_key, local_idx)
+                        local_to_global_map[(batch_key, local_idx)] = global_idx
+                        global_candidates.append(entries[global_idx]['description'])
+                    
+                    # Convert batch groups to use global indices
+                    for group in batch_groups:
+                        global_members = [batch_indices[local_idx] for local_idx in group['members']]
+                        global_rep = batch_indices[group['representative']]
+                        all_groups_for_validation.append({
+                            'members': global_members,
+                            'representative': global_rep,
+                            'rationale': group.get('rationale'),
+                            '_batch_key': batch_key,  # Track which batch this group came from
+                        })
+                
+                # Validate all groups together
                 head_text = group_data.get('head_name', '')
                 relation = group_data.get('relation', '')
                 
-                # Validate groups for consistency (rationale vs members)
-                groups, validation_report = self._llm_validate_semantic_dedup(
-                    groups,
-                    candidate_descriptions,
+                validated_groups, validation_report = self._llm_validate_semantic_dedup(
+                    all_groups_for_validation,
+                    global_candidates,
                     head_text=head_text,
                     relation=relation
                 )
                 
-                semantic_groups[key] = {
-                    'groups': groups,  # Use validated groups
-                    'batch_indices': batch_indices,
-                    'overflow_indices': overflow_indices,
-                    'validation_report': validation_report  # Store validation report
-                }
+                # Convert validated groups back to batch-local indices
+                if validation_report and validation_report.get('corrected'):
+                    # Clear old groups and rebuild from validated results
+                    for batch_key in cluster_batches.keys():
+                        cluster_batches[batch_key]['groups'] = []
+                        cluster_batches[batch_key]['validation_report'] = validation_report
+                    
+                    # Distribute validated groups back to their batches
+                    for validated_group in validated_groups:
+                        global_members = validated_group['members']
+                        global_rep = validated_group['representative']
+                        
+                        # Determine which batch this group belongs to (use first member's batch)
+                        if global_members:
+                            first_member_global = global_members[0]
+                            if first_member_global in global_to_local_map:
+                                batch_key, _ = global_to_local_map[first_member_global]
+                                batch_indices = cluster_batches[batch_key]['batch_indices']
+                                
+                                # Convert to local indices
+                                local_members = []
+                                for global_idx in global_members:
+                                    if global_idx in batch_indices:
+                                        local_members.append(batch_indices.index(global_idx))
+                                
+                                if local_members:
+                                    local_rep = batch_indices.index(global_rep) if global_rep in batch_indices else local_members[0]
+                                    
+                                    cluster_batches[batch_key]['groups'].append({
+                                        'members': local_members,
+                                        'representative': local_rep,
+                                        'rationale': validated_group.get('rationale'),
+                                        'validation_corrected': True
+                                    })
+                else:
+                    # No corrections needed, add validation report
+                    for batch_key in cluster_batches.keys():
+                        cluster_batches[batch_key]['validation_report'] = validation_report
+                
+                # Update semantic_groups with validated results
+                for batch_key, batch_data in cluster_batches.items():
+                    semantic_groups[batch_key] = batch_data
             
             group_data['semantic_results'] = semantic_groups
     
