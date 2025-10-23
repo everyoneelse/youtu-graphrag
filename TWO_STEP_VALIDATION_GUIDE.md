@@ -138,20 +138,38 @@ def _llm_validate_clustering(
 
 ### 校验Prompt设计
 
+**设计原则：原则驱动，而非Case-by-Case**
+
 ```python
 DEFAULT_CLUSTERING_VALIDATION_PROMPT = """
 You are a quality control assistant reviewing clustering results.
 
-TASK: Check if each cluster's description is CONSISTENT with its members.
+CORE TASK:
+Check if each cluster's description is LOGICALLY CONSISTENT with its members.
 
-INCONSISTENCY PATTERNS:
-1. Description says "merge/identical" but items are in SEPARATE clusters
-2. Description says "same as cluster X" but cluster has only 1 member
-3. Description says "distinct" but items are in SAME cluster
+CONSISTENCY PRINCIPLE:
+✅ Description and members match logically
+✅ If description says items are "same", they ARE in the same cluster
+✅ If description says items are "different", they ARE in different clusters
+❌ ANY logical mismatch between description and members
+
+IMPORTANT:
+- Do NOT limit yourself to predefined patterns - find ANY inconsistency
+- Use semantic understanding, not just keyword matching
+- Consider the INTENT behind descriptions
+- Use common sense and logical reasoning
 
 OUTPUT: Provide inconsistencies found and corrected clusters.
 """
 ```
+
+**核心改进：**
+- ❌ 不再列举具体不一致模式
+- ✅ 强调一致性原则
+- ✅ 鼓励LLM使用语义理解
+- ✅ 开放边界，可发现任何类型的不一致
+
+详见：[VALIDATION_PROMPT_DESIGN_PRINCIPLES.md](./VALIDATION_PROMPT_DESIGN_PRINCIPLES.md)
 
 ### 集成位置
 
