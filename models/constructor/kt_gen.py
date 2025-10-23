@@ -4053,31 +4053,107 @@ class KTBuilder:
                             "rationale": None
                         })
                 
-                # ============================================================
-                # Two-step validation: Validate semantic dedup results
-                # ============================================================
-                # Extract candidate descriptions for this batch
-                batch_entries = [entries[i] for i in batch_indices]
-                candidate_descriptions = [entry['description'] for entry in batch_entries]
+                semantic_groups[key] = {
+                    'groups': groups,
+                    'batch_indices': batch_indices,
+                    'overflow_indices': overflow_indices,
+                }
+            
+            # ============================================================
+            # Two-step validation: Validate semantic dedup results for entire cluster
+            # ============================================================
+            # Now validate all groups across all batches of this cluster together
+            # This allows detection of inconsistencies across batches
+            
+            # Collect all groups from all clusters for validation
+            for cluster_idx in set(metadata['cluster_idx'] for metadata in [r['metadata'] for r in results]):
+                # Get all batches for this cluster
+                cluster_batches = {k: v for k, v in semantic_groups.items() if k[0] == cluster_idx}
                 
-                # Get head and relation info from group_data
+                if not cluster_batches:
+                    continue
+                
+                # Collect all groups and build global index mapping
+                all_groups_for_validation = []
+                global_to_local_map = {}  # Maps global candidate index to (batch_key, local_idx)
+                local_to_global_map = {}  # Maps (batch_key, local_idx) to global candidate index
+                global_candidates = []     # All candidate descriptions in global order
+                
+                for batch_key in sorted(cluster_batches.keys(), key=lambda x: x[1]):  # Sort by batch_num
+                    batch_data = cluster_batches[batch_key]
+                    batch_indices = batch_data['batch_indices']
+                    batch_groups = batch_data['groups']
+                    
+                    # Build index mappings for this batch
+                    for local_idx, global_idx in enumerate(batch_indices):
+                        global_to_local_map[global_idx] = (batch_key, local_idx)
+                        local_to_global_map[(batch_key, local_idx)] = global_idx
+                        global_candidates.append(entries[global_idx]['description'])
+                    
+                    # Convert batch groups to use global indices
+                    for group in batch_groups:
+                        global_members = [batch_indices[local_idx] for local_idx in group['members']]
+                        global_rep = batch_indices[group['representative']]
+                        all_groups_for_validation.append({
+                            'members': global_members,
+                            'representative': global_rep,
+                            'rationale': group.get('rationale'),
+                            '_batch_key': batch_key,  # Track which batch this group came from
+                        })
+                
+                # Validate all groups together
                 head_text = group_data.get('head_name', '')
                 relation = group_data.get('relation', '')
                 
-                # Validate groups for consistency (rationale vs members)
-                groups, validation_report = self._llm_validate_semantic_dedup(
-                    groups,
-                    candidate_descriptions,
+                validated_groups, validation_report = self._llm_validate_semantic_dedup(
+                    all_groups_for_validation,
+                    global_candidates,
                     head_text=head_text,
                     relation=relation
                 )
                 
-                semantic_groups[key] = {
-                    'groups': groups,  # Use validated groups
-                    'batch_indices': batch_indices,
-                    'overflow_indices': overflow_indices,
-                    'validation_report': validation_report  # Store validation report
-                }
+                # Convert validated groups back to batch-local indices
+                if validation_report and validation_report.get('corrected'):
+                    # Clear old groups and rebuild from validated results
+                    for batch_key in cluster_batches.keys():
+                        cluster_batches[batch_key]['groups'] = []
+                        cluster_batches[batch_key]['validation_report'] = validation_report
+                    
+                    # Distribute validated groups back to their batches
+                    for validated_group in validated_groups:
+                        global_members = validated_group['members']
+                        global_rep = validated_group['representative']
+                        
+                        # Determine which batch this group belongs to (use first member's batch)
+                        if global_members:
+                            first_member_global = global_members[0]
+                            if first_member_global in global_to_local_map:
+                                batch_key, _ = global_to_local_map[first_member_global]
+                                batch_indices = cluster_batches[batch_key]['batch_indices']
+                                
+                                # Convert to local indices
+                                local_members = []
+                                for global_idx in global_members:
+                                    if global_idx in batch_indices:
+                                        local_members.append(batch_indices.index(global_idx))
+                                
+                                if local_members:
+                                    local_rep = batch_indices.index(global_rep) if global_rep in batch_indices else local_members[0]
+                                    
+                                    cluster_batches[batch_key]['groups'].append({
+                                        'members': local_members,
+                                        'representative': local_rep,
+                                        'rationale': validated_group.get('rationale'),
+                                        'validation_corrected': True
+                                    })
+                else:
+                    # No corrections needed, add validation report
+                    for batch_key in cluster_batches.keys():
+                        cluster_batches[batch_key]['validation_report'] = validation_report
+                
+                # Update semantic_groups with validated results
+                for batch_key, batch_data in cluster_batches.items():
+                    semantic_groups[batch_key] = batch_data
             
             group_data['semantic_results'] = semantic_groups
     
