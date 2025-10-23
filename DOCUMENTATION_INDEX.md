@@ -92,7 +92,15 @@
 - 推广价值
 - **适合**：关注设计细节的开发者
 
-#### 5.1 [SEMANTIC_DEDUP_VALIDATION_FIX_SUMMARY.md](./SEMANTIC_DEDUP_VALIDATION_FIX_SUMMARY.md)
+#### 5.1 [SEMANTIC_DEDUP_VALIDATION_V2_CHANGELOG.md](./SEMANTIC_DEDUP_VALIDATION_V2_CHANGELOG.md) ⭐
+**Semantic Dedup验证V2.0变更日志**
+
+- **核心改进**：聚焦验证范围，只检查"rationale结论 vs 分组结构"
+- 明确排除内容准确性检查
+- V1.0 vs V2.0详细对比
+- **适合**：所有使用semantic dedup验证的用户（必读）
+
+#### 5.2 [SEMANTIC_DEDUP_VALIDATION_FIX_SUMMARY.md](./SEMANTIC_DEDUP_VALIDATION_FIX_SUMMARY.md)
 **Semantic Dedup验证修复总结**
 
 - "rationale说要合并但未合并"问题修复

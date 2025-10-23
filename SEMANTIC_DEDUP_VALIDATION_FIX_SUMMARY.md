@@ -8,6 +8,17 @@
 
 当某个group的rationale明确说"可合并"、"应该与XX组合并"、"信息完全一致"等，**但实际上该group却是独立的，没有真正合并到一起**时，验证逻辑没有检测到这个不一致。
 
+### 验证范围的澄清
+
+用户进一步指出，验证应该**只关注一个核心问题**：
+- ✅ **应该检查**: rationale的结论（合并/独立）与实际分组结构（members数组）是否一致
+- ❌ **不应该检查**: rationale内容的准确性（比如是否提到了原文不存在的细节）
+
+例如，不应该报告这种问题：
+> "Group 2的rationale说有54.7°角度，但原文只说'特定角度'没有具体数值"
+
+这是rationale内容准确性的问题，不是分组结构的不一致。
+
 ### 用户案例
 
 ```python
@@ -34,9 +45,27 @@ groups = [
 
 ### 修改内容
 
-增强了 `DEFAULT_SEMANTIC_DEDUP_VALIDATION_PROMPT`，添加了以下关键改进：
+重写了 `DEFAULT_SEMANTIC_DEDUP_VALIDATION_PROMPT`，明确验证范围和重点：
 
-#### 1. 新增 CRITICAL CHECK 部分
+#### 1. 明确验证范围（核心改进）
+
+```
+🎯 YOUR ONLY JOB: Check rationale's CONCLUSION vs actual grouping
+
+CHECK THIS ONE THING:
+Does the rationale's CONCLUSION (merge/keep separate) match the actual members array?
+
+🚫 DO NOT CHECK (out of scope):
+  ❌ Whether rationale accurately describes original candidate content
+  ❌ Whether rationale mentions details not in original text
+  ❌ Whether rationale's reasoning is sound or makes sense
+  ❌ Content accuracy of the rationale
+
+🎯 ONLY CHECK:
+  ✅ Does "rationale conclusion" match "actual grouping structure"?
+```
+
+#### 2. 新增关键短语识别
 
 ```
 **CRITICAL CHECK** - Pay special attention to:
@@ -45,33 +74,39 @@ groups = [
    this is a MAJOR INCONSISTENCY that MUST be detected and fixed.
 ```
 
-#### 2. 添加中文关键词识别
-
 ```
-⚠️ Chinese keywords to watch for:
-   - "可合并" / "可以合并" / "应该合并" (can/should merge)
-   - "完全一致" / "信息一致" / "信息完全一致" (completely identical)
-   - "无差异" / "信息无差异" (no difference)
-   - "同一" / "相同" (same)
-   - "与XX组" / "与组X" (with group X)
-   If rationale contains these phrases AND references other groups, verify they are actually merged!
-```
+🔍 Key phrases indicating MERGE intention:
 
-#### 3. 增加验证步骤的优先级
+Chinese (中文):
+  - "可合并" / "可以合并" / "应该合并" / "宜合并"
+  - "完全一致" / "信息一致" / "信息完全一致"
+  - "无差异" / "信息无差异"
+  - "同一" / "相同" / "等同"
+  - "与组X" / "与XX组" (mentions other groups)
 
-```
-VALIDATION APPROACH:
-1. Read each group's rationale carefully
-2. Check if the members array matches the rationale's claim
-3. **ESPECIALLY**: If rationale mentions merging with other groups, verify those groups are actually merged
-4. Use your understanding of semantics and coreference
-5. Consider the INTENT behind the rationale
+⚠️ If you see these phrases + group references → Verify actual merge happened!
 ```
 
-#### 4. 添加中文示例
+#### 3. 简化验证步骤
 
-新增了一个完整的中文示例，展示了如何检测和修复"rationale说要合并但未合并"的不一致：
+```
+VALIDATION STEPS:
 
+For each group:
+1. Read the rationale's CONCLUSION: Does it say merge or keep separate?
+2. Check if rationale mentions other groups/items (e.g., "与组1", "same as group 0")
+3. Look at the members array: Are those mentioned items actually included?
+4. If mismatch → Report inconsistency
+
+IGNORE:
+- Content details in rationale
+- Whether reasoning makes sense
+- Original candidate text accuracy
+```
+
+#### 4. 添加正反示例
+
+**正面示例** - 应该检测的不一致：
 ```
 Example 2 (Chinese - YOUR CASE):
 Input groups:
@@ -96,6 +131,27 @@ Output:
     {"members": [0, 1, 3], "representative": 0, "rationale": "这些表述信息完全一致，可互换使用。"},
     {"members": [2], "representative": 2, "rationale": "表述过于简略，信息粒度不同，保持独立。"}
   ]
+}
+```
+
+**反面示例** - 不应该检测的问题：
+```
+Example 3 (What NOT to report):
+Input:
+- Group 0: {members: [0, 1], rationale: "Both mention 54.7° angle"}
+But candidate [0] actually says "specific angle" (no 54.7° mentioned in original text)
+
+Analysis:
+This is a content accuracy issue - rationale mentions a detail (54.7°) not in original text.
+BUT, the grouping structure is correct: members [0, 1] ARE grouped together as intended.
+✅ Conclusion (group together) = Structure (grouped) → CONSISTENT
+🚫 Do NOT report this - content accuracy is out of scope!
+
+Output:
+{
+  "has_inconsistencies": false,
+  "inconsistencies": [],
+  "corrected_groups": null
 }
 ```
 
@@ -144,11 +200,22 @@ test_candidates = [
 
 ## 关键改进点总结
 
-✅ **CRITICAL CHECK section** - 明确强调"rationale说合并但未合并"的不一致性  
-✅ **中文关键词列表** - 包含"可合并"、"完全一致"、"信息无差异"等关键词  
-✅ **验证优先级** - 优先检查"says merge but not merged"类型的不一致  
-✅ **完整的中文示例** - 展示了用户遇到的具体场景  
-✅ **issue_type定义** - 新增"rationale_says_merge_but_not_merged"类型
+### V2.0 (2025-10-23) - 聚焦核心问题
+
+✅ **明确验证范围** - 只检查"rationale结论 vs 分组结构"，不检查内容准确性  
+✅ **中文关键词列表** - 包含"可合并"、"完全一致"、"信息无差异"等关键短语  
+✅ **简化验证步骤** - 4步清晰流程，去除无关检查  
+✅ **正反示例** - 包含"应该检测"和"不应该检测"的示例  
+✅ **统一issue_type** - 使用"rationale_conclusion_vs_grouping_mismatch"
+
+### 核心设计理念
+
+**只关注一个问题**: rationale的决策（合并/独立）与实际分组是否匹配
+
+- ✅ 检查：rationale说"可合并"，实际是否合并了
+- ✅ 检查：rationale说"保持独立"，实际是否独立了
+- ❌ 不检查：rationale内容是否准确描述原文
+- ❌ 不检查：rationale提到的细节是否存在于原文
 
 ## 如何使用
 
