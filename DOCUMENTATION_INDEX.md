@@ -92,22 +92,28 @@
 - 推广价值
 - **适合**：关注设计细节的开发者
 
-#### 5.1 [SEMANTIC_DEDUP_VALIDATION_V2_CHANGELOG.md](./SEMANTIC_DEDUP_VALIDATION_V2_CHANGELOG.md) ⭐⭐
-**Semantic Dedup验证V2.0→V3.0变更日志**
+#### 5.1 [SEMANTIC_DEDUP_VALIDATION_V4_FINAL.md](./SEMANTIC_DEDUP_VALIDATION_V4_FINAL.md) ⭐⭐⭐
+**Semantic Dedup验证V4.0 - 真正的原则驱动**
 
-- **V2.0**：聚焦验证范围，只检查"rationale结论 vs 分组结构"
-- **V3.0 (最新)**：极简重构，prompt缩减47%，使用真实案例
-- 特别强化"故归入一组"等中文关键短语
-- Step-by-step推理演示
-- **适合**：所有使用semantic dedup验证的用户（必读）
+- **彻底去除case by case** - 不列举短语、不给具体案例
+- **核心原则** - intent(rationale) = reality(members)
+- **信任LLM** - 让LLM用自己的理解判断，而非匹配关键词
+- **极简设计** - 从150行缩减到30行（-80%）
+- **适合**：所有人（必读，这是最终版本）
 
-#### 5.1.1 [SEMANTIC_DEDUP_VALIDATION_V3_NOTES.md](./SEMANTIC_DEDUP_VALIDATION_V3_NOTES.md)
-**V3.0设计笔记**
+#### 5.1.1 [SEMANTIC_DEDUP_VALIDATION_V2_CHANGELOG.md](./SEMANTIC_DEDUP_VALIDATION_V2_CHANGELOG.md)
+**V1.0→V2.0→V3.0变更日志**
 
-- 为什么需要V3.0：V2.0未能检测用户真实案例
-- 极简设计原则和实施细节
-- 用户真实案例分析
-- **适合**：想了解V3.0设计思路的开发者
+- V1-V3的演进过程
+- 为什么V1-V3仍然是case by case
+- **适合**：想了解历史的开发者
+
+#### 5.1.2 [SEMANTIC_DEDUP_VALIDATION_V3_NOTES.md](./SEMANTIC_DEDUP_VALIDATION_V3_NOTES.md)
+**V3.0设计笔记（已被V4.0取代）**
+
+- V3.0的设计思路
+- 为什么V3.0仍然不够好
+- **适合**：了解设计演进
 
 #### 5.2 [SEMANTIC_DEDUP_VALIDATION_FIX_SUMMARY.md](./SEMANTIC_DEDUP_VALIDATION_FIX_SUMMARY.md)
 **Semantic Dedup验证修复总结**
