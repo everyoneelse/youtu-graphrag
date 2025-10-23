@@ -6,8 +6,9 @@
 
 | 需求 | 推荐文档 | 时间 |
 |------|---------|------|
-| **快速了解解决方案** | [FINAL_SOLUTION_TWO_STEP_VALIDATION.md](./FINAL_SOLUTION_TWO_STEP_VALIDATION.md) | 15分钟 |
-| **立即启用两步验证** | [FINAL_SOLUTION_TWO_STEP_VALIDATION.md](./FINAL_SOLUTION_TWO_STEP_VALIDATION.md) → 使用方法 | 5分钟 |
+| **快速解决semantic dedup问题** | [QUICK_START_SEMANTIC_DEDUP_VALIDATION.md](./QUICK_START_SEMANTIC_DEDUP_VALIDATION.md) ⭐ | 3分钟 |
+| **快速了解完整方案** | [FINAL_SOLUTION_TWO_STEP_VALIDATION.md](./FINAL_SOLUTION_TWO_STEP_VALIDATION.md) | 15分钟 |
+| **立即启用两阶段验证** | [FINAL_SOLUTION_TWO_STEP_VALIDATION.md](./FINAL_SOLUTION_TWO_STEP_VALIDATION.md) → 使用方法 | 5分钟 |
 | **深入学习完整指南** | [TWO_STEP_VALIDATION_GUIDE.md](./TWO_STEP_VALIDATION_GUIDE.md) | 1小时 |
 | **了解Prompt设计原则** | [VALIDATION_PROMPT_DESIGN_PRINCIPLES.md](./VALIDATION_PROMPT_DESIGN_PRINCIPLES.md) | 30分钟 |
 | **查看所有改进** | [FINAL_IMPROVEMENTS_SUMMARY.md](./FINAL_IMPROVEMENTS_SUMMARY.md) | 20分钟 |
@@ -20,21 +21,39 @@
 
 ### 🌟 核心文档（必读）
 
-#### 1. [FINAL_SOLUTION_TWO_STEP_VALIDATION.md](./FINAL_SOLUTION_TWO_STEP_VALIDATION.md)
-**最终解决方案总览**
+#### 0. [QUICK_START_SEMANTIC_DEDUP_VALIDATION.md](./QUICK_START_SEMANTIC_DEDUP_VALIDATION.md) ⭐
+**快速解决Semantic Dedup问题**
 
-- ✨ **推荐首读**
-- 完整的两步验证方案
+- ✨ **用户原始问题的直接解决方案**
+- Phase 2验证说明
+- 1行配置启用
+- 3分钟快速上手
+- **适合**：遇到semantic dedup不一致的用户
+
+#### 1. [FINAL_SOLUTION_TWO_STEP_VALIDATION.md](./FINAL_SOLUTION_TWO_STEP_VALIDATION.md)
+**完整解决方案总览（已更新）**
+
+- 完整的两阶段验证方案
+- Phase 1 + Phase 2验证
 - 快速启用指南
 - 效果对比和使用建议
 - **适合**：所有用户
 
-#### 2. [FINAL_IMPROVEMENTS_SUMMARY.md](./FINAL_IMPROVEMENTS_SUMMARY.md)
+#### 2. [SEMANTIC_DEDUP_VALIDATION_SUMMARY.md](./SEMANTIC_DEDUP_VALIDATION_SUMMARY.md)
+**Semantic Dedup验证完整说明**
+
+- 用户问题详解
+- Phase 2验证实现
+- 代码改动说明
+- 使用方法
+- **适合**：想了解semantic dedup验证的用户
+
+#### 3. [FINAL_IMPROVEMENTS_SUMMARY.md](./FINAL_IMPROVEMENTS_SUMMARY.md)
 **完整改进总结**
 
 - 问题演进过程
 - 三个关键改进点
-- 最终完整方案
+- 最终完整方案（两阶段）
 - 效果对比
 - **适合**：想了解全貌的用户
 
