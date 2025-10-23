@@ -1,0 +1,71 @@
+# Example configuration with LLM clustering and two-step validation enabled
+# This configuration demonstrates the new two-step validation feature
+
+construction:
+  chunk_size: 1000
+  datasets_no_chunk:
+  - demo
+  max_workers: 32
+  mode: agent
+  overlap: 200
+  
+  tree_comm:
+    embedding_model: all-MiniLM-L6-v2
+    enable_fast_mode: true
+    struct_weight: 0.3
+  
+  semantic_dedup:
+    # Enable semantic deduplication
+    enabled: true
+    
+    # Use LLM for clustering (recommended when using validation)
+    clustering_method: llm
+    
+    # Enable two-step validation: LLM will check and correct its own clustering
+    # Step 1: Initial clustering
+    # Step 2: LLM validates clustering results and fixes inconsistencies
+    enable_clustering_validation: true
+    
+    # Clustering parameters
+    embedding_threshold: 0.85
+    max_batch_size: 8
+    max_candidates: 50
+    llm_clustering_batch_size: 30
+    use_embeddings: true
+    prompt_type: general
+    
+    # Save intermediate results for debugging
+    save_intermediate_results: true
+    
+    # Dual LLM configuration
+    # Use the same model for both clustering and validation
+    clustering_llm:
+      # api_name: "gpt-3.5-turbo"
+      # Or use GPT-4 for better consistency:
+      # api_name: "gpt-4"
+      temperature: 0.3  # Lower temperature for more consistent results
+    
+    dedup_llm:
+      # api_name: "gpt-4"
+      temperature: 0.0
+
+datasets:
+  demo:
+    corpus_path: data/demo/demo_corpus.json
+    qa_path: data/demo/demo.json
+    schema_path: schemas/demo.json
+    graph_output: output/graphs/demo_new.json
+
+embeddings:
+  batch_size: 32
+  device: cpu
+  max_length: 512
+  model_name: all-MiniLM-L6-v2
+
+output:
+  base_dir: output
+  chunks_dir: output/chunks
+  graphs_dir: output/graphs
+  logs_dir: output/logs
+  save_chunk_details: true
+  save_intermediate_results: true

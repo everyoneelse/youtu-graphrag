@@ -143,6 +143,73 @@ DEFAULT_ATTRIBUTE_DEDUP_PROMPT = (
     "}}\n"
 )
 
+# Validation prompt for checking clustering consistency
+DEFAULT_CLUSTERING_VALIDATION_PROMPT = (
+    "You are a quality control assistant reviewing clustering results for consistency.\n\n"
+    "CONTEXT:\n"
+    "Head entity: {head}\n"
+    "Relation: {relation}\n\n"
+    "ORIGINAL CANDIDATE TAILS:\n"
+    "{candidates}\n\n"
+    "CLUSTERING RESULTS TO VALIDATE:\n"
+    "{clustering_results}\n\n"
+    "TASK: Check if each cluster's 'description/rationale' is CONSISTENT with its 'members' array.\n\n"
+    "INCONSISTENCY PATTERNS TO DETECT:\n"
+    "1. ❌ CONTRADICTION: Description says items should be \"merged/combined/same/identical\" but they are in SEPARATE clusters\n"
+    "2. ❌ SINGLETON MISMATCH: Description says \"same as cluster X\" or \"should merge with group Y\" but the cluster has only 1 member\n"
+    "3. ❌ IMPROPER GROUPING: Description says items are \"distinct/different\" but they are in the SAME cluster\n\n"
+    "VALIDATION GUIDELINES:\n"
+    "- Focus on LOGICAL CONSISTENCY between description and members\n"
+    "- Look for keywords: \"合并\", \"一致\", \"相同\", \"merge\", \"identical\", \"same\"\n"
+    "- Check if singleton clusters (1 member) claim to be identical to other clusters\n"
+    "- Verify multi-member clusters have rationale supporting grouping\n\n"
+    "OUTPUT REQUIREMENTS:\n"
+    "1. For each inconsistency found, provide:\n"
+    "   - cluster_ids: IDs of affected clusters\n"
+    "   - issue_type: 'singleton_should_merge' or 'contradiction' or 'improper_grouping'\n"
+    "   - description: What's wrong\n"
+    "   - suggested_fix: How to fix (e.g., \"merge cluster 3 into cluster 0\")\n"
+    "2. If NO inconsistencies found, return empty list\n\n"
+    "EXAMPLES:\n\n"
+    "❌ BAD (inconsistent):\n"
+    "Cluster 0: {{members: [0, 1], description: \"These are the same entity\"}}\n"
+    "Cluster 1: {{members: [2], description: \"This is identical to cluster 0 and should be merged\"}}\n"
+    "→ Issue: Cluster 1 claims to be identical but is separate!\n"
+    "→ Fix: Merge cluster 1 into cluster 0\n\n"
+    "✅ GOOD (consistent):\n"
+    "Cluster 0: {{members: [0, 1, 2], description: \"These three are the same entity\"}}\n"
+    "Cluster 1: {{members: [3], description: \"This is distinct from others\"}}\n"
+    "→ No issues\n\n"
+    "Respond with strict JSON:\n"
+    "{{\n"
+    "  \"has_inconsistencies\": true,\n"
+    "  \"inconsistencies\": [\n"
+    "    {{\n"
+    "      \"cluster_ids\": [3, 0],\n"
+    "      \"issue_type\": \"singleton_should_merge\",\n"
+    "      \"description\": \"Cluster 3 has 1 member but description says it should merge with cluster 0\",\n"
+    "      \"suggested_fix\": \"merge_cluster_3_into_0\"\n"
+    "    }}\n"
+    "  ],\n"
+    "  \"corrected_clusters\": [\n"
+    "    {{\n"
+    "      \"members\": [0, 1, 3],\n"
+    "      \"description\": \"Merged cluster: original 0 and 3\"\n"
+    "    }},\n"
+    "    {{\n"
+    "      \"members\": [2],\n"
+    "      \"description\": \"Singleton cluster (distinct)\"\n"
+    "    }}\n"
+    "  ]\n"
+    "}}\n\n"
+    "If no inconsistencies:\n"
+    "{{\n"
+    "  \"has_inconsistencies\": false,\n"
+    "  \"inconsistencies\": [],\n"
+    "  \"corrected_clusters\": null\n"
+    "}}\n"
+)
+
 DEFAULT_LLM_CLUSTERING_PROMPT = (
     "You are a knowledge graph curation assistant performing initial clustering of tail entities.\n"
     "All listed tail entities share the same head entity and relation.\n\n"
@@ -927,6 +994,155 @@ class KTBuilder:
 
         return summaries
 
+    def _llm_validate_clustering(self, clusters: list, cluster_details: list, 
+                                 descriptions: list, head_text: str = None, relation: str = None,
+                                 index_offset: int = 0) -> tuple:
+        """
+        Use LLM to validate clustering results and fix inconsistencies.
+        This is a second-pass validation where LLM checks its own clustering output.
+        
+        Args:
+            clusters: List of cluster member lists
+            cluster_details: List of cluster detail dicts with rationale
+            descriptions: Original candidate descriptions
+            head_text: Head entity text (optional, for context)
+            relation: Relation text (optional, for context)
+            index_offset: Offset for indices
+            
+        Returns:
+            Tuple of (corrected_clusters, corrected_details, validation_report)
+        """
+        # Check if validation is enabled
+        semantic_config = getattr(self.config.construction, "semantic_dedup", None)
+        if not semantic_config or not getattr(semantic_config, "enable_clustering_validation", False):
+            # Validation disabled, return original
+            return clusters, cluster_details, None
+        
+        if not cluster_details or len(cluster_details) <= 1:
+            # Nothing to validate (need at least 2 clusters to check for merge opportunities)
+            return clusters, cluster_details, None
+        
+        # Prepare candidates text
+        candidates_blocks = []
+        for idx, desc in enumerate(descriptions, start=1):
+            candidates_blocks.append(f"[{idx}] {desc}")
+        candidates_text = "\n".join(candidates_blocks) if candidates_blocks else "[No candidates]"
+        
+        # Prepare clustering results text
+        clustering_results_blocks = []
+        for cluster_idx, detail in enumerate(cluster_details):
+            members = detail.get('members', [])
+            # Convert back to 1-based for LLM
+            members_1based = [m - index_offset + 1 for m in members]
+            rationale = detail.get('rationale', '') or detail.get('llm_rationale', '') or detail.get('description', '')
+            clustering_results_blocks.append(
+                f"Cluster {cluster_idx}: {{members: {members_1based}, description: \"{rationale}\"}}"
+            )
+        clustering_results_text = "\n".join(clustering_results_blocks)
+        
+        # Build validation prompt
+        prompt = DEFAULT_CLUSTERING_VALIDATION_PROMPT.format(
+            head=head_text or "[UNKNOWN_HEAD]",
+            relation=relation or "[UNKNOWN_RELATION]",
+            candidates=candidates_text,
+            clustering_results=clustering_results_text
+        )
+        
+        # Call LLM for validation
+        try:
+            response = self.clustering_llm_client.call_api(prompt)
+        except Exception as e:
+            logger.warning("LLM validation call failed: %s, skipping validation", e)
+            return clusters, cluster_details, None
+        
+        # Parse validation response
+        try:
+            parsed = json_repair.loads(response)
+        except Exception:
+            try:
+                parsed = json.loads(response)
+            except Exception as parse_error:
+                logger.warning("Failed to parse LLM validation response: %s, skipping validation", parse_error)
+                return clusters, cluster_details, None
+        
+        has_inconsistencies = parsed.get('has_inconsistencies', False)
+        inconsistencies = parsed.get('inconsistencies', [])
+        corrected_clusters_raw = parsed.get('corrected_clusters')
+        
+        validation_report = {
+            'has_inconsistencies': has_inconsistencies,
+            'inconsistencies': inconsistencies,
+            'original_cluster_count': len(clusters),
+            'validation_attempted': True
+        }
+        
+        if not has_inconsistencies or not corrected_clusters_raw:
+            logger.info("LLM validation: No inconsistencies found or no corrections provided")
+            validation_report['corrected'] = False
+            return clusters, cluster_details, validation_report
+        
+        # Apply corrections
+        logger.info("LLM validation found %d inconsistencies, applying corrections", len(inconsistencies))
+        
+        corrected_clusters = []
+        corrected_details = []
+        assigned = set()
+        
+        for cluster_idx, cluster_info in enumerate(corrected_clusters_raw):
+            if not isinstance(cluster_info, dict):
+                continue
+            
+            members_raw = cluster_info.get("members")
+            if not isinstance(members_raw, list):
+                continue
+            
+            # Convert 1-based to 0-based and add offset
+            cluster_members = []
+            for member in members_raw:
+                try:
+                    member_idx = int(member) - 1  # Convert to 0-based
+                except (TypeError, ValueError):
+                    continue
+                if 0 <= member_idx < len(descriptions):
+                    adjusted_idx = member_idx + index_offset
+                    cluster_members.append(adjusted_idx)
+                    assigned.add(member_idx)
+            
+            if cluster_members:
+                corrected_clusters.append(cluster_members)
+                corrected_details.append({
+                    "cluster_id": cluster_idx,
+                    "members": cluster_members,
+                    "description": cluster_info.get("description", "Corrected by validation"),
+                    "llm_rationale": cluster_info.get("description", ""),
+                    "rationale": cluster_info.get("description", ""),
+                    "validation_corrected": True
+                })
+        
+        # Add any unassigned items as singletons
+        for idx in range(len(descriptions)):
+            if idx not in assigned:
+                singleton_idx = idx + index_offset
+                corrected_clusters.append([singleton_idx])
+                corrected_details.append({
+                    "cluster_id": len(corrected_clusters) - 1,
+                    "members": [singleton_idx],
+                    "description": "Singleton cluster (unassigned after correction)",
+                    "llm_rationale": "",
+                    "rationale": ""
+                })
+        
+        validation_report['corrected'] = True
+        validation_report['corrected_cluster_count'] = len(corrected_clusters)
+        validation_report['inconsistencies_fixed'] = inconsistencies
+        
+        logger.info(
+            "LLM validation corrections applied: %d clusters → %d clusters, fixed %d inconsistencies",
+            len(clusters), len(corrected_clusters), len(inconsistencies)
+        )
+        
+        return corrected_clusters, corrected_details, validation_report
+    
     def _validate_and_fix_clustering_inconsistencies(self, clusters: list, cluster_details: list, 
                                                      descriptions: list, index_offset: int) -> tuple:
         """
@@ -1185,7 +1401,13 @@ class KTBuilder:
                     "rationale": ""
                 })
         
-        # Validate and fix inconsistencies between rationale and members
+        # Two-step validation approach:
+        # Step 1: LLM self-validation and correction (if enabled)
+        clusters, cluster_details, validation_report = self._llm_validate_clustering(
+            clusters, cluster_details, descriptions, head_text, relation, index_offset
+        )
+        
+        # Step 2: Rule-based inconsistency detection (always run as backup)
         clusters, cluster_details = self._validate_and_fix_clustering_inconsistencies(
             clusters, cluster_details, descriptions, index_offset
         )
@@ -2236,9 +2458,19 @@ class KTBuilder:
                             "rationale": ""
                         })
             
-            # Validate and fix inconsistencies
+            # Two-step validation
+            # Step 1: LLM self-validation (if enabled)
+            candidates = community_data.get('candidates', [])
+            all_clusters, all_details, _ = self._llm_validate_clustering(
+                all_clusters, all_details, candidates, 
+                head_text=f"Keywords in community {comm_idx}", 
+                relation="keyword_membership", 
+                index_offset=0
+            )
+            
+            # Step 2: Rule-based validation
             all_clusters, all_details = self._validate_and_fix_clustering_inconsistencies(
-                all_clusters, all_details, community_data.get('candidates', []), 0
+                all_clusters, all_details, candidates, 0
             )
             
             community_data['initial_clusters'] = all_clusters
@@ -2724,7 +2956,14 @@ class KTBuilder:
                             "rationale": ""
                         })
             
-            # Validate and fix inconsistencies
+            # Two-step validation
+            # Step 1: LLM self-validation (if enabled)
+            all_clusters, all_details, _ = self._llm_validate_clustering(
+                all_clusters, all_details, candidate_descriptions,
+                head_text=head_text, relation=relation, index_offset=0
+            )
+            
+            # Step 2: Rule-based validation
             all_clusters, all_details = self._validate_and_fix_clustering_inconsistencies(
                 all_clusters, all_details, candidate_descriptions, 0
             )
@@ -3331,9 +3570,19 @@ class KTBuilder:
                             "rationale": ""
                         })
             
-            # Validate and fix inconsistencies
+            # Two-step validation
+            # Step 1: LLM self-validation (if enabled)
+            candidate_descriptions = group_data.get('candidate_descriptions', [])
+            head_text = group_data.get('head_text', 'Unknown')
+            relation = group_data.get('relation', 'Unknown')
+            all_clusters, all_details, _ = self._llm_validate_clustering(
+                all_clusters, all_details, candidate_descriptions,
+                head_text=head_text, relation=relation, index_offset=0
+            )
+            
+            # Step 2: Rule-based validation
             all_clusters, all_details = self._validate_and_fix_clustering_inconsistencies(
-                all_clusters, all_details, group_data.get('candidate_descriptions', []), 0
+                all_clusters, all_details, candidate_descriptions, 0
             )
             
             group_data['initial_clusters'] = all_clusters
