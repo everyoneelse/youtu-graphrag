@@ -33,6 +33,19 @@ construction:
     # Path to save intermediate results (optional, auto-generated if not specified)
     # intermediate_results_path: "output/dedup_intermediate/"
     
+    # Two-step validation for clustering: Enable LLM self-validation of clustering results
+    # When enabled, after initial clustering, LLM will check for inconsistencies
+    # between cluster descriptions and members, and automatically correct them.
+    # Recommended: true when using llm clustering, false for embedding clustering
+    enable_clustering_validation: false
+    
+    # Two-step validation for semantic dedup: Enable LLM self-validation of dedup results
+    # When enabled, after semantic deduplication, LLM will check for inconsistencies
+    # between group rationales and members, and automatically correct them.
+    # This addresses the issue where rationale says "should merge" but members are separate.
+    # Recommended: true for critical data, false for cost-sensitive scenarios
+    enable_semantic_dedup_validation: false
+    
     # Dual LLM configuration: use different models for clustering and deduplication
     # If not specified, both will use the default LLM configuration from environment variables
     # This allows you to use a cheaper/faster model for clustering and a more powerful one for dedup

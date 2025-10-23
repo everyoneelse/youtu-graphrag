@@ -71,7 +71,14 @@ DEFAULT_SEMANTIC_DEDUP_PROMPT = (
     "1. Every input index must appear in exactly one group\n"
     "2. Each group represents ONE entity with its various expressions\n"
     "3. Choose the most informative expression as representative\n"
-    "4. Provide clear rationale based on REFERENTIAL IDENTITY\n\n"
+    "4. Provide clear rationale based on REFERENTIAL IDENTITY\n"
+    "5. **CRITICAL CONSISTENCY**: Ensure your 'members' array MATCHES your 'rationale':\n"
+    "   - If rationale says \"X and Y refer to the same entity\" or \"should be merged\",\n"
+    "     then X and Y MUST be in the SAME group's members array\n"
+    "   - If rationale says \"distinct entities\" or \"should be kept separate\",\n"
+    "     then they MUST be in DIFFERENT groups\n"
+    "   - Do NOT put items in separate groups if your rationale says they are coreferent!\n"
+    "   - Do NOT reference merging with other groups if members are already separate\n\n"
     "Respond with strict JSON using this schema:\n"
     "{{\n"
     "  \"groups\": [\n"
@@ -134,11 +141,181 @@ DEFAULT_ATTRIBUTE_DEDUP_PROMPT = (
     "1. Every input index must appear in exactly one group\n"
     "2. Each group represents ONE property-value pair with its various expressions\n"
     "3. Choose the most complete and informative expression as representative\n"
-    "4. Provide clear rationale based on VALUE IDENTITY\n\n"
+    "4. Provide clear rationale based on VALUE IDENTITY\n"
+    "5. **CRITICAL CONSISTENCY**: Ensure your 'members' array MATCHES your 'rationale':\n"
+    "   - If rationale says \"X and Y are equivalent\" or \"express the same value\",\n"
+    "     then X and Y MUST be in the SAME group's members array\n"
+    "   - If rationale says \"different values\" or \"distinct properties\",\n"
+    "     then they MUST be in DIFFERENT groups\n"
+    "   - Do NOT put items in separate groups if your rationale says they are equivalent!\n\n"
     "Respond with strict JSON using this schema:\n"
     "{{\n"
     "  \"groups\": [\n"
     "    {{\"members\": [1, 3], \"representative\": 3, \"rationale\": \"Why these are equivalent (same property-value).\"}}\n"
+    "  ]\n"
+    "}}\n"
+)
+
+# Validation prompt for checking semantic deduplication consistency
+# Design principle: Use general consistency rules, NOT case-by-case patterns
+DEFAULT_SEMANTIC_DEDUP_VALIDATION_PROMPT = (
+    "You are a quality control assistant reviewing semantic deduplication results for consistency.\n\n"
+    "CONTEXT:\n"
+    "Head entity: {head}\n"
+    "Relation: {relation}\n\n"
+    "ORIGINAL CANDIDATES:\n"
+    "{candidates}\n\n"
+    "DEDUPLICATION RESULTS TO VALIDATE:\n"
+    "{dedup_results}\n\n"
+    "CORE TASK:\n"
+    "Check if each group's 'rationale' is LOGICALLY CONSISTENT with its 'members' array.\n\n"
+    "CONSISTENCY PRINCIPLE:\n"
+    "A group is CONSISTENT when:\n"
+    "  ✅ The rationale accurately describes WHY the members are grouped together\n"
+    "  ✅ If rationale says items are \"coreferent/equivalent/same\", they ARE in the same group\n"
+    "  ✅ If rationale says items are \"distinct/different\", they ARE in different groups\n"
+    "  ✅ The members array matches what the rationale claims\n\n"
+    "A group is INCONSISTENT when:\n"
+    "  ❌ Rationale and members contradict each other\n"
+    "  ❌ Rationale says \"same as group X\" but members don't include group X's items\n"
+    "  ❌ Rationale claims equivalence to other items not in the group\n"
+    "  ❌ Rationale says \"should be merged\" but items are in separate groups\n"
+    "  ❌ ANY logical mismatch between what rationale says and what members show\n\n"
+    "VALIDATION APPROACH:\n"
+    "1. Read each group's rationale carefully\n"
+    "2. Check if the members array matches the rationale's claim\n"
+    "3. If rationale mentions other groups/items, verify the relationship\n"
+    "4. Use your understanding of semantics and coreference\n"
+    "5. Consider the INTENT behind the rationale\n\n"
+    "IMPORTANT:\n"
+    "- Do NOT limit yourself to predefined patterns - find ANY inconsistency\n"
+    "- Use common sense and logical reasoning\n"
+    "- Consider context from the original candidates\n"
+    "- Focus on SEMANTIC consistency between rationale and members\n\n"
+    "OUTPUT FORMAT:\n"
+    "Respond with strict JSON:\n"
+    "{{\n"
+    "  \"has_inconsistencies\": true/false,\n"
+    "  \"inconsistencies\": [\n"
+    "    {{\n"
+    "      \"group_ids\": [list of affected group IDs],\n"
+    "      \"issue_type\": \"brief_category_name\",\n"
+    "      \"description\": \"Clear explanation of what's inconsistent\",\n"
+    "      \"suggested_fix\": \"How to fix it (e.g., 'merge group X into group Y')\"\n"
+    "    }}\n"
+    "  ],\n"
+    "  \"corrected_groups\": [\n"
+    "    {{\n"
+    "      \"members\": [member indices],\n"
+    "      \"representative\": index,\n"
+    "      \"rationale\": \"Updated rationale for the corrected group\"\n"
+    "    }}\n"
+    "  ]\n"
+    "}}\n\n"
+    "If NO inconsistencies found:\n"
+    "{{\n"
+    "  \"has_inconsistencies\": false,\n"
+    "  \"inconsistencies\": [],\n"
+    "  \"corrected_groups\": null\n"
+    "}}\n\n"
+    "EXAMPLE (for reference only - find ANY type of inconsistency):\n\n"
+    "Input groups:\n"
+    "- Group 0: {{members: [0, 1], representative: 0, rationale: \"These two refer to the same entity\"}}\n"
+    "- Group 1: {{members: [2], representative: 2, rationale: \"This is the same entity as items 0 and 1\"}}\n\n"
+    "Analysis: Group 1's rationale claims it's the same entity as items 0 and 1, but it's in a separate group.\n"
+    "This is inconsistent - if they're the same entity, they should be in one group.\n\n"
+    "Output:\n"
+    "{{\n"
+    "  \"has_inconsistencies\": true,\n"
+    "  \"inconsistencies\": [{{\n"
+    "    \"group_ids\": [1, 0],\n"
+    "    \"issue_type\": \"rationale_claims_coreference_but_separate\",\n"
+    "    \"description\": \"Group 1 claims to be the same entity as Group 0 members but is in a separate group\",\n"
+    "    \"suggested_fix\": \"merge group 1 into group 0\"\n"
+    "  }}],\n"
+    "  \"corrected_groups\": [\n"
+    "    {{\"members\": [0, 1, 2], \"representative\": 0, \"rationale\": \"These three expressions refer to the same entity\"}}\n"
+    "  ]\n"
+    "}}\n"
+)
+
+# Validation prompt for checking clustering consistency
+# Design principle: Use general consistency rules, NOT case-by-case patterns
+DEFAULT_CLUSTERING_VALIDATION_PROMPT = (
+    "You are a quality control assistant reviewing clustering results for consistency.\n\n"
+    "CONTEXT:\n"
+    "Head entity: {head}\n"
+    "Relation: {relation}\n\n"
+    "ORIGINAL CANDIDATE TAILS:\n"
+    "{candidates}\n\n"
+    "CLUSTERING RESULTS TO VALIDATE:\n"
+    "{clustering_results}\n\n"
+    "CORE TASK:\n"
+    "Check if each cluster's 'description/rationale' is LOGICALLY CONSISTENT with its 'members' array.\n\n"
+    "CONSISTENCY PRINCIPLE:\n"
+    "A cluster is CONSISTENT when:\n"
+    "  ✅ The description accurately reflects WHO is in the cluster\n"
+    "  ✅ If description says items are \"same/similar/should merge\", they ARE in the same cluster\n"
+    "  ✅ If description says items are \"different/distinct/separate\", they ARE in different clusters\n"
+    "  ✅ The membership (members array) matches what the description claims\n\n"
+    "A cluster is INCONSISTENT when:\n"
+    "  ❌ Description and members contradict each other\n"
+    "  ❌ Description refers to merging with other clusters, but members don't reflect this\n"
+    "  ❌ Description claims equivalence/similarity to other items not in the cluster\n"
+    "  ❌ ANY logical mismatch between what description says and what members show\n\n"
+    "VALIDATION APPROACH:\n"
+    "1. Read each cluster's description carefully\n"
+    "2. Check if the members array matches the description's claim\n"
+    "3. If description mentions other clusters/items, verify the relationship\n"
+    "4. Use your understanding of semantics, not just keyword matching\n"
+    "5. Consider the INTENT behind the description\n\n"
+    "IMPORTANT:\n"
+    "- Do NOT limit yourself to predefined patterns - find ANY inconsistency\n"
+    "- Use common sense and logical reasoning\n"
+    "- Consider context from the original candidates\n"
+    "- Focus on SEMANTIC consistency, not just syntactic matching\n\n"
+    "OUTPUT FORMAT:\n"
+    "Respond with strict JSON:\n"
+    "{{\n"
+    "  \"has_inconsistencies\": true/false,\n"
+    "  \"inconsistencies\": [\n"
+    "    {{\n"
+    "      \"cluster_ids\": [list of affected cluster IDs],\n"
+    "      \"issue_type\": \"brief_category_name\",\n"
+    "      \"description\": \"Clear explanation of what's inconsistent\",\n"
+    "      \"suggested_fix\": \"How to fix it (e.g., 'merge cluster X into cluster Y')\"\n"
+    "    }}\n"
+    "  ],\n"
+    "  \"corrected_clusters\": [\n"
+    "    {{\n"
+    "      \"members\": [member indices],\n"
+    "      \"description\": \"Updated description for the corrected cluster\"\n"
+    "    }}\n"
+    "  ]\n"
+    "}}\n\n"
+    "If NO inconsistencies found:\n"
+    "{{\n"
+    "  \"has_inconsistencies\": false,\n"
+    "  \"inconsistencies\": [],\n"
+    "  \"corrected_clusters\": null\n"
+    "}}\n\n"
+    "EXAMPLE (for reference only - find ANY type of inconsistency):\n\n"
+    "Input clusters:\n"
+    "- Cluster 0: {{members: [0, 1], description: \"These two items are identical\"}}\n"
+    "- Cluster 1: {{members: [2], description: \"This item is the same as items 0 and 1\"}}\n\n"
+    "Analysis: Cluster 1's description claims it's the same as items 0 and 1, but it's in a separate cluster.\n"
+    "This is inconsistent - if they're the same, they should be in one cluster.\n\n"
+    "Output:\n"
+    "{{\n"
+    "  \"has_inconsistencies\": true,\n"
+    "  \"inconsistencies\": [{{\n"
+    "    \"cluster_ids\": [1, 0],\n"
+    "    \"issue_type\": \"description_claims_equivalence_but_separate\",\n"
+    "    \"description\": \"Cluster 1 claims to be the same as Cluster 0 members but is in a separate cluster\",\n"
+    "    \"suggested_fix\": \"merge cluster 1 into cluster 0\"\n"
+    "  }}],\n"
+    "  \"corrected_clusters\": [\n"
+    "    {{\"members\": [0, 1, 2], \"description\": \"These three items are identical\"}}\n"
     "  ]\n"
     "}}\n"
 )
@@ -175,7 +352,13 @@ DEFAULT_LLM_CLUSTERING_PROMPT = (
     "OUTPUT REQUIREMENTS:\n"
     "1. Every input index must appear in exactly one cluster\n"
     "2. Each cluster should contain semantically similar tails\n"
-    "3. Provide a brief description for each cluster explaining the grouping rationale\n\n"
+    "3. Provide a brief description for each cluster explaining the grouping rationale\n"
+    "4. **CRITICAL**: Ensure your 'members' array MATCHES your 'description':\n"
+    "   - If description says items should be \"merged\" or \"combined\" or are \"identical/equivalent\",\n"
+    "     then those items MUST be in the SAME cluster (same 'members' array)\n"
+    "   - If description says items should be \"kept separate\" or are \"distinct\",\n"
+    "     then those items MUST be in DIFFERENT clusters\n"
+    "   - Do NOT put items in separate clusters if your description says they should be merged!\n\n"
     "Respond with strict JSON using this schema:\n"
     "{{\n"
     "  \"clusters\": [\n"
@@ -921,6 +1104,392 @@ class KTBuilder:
 
         return summaries
 
+    def _llm_validate_semantic_dedup(self, groups: list, original_candidates: list,
+                                     head_text: str = None, relation: str = None) -> tuple:
+        """
+        Use LLM to validate semantic deduplication results and fix inconsistencies.
+        This validates that each group's rationale matches its members.
+        
+        Args:
+            groups: List of dedup groups, each with members, representative, rationale
+            original_candidates: Original candidate descriptions  
+            head_text: Head entity text (optional, for context)
+            relation: Relation text (optional, for context)
+            
+        Returns:
+            Tuple of (corrected_groups, validation_report)
+        """
+        # Check if validation is enabled
+        semantic_config = getattr(self.config.construction, "semantic_dedup", None)
+        if not semantic_config or not getattr(semantic_config, "enable_semantic_dedup_validation", False):
+            # Validation disabled, return original
+            return groups, None
+        
+        if not groups or len(groups) <= 1:
+            # Nothing to validate (need at least 2 groups to check for merge opportunities)
+            return groups, None
+        
+        # Prepare candidates text
+        candidates_blocks = []
+        for idx, candidate in enumerate(original_candidates, start=1):
+            candidates_blocks.append(f"[{idx}] {candidate}")
+        candidates_text = "\n".join(candidates_blocks) if candidates_blocks else "[No candidates]"
+        
+        # Prepare dedup results text
+        dedup_results_blocks = []
+        for group_idx, group in enumerate(groups):
+            members = group.get('members', [])
+            # Convert to 1-based for LLM
+            members_1based = [m + 1 for m in members]
+            representative = group.get('representative', members[0] if members else 0) + 1
+            rationale = group.get('rationale', '')
+            dedup_results_blocks.append(
+                f"Group {group_idx}: {{members: {members_1based}, representative: {representative}, "
+                f"rationale: \"{rationale}\"}}"
+            )
+        dedup_results_text = "\n".join(dedup_results_blocks)
+        
+        # Build validation prompt
+        prompt = DEFAULT_SEMANTIC_DEDUP_VALIDATION_PROMPT.format(
+            head=head_text or "[UNKNOWN_HEAD]",
+            relation=relation or "[UNKNOWN_RELATION]",
+            candidates=candidates_text,
+            dedup_results=dedup_results_text
+        )
+        
+        # Call LLM for validation
+        try:
+            response = self.dedup_llm_client.call_api(prompt)
+        except Exception as e:
+            logger.warning("LLM semantic dedup validation call failed: %s, skipping validation", e)
+            return groups, None
+        
+        # Parse validation response
+        try:
+            parsed = json_repair.loads(response)
+        except Exception:
+            try:
+                parsed = json.loads(response)
+            except Exception as parse_error:
+                logger.warning("Failed to parse LLM semantic dedup validation response: %s, skipping validation", parse_error)
+                return groups, None
+        
+        has_inconsistencies = parsed.get('has_inconsistencies', False)
+        inconsistencies = parsed.get('inconsistencies', [])
+        corrected_groups_raw = parsed.get('corrected_groups')
+        
+        validation_report = {
+            'has_inconsistencies': has_inconsistencies,
+            'inconsistencies': inconsistencies,
+            'original_group_count': len(groups),
+            'validation_attempted': True
+        }
+        
+        if not has_inconsistencies or not corrected_groups_raw:
+            logger.info("LLM semantic dedup validation: No inconsistencies found or no corrections provided")
+            validation_report['corrected'] = False
+            return groups, validation_report
+        
+        # Apply corrections
+        logger.info("LLM semantic dedup validation found %d inconsistencies, applying corrections", len(inconsistencies))
+        
+        corrected_groups = []
+        for group_info in corrected_groups_raw:
+            if not isinstance(group_info, dict):
+                continue
+            
+            members_raw = group_info.get("members")
+            if not isinstance(members_raw, list):
+                continue
+            
+            # Convert 1-based to 0-based
+            corrected_members = []
+            for member in members_raw:
+                try:
+                    member_idx = int(member) - 1  # Convert to 0-based
+                except (TypeError, ValueError):
+                    continue
+                if 0 <= member_idx < len(original_candidates):
+                    corrected_members.append(member_idx)
+            
+            if corrected_members:
+                representative_raw = group_info.get("representative", corrected_members[0] + 1)
+                try:
+                    representative = int(representative_raw) - 1 if isinstance(representative_raw, (int, str)) else corrected_members[0]
+                except:
+                    representative = corrected_members[0]
+                
+                corrected_groups.append({
+                    "members": corrected_members,
+                    "representative": representative,
+                    "rationale": group_info.get("rationale", "Corrected by validation"),
+                    "validation_corrected": True
+                })
+        
+        validation_report['corrected'] = True
+        validation_report['corrected_group_count'] = len(corrected_groups)
+        validation_report['inconsistencies_fixed'] = inconsistencies
+        
+        logger.info(
+            "LLM semantic dedup validation corrections applied: %d groups → %d groups, fixed %d inconsistencies",
+            len(groups), len(corrected_groups), len(inconsistencies)
+        )
+        
+        return corrected_groups, validation_report
+    
+    def _llm_validate_clustering(self, clusters: list, cluster_details: list, 
+                                 descriptions: list, head_text: str = None, relation: str = None,
+                                 index_offset: int = 0) -> tuple:
+        """
+        Use LLM to validate clustering results and fix inconsistencies.
+        This is a second-pass validation where LLM checks its own clustering output.
+        
+        Args:
+            clusters: List of cluster member lists
+            cluster_details: List of cluster detail dicts with rationale
+            descriptions: Original candidate descriptions
+            head_text: Head entity text (optional, for context)
+            relation: Relation text (optional, for context)
+            index_offset: Offset for indices
+            
+        Returns:
+            Tuple of (corrected_clusters, corrected_details, validation_report)
+        """
+        # Check if validation is enabled
+        semantic_config = getattr(self.config.construction, "semantic_dedup", None)
+        if not semantic_config or not getattr(semantic_config, "enable_clustering_validation", False):
+            # Validation disabled, return original
+            return clusters, cluster_details, None
+        
+        if not cluster_details or len(cluster_details) <= 1:
+            # Nothing to validate (need at least 2 clusters to check for merge opportunities)
+            return clusters, cluster_details, None
+        
+        # Prepare candidates text
+        candidates_blocks = []
+        for idx, desc in enumerate(descriptions, start=1):
+            candidates_blocks.append(f"[{idx}] {desc}")
+        candidates_text = "\n".join(candidates_blocks) if candidates_blocks else "[No candidates]"
+        
+        # Prepare clustering results text
+        clustering_results_blocks = []
+        for cluster_idx, detail in enumerate(cluster_details):
+            members = detail.get('members', [])
+            # Convert back to 1-based for LLM
+            members_1based = [m - index_offset + 1 for m in members]
+            rationale = detail.get('rationale', '') or detail.get('llm_rationale', '') or detail.get('description', '')
+            clustering_results_blocks.append(
+                f"Cluster {cluster_idx}: {{members: {members_1based}, description: \"{rationale}\"}}"
+            )
+        clustering_results_text = "\n".join(clustering_results_blocks)
+        
+        # Build validation prompt
+        prompt = DEFAULT_CLUSTERING_VALIDATION_PROMPT.format(
+            head=head_text or "[UNKNOWN_HEAD]",
+            relation=relation or "[UNKNOWN_RELATION]",
+            candidates=candidates_text,
+            clustering_results=clustering_results_text
+        )
+        
+        # Call LLM for validation
+        try:
+            response = self.clustering_llm_client.call_api(prompt)
+        except Exception as e:
+            logger.warning("LLM validation call failed: %s, skipping validation", e)
+            return clusters, cluster_details, None
+        
+        # Parse validation response
+        try:
+            parsed = json_repair.loads(response)
+        except Exception:
+            try:
+                parsed = json.loads(response)
+            except Exception as parse_error:
+                logger.warning("Failed to parse LLM validation response: %s, skipping validation", parse_error)
+                return clusters, cluster_details, None
+        
+        has_inconsistencies = parsed.get('has_inconsistencies', False)
+        inconsistencies = parsed.get('inconsistencies', [])
+        corrected_clusters_raw = parsed.get('corrected_clusters')
+        
+        validation_report = {
+            'has_inconsistencies': has_inconsistencies,
+            'inconsistencies': inconsistencies,
+            'original_cluster_count': len(clusters),
+            'validation_attempted': True
+        }
+        
+        if not has_inconsistencies or not corrected_clusters_raw:
+            logger.info("LLM validation: No inconsistencies found or no corrections provided")
+            validation_report['corrected'] = False
+            return clusters, cluster_details, validation_report
+        
+        # Apply corrections
+        logger.info("LLM validation found %d inconsistencies, applying corrections", len(inconsistencies))
+        
+        corrected_clusters = []
+        corrected_details = []
+        assigned = set()
+        
+        for cluster_idx, cluster_info in enumerate(corrected_clusters_raw):
+            if not isinstance(cluster_info, dict):
+                continue
+            
+            members_raw = cluster_info.get("members")
+            if not isinstance(members_raw, list):
+                continue
+            
+            # Convert 1-based to 0-based and add offset
+            cluster_members = []
+            for member in members_raw:
+                try:
+                    member_idx = int(member) - 1  # Convert to 0-based
+                except (TypeError, ValueError):
+                    continue
+                if 0 <= member_idx < len(descriptions):
+                    adjusted_idx = member_idx + index_offset
+                    cluster_members.append(adjusted_idx)
+                    assigned.add(member_idx)
+            
+            if cluster_members:
+                corrected_clusters.append(cluster_members)
+                corrected_details.append({
+                    "cluster_id": cluster_idx,
+                    "members": cluster_members,
+                    "description": cluster_info.get("description", "Corrected by validation"),
+                    "llm_rationale": cluster_info.get("description", ""),
+                    "rationale": cluster_info.get("description", ""),
+                    "validation_corrected": True
+                })
+        
+        # Add any unassigned items as singletons
+        for idx in range(len(descriptions)):
+            if idx not in assigned:
+                singleton_idx = idx + index_offset
+                corrected_clusters.append([singleton_idx])
+                corrected_details.append({
+                    "cluster_id": len(corrected_clusters) - 1,
+                    "members": [singleton_idx],
+                    "description": "Singleton cluster (unassigned after correction)",
+                    "llm_rationale": "",
+                    "rationale": ""
+                })
+        
+        validation_report['corrected'] = True
+        validation_report['corrected_cluster_count'] = len(corrected_clusters)
+        validation_report['inconsistencies_fixed'] = inconsistencies
+        
+        logger.info(
+            "LLM validation corrections applied: %d clusters → %d clusters, fixed %d inconsistencies",
+            len(clusters), len(corrected_clusters), len(inconsistencies)
+        )
+        
+        return corrected_clusters, corrected_details, validation_report
+    
+    def _validate_and_fix_clustering_inconsistencies(self, clusters: list, cluster_details: list, 
+                                                     descriptions: list, index_offset: int) -> tuple:
+        """
+        Validate and fix inconsistencies between cluster members and rationales.
+        
+        Detects cases where:
+        - Rationale says items should be "merged/combined/same/identical/equivalent" but are in separate clusters
+        - Rationale says items should be "separate/distinct/different" but are in the same cluster
+        
+        Args:
+            clusters: List of cluster member lists
+            cluster_details: List of cluster detail dicts
+            descriptions: Original descriptions (for logging)
+            index_offset: Offset applied to indices
+            
+        Returns:
+            Tuple of (fixed_clusters, fixed_cluster_details)
+        """
+        import re
+        
+        merge_keywords = [
+            r'应该?合并', r'可合并', r'需要合并', r'建议合并',
+            r'should.*merge', r'can.*merge', r'need.*merge',
+            r'identical', r'equivalent', r'same', r'完全一致', r'信息.*一致',
+            r'互换使用', r'interchangeable', r'同义', r'synonym'
+        ]
+        
+        separate_keywords = [
+            r'应该?分开', r'保持.*独立', r'单独.*组', r'不.*合并',
+            r'should.*separate', r'keep.*separate', r'distinct', r'different',
+            r'不同', r'有差异', r'不一致'
+        ]
+        
+        inconsistencies_found = []
+        
+        for idx, detail in enumerate(cluster_details):
+            rationale = detail.get('rationale', '') or detail.get('llm_rationale', '') or detail.get('description', '')
+            members = detail.get('members', [])
+            
+            if not rationale or len(members) == 0:
+                continue
+            
+            rationale_lower = rationale.lower()
+            
+            # Check for merge keywords
+            has_merge_keyword = any(re.search(pattern, rationale_lower, re.IGNORECASE) 
+                                   for pattern in merge_keywords)
+            
+            # Check for separation keywords
+            has_separate_keyword = any(re.search(pattern, rationale_lower, re.IGNORECASE)
+                                      for pattern in separate_keywords)
+            
+            # Case 1: Rationale says "merge" but only 1 member (singleton cluster)
+            if has_merge_keyword and len(members) == 1 and not has_separate_keyword:
+                # Look for references to other clusters/groups in the rationale
+                # Common patterns: "与组1", "with group 1", "cluster 1", "成员0"
+                referenced_groups = []
+                
+                # Extract group numbers mentioned
+                group_matches = re.findall(r'组\s*(\d+)', rationale)
+                referenced_groups.extend([int(g) - 1 for g in group_matches if g.isdigit()])
+                
+                # Extract cluster numbers
+                cluster_matches = re.findall(r'cluster\s*(\d+)', rationale_lower)
+                referenced_groups.extend([int(c) for c in cluster_matches if c.isdigit()])
+                
+                # Extract member indices mentioned
+                member_matches = re.findall(r'(?:成员|member|项)\s*(\d+)', rationale_lower)
+                referenced_members = [int(m) - 1 + index_offset for m in member_matches if m.isdigit()]
+                
+                inconsistency = {
+                    'type': 'singleton_but_should_merge',
+                    'cluster_idx': idx,
+                    'members': members,
+                    'rationale': rationale,
+                    'referenced_groups': referenced_groups,
+                    'referenced_members': referenced_members,
+                    'description': f"Cluster {idx} has only 1 member {members} but rationale says should merge"
+                }
+                inconsistencies_found.append(inconsistency)
+                
+                logger.warning(
+                    "Clustering inconsistency detected: Cluster %d has 1 member %s but rationale says merge: '%s...'",
+                    idx, members, rationale[:100]
+                )
+        
+        # Log summary
+        if inconsistencies_found:
+            logger.warning(
+                "Found %d clustering inconsistencies. These are likely LLM output errors where rationale "
+                "contradicts the members array. Consider adjusting clustering prompt or reviewing results.",
+                len(inconsistencies_found)
+            )
+            
+            # Optionally save to file for analysis
+            if hasattr(self, '_save_clustering_inconsistencies'):
+                self._save_clustering_inconsistencies(inconsistencies_found, descriptions)
+        
+        # For now, we return the original clusters without automatic fixing
+        # Automatic fixing is risky without understanding the full context
+        # Users can review the logs and fix manually if needed
+        
+        return clusters, cluster_details
+    
     def _cluster_candidate_tails_with_llm(self, head_text: str, relation: str, descriptions: list, max_batch_size: int = 30) -> tuple:
         """
         Cluster candidate tails using LLM for initial grouping.
@@ -1058,7 +1627,8 @@ class KTBuilder:
                     "cluster_id": cluster_idx,
                     "members": cluster_members,
                     "description": cluster_info.get("description", "No description provided"),
-                    "llm_rationale": cluster_info.get("description", "")
+                    "llm_rationale": cluster_info.get("description", ""),
+                    "rationale": cluster_info.get("rationale", "")  # Preserve rationale if provided separately
                 })
         
         # Add unassigned items as singleton clusters
@@ -1070,8 +1640,20 @@ class KTBuilder:
                     "cluster_id": len(clusters) - 1,
                     "members": [singleton_idx],
                     "description": "Singleton cluster (unassigned by LLM)",
-                    "llm_rationale": ""
+                    "llm_rationale": "",
+                    "rationale": ""
                 })
+        
+        # Two-step validation approach:
+        # Step 1: LLM self-validation and correction (if enabled)
+        clusters, cluster_details, validation_report = self._llm_validate_clustering(
+            clusters, cluster_details, descriptions, head_text, relation, index_offset
+        )
+        
+        # Step 2: Rule-based inconsistency detection (always run as backup)
+        clusters, cluster_details = self._validate_and_fix_clustering_inconsistencies(
+            clusters, cluster_details, descriptions, index_offset
+        )
         
         return clusters, cluster_details
 
@@ -2115,8 +2697,24 @@ class KTBuilder:
                         all_clusters.append([adjusted_idx])
                         all_details.append({
                             "description": f"Singleton cluster for item {adjusted_idx}",
-                            "members": [adjusted_idx]
+                            "members": [adjusted_idx],
+                            "rationale": ""
                         })
+            
+            # Two-step validation
+            # Step 1: LLM self-validation (if enabled)
+            candidates = community_data.get('candidates', [])
+            all_clusters, all_details, _ = self._llm_validate_clustering(
+                all_clusters, all_details, candidates, 
+                head_text=f"Keywords in community {comm_idx}", 
+                relation="keyword_membership", 
+                index_offset=0
+            )
+            
+            # Step 2: Rule-based validation
+            all_clusters, all_details = self._validate_and_fix_clustering_inconsistencies(
+                all_clusters, all_details, candidates, 0
+            )
             
             community_data['initial_clusters'] = all_clusters
             community_data['llm_clustering_details'] = all_details
@@ -2585,6 +3183,7 @@ class KTBuilder:
                         detail = {
                             "description": cluster_info.get("description", ""),
                             "llm_rationale": cluster_info.get("rationale", ""),
+                            "rationale": cluster_info.get("rationale", ""),
                             "members": cluster_members
                         }
                         all_details.append(detail)
@@ -2596,8 +3195,21 @@ class KTBuilder:
                         all_clusters.append([adjusted_idx])
                         all_details.append({
                             "description": f"Singleton cluster for item {adjusted_idx}",
-                            "members": [adjusted_idx]
+                            "members": [adjusted_idx],
+                            "rationale": ""
                         })
+            
+            # Two-step validation
+            # Step 1: LLM self-validation (if enabled)
+            all_clusters, all_details, _ = self._llm_validate_clustering(
+                all_clusters, all_details, candidate_descriptions,
+                head_text=head_text, relation=relation, index_offset=0
+            )
+            
+            # Step 2: Rule-based validation
+            all_clusters, all_details = self._validate_and_fix_clustering_inconsistencies(
+                all_clusters, all_details, candidate_descriptions, 0
+            )
             
             initial_clusters = all_clusters
             llm_clustering_details = all_details
@@ -2735,9 +3347,24 @@ class KTBuilder:
                 if idx not in assigned:
                     groups.append({"representative": idx, "members": [idx], "rationale": None})
             
+            # ============================================================
+            # Two-step validation: Validate semantic dedup results
+            # ============================================================
+            # Extract candidate descriptions for this batch
+            candidate_descriptions = [entry['description'] for entry in batch_entries]
+            
+            # Validate groups for consistency (rationale vs members)
+            groups, validation_report = self._llm_validate_semantic_dedup(
+                groups,
+                candidate_descriptions,
+                head_text=head_text,
+                relation=relation
+            )
+            
             semantic_groups_by_batch.append({
-                'groups': groups,
-                'metadata': metadata
+                'groups': groups,  # Use validated groups
+                'metadata': metadata,
+                'validation_report': validation_report  # Store validation report
             })
         
         # ============================================================
@@ -3186,6 +3813,7 @@ class KTBuilder:
                         all_details.append({
                             "description": cluster_info.get("description", ""),
                             "llm_rationale": cluster_info.get("rationale", ""),
+                            "rationale": cluster_info.get("rationale", ""),
                             "members": cluster_members
                         })
                 
@@ -3196,8 +3824,24 @@ class KTBuilder:
                         all_clusters.append([adjusted_idx])
                         all_details.append({
                             "description": f"Singleton cluster for item {adjusted_idx}",
-                            "members": [adjusted_idx]
+                            "members": [adjusted_idx],
+                            "rationale": ""
                         })
+            
+            # Two-step validation
+            # Step 1: LLM self-validation (if enabled)
+            candidate_descriptions = group_data.get('candidate_descriptions', [])
+            head_text = group_data.get('head_text', 'Unknown')
+            relation = group_data.get('relation', 'Unknown')
+            all_clusters, all_details, _ = self._llm_validate_clustering(
+                all_clusters, all_details, candidate_descriptions,
+                head_text=head_text, relation=relation, index_offset=0
+            )
+            
+            # Step 2: Rule-based validation
+            all_clusters, all_details = self._validate_and_fix_clustering_inconsistencies(
+                all_clusters, all_details, candidate_descriptions, 0
+            )
             
             group_data['initial_clusters'] = all_clusters
             group_data['llm_clustering_details'] = all_details
@@ -3379,10 +4023,30 @@ class KTBuilder:
                             "rationale": None
                         })
                 
+                # ============================================================
+                # Two-step validation: Validate semantic dedup results
+                # ============================================================
+                # Extract candidate descriptions for this batch
+                batch_entries = [entries[i] for i in batch_indices]
+                candidate_descriptions = [entry['description'] for entry in batch_entries]
+                
+                # Get head and relation info from group_data
+                head_text = group_data.get('head_name', '')
+                relation = group_data.get('relation', '')
+                
+                # Validate groups for consistency (rationale vs members)
+                groups, validation_report = self._llm_validate_semantic_dedup(
+                    groups,
+                    candidate_descriptions,
+                    head_text=head_text,
+                    relation=relation
+                )
+                
                 semantic_groups[key] = {
-                    'groups': groups,
+                    'groups': groups,  # Use validated groups
                     'batch_indices': batch_indices,
                     'overflow_indices': overflow_indices,
+                    'validation_report': validation_report  # Store validation report
                 }
             
             group_data['semantic_results'] = semantic_groups
