@@ -92,13 +92,22 @@
 - 推广价值
 - **适合**：关注设计细节的开发者
 
-#### 5.1 [SEMANTIC_DEDUP_VALIDATION_V2_CHANGELOG.md](./SEMANTIC_DEDUP_VALIDATION_V2_CHANGELOG.md) ⭐
-**Semantic Dedup验证V2.0变更日志**
+#### 5.1 [SEMANTIC_DEDUP_VALIDATION_V2_CHANGELOG.md](./SEMANTIC_DEDUP_VALIDATION_V2_CHANGELOG.md) ⭐⭐
+**Semantic Dedup验证V2.0→V3.0变更日志**
 
-- **核心改进**：聚焦验证范围，只检查"rationale结论 vs 分组结构"
-- 明确排除内容准确性检查
-- V1.0 vs V2.0详细对比
+- **V2.0**：聚焦验证范围，只检查"rationale结论 vs 分组结构"
+- **V3.0 (最新)**：极简重构，prompt缩减47%，使用真实案例
+- 特别强化"故归入一组"等中文关键短语
+- Step-by-step推理演示
 - **适合**：所有使用semantic dedup验证的用户（必读）
+
+#### 5.1.1 [SEMANTIC_DEDUP_VALIDATION_V3_NOTES.md](./SEMANTIC_DEDUP_VALIDATION_V3_NOTES.md)
+**V3.0设计笔记**
+
+- 为什么需要V3.0：V2.0未能检测用户真实案例
+- 极简设计原则和实施细节
+- 用户真实案例分析
+- **适合**：想了解V3.0设计思路的开发者
 
 #### 5.2 [SEMANTIC_DEDUP_VALIDATION_FIX_SUMMARY.md](./SEMANTIC_DEDUP_VALIDATION_FIX_SUMMARY.md)
 **Semantic Dedup验证修复总结**
