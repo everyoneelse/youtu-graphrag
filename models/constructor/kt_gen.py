@@ -202,6 +202,8 @@ DEFAULT_SEMANTIC_DEDUP_VALIDATION_PROMPT = (
     "    {{\"members\": [...], \"representative\": N, \"rationale\": \"...\"}}\n"
     "  ]\n"
     "}}\n\n"
+    "IMPORTANT: corrected_groups should contain ALL groups (both corrected and unchanged).\n"
+    "Do not omit groups that were already consistent.\n\n"
     "If all groups are consistent, return:\n"
     "{{\n"
     "  \"has_inconsistencies\": false,\n"
@@ -1196,6 +1198,22 @@ class KTBuilder:
                     "rationale": group_info.get("rationale", "Corrected by validation"),
                     "validation_corrected": True
                 })
+        
+        # Verify we got all items covered
+        all_items = set(range(len(original_candidates)))
+        covered_items = set()
+        for group in corrected_groups:
+            covered_items.update(group['members'])
+        
+        missing_items = all_items - covered_items
+        if missing_items:
+            logger.warning(
+                "LLM validation output missing items %s. Keeping original groups to avoid data loss.",
+                sorted(missing_items)
+            )
+            validation_report['corrected'] = False
+            validation_report['error'] = f"Missing items in corrected_groups: {sorted(missing_items)}"
+            return groups, validation_report
         
         validation_report['corrected'] = True
         validation_report['corrected_group_count'] = len(corrected_groups)
