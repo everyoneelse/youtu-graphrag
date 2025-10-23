@@ -134,25 +134,27 @@ Output:
 }
 ```
 
-**反面示例** - 不应该检测的问题：
+**反面示例** - 不应该检测的问题（原则驱动）：
 ```
-Example 3 (What NOT to report):
-Input:
-- Group 0: {members: [0, 1], rationale: "Both mention 54.7° angle"}
-But candidate [0] actually says "specific angle" (no 54.7° mentioned in original text)
+Example 3 (What NOT to report - General principle):
+Scenario type: Rationale content inaccuracy but grouping structure is correct
 
-Analysis:
-This is a content accuracy issue - rationale mentions a detail (54.7°) not in original text.
-BUT, the grouping structure is correct: members [0, 1] ARE grouped together as intended.
-✅ Conclusion (group together) = Structure (grouped) → CONSISTENT
-🚫 Do NOT report this - content accuracy is out of scope!
+Pattern:
+- Rationale says items should be grouped together → Members ARE grouped together ✅
+- BUT rationale's description/reasoning has factual errors ⚠️
 
-Output:
-{
-  "has_inconsistencies": false,
-  "inconsistencies": [],
-  "corrected_groups": null
-}
+Decision: DO NOT REPORT
+Reason: Content accuracy is out of scope. We only check structural consistency.
+
+Rule: If the grouping action (merge/separate) matches the rationale's conclusion,
+      then it's CONSISTENT, regardless of whether the rationale's reasoning is accurate.
+
+Examples of this pattern (all should NOT be reported):
+- Rationale mentions details not in original candidates
+- Rationale uses incorrect terminology or descriptions
+- Rationale's reasoning logic is flawed
+- Rationale makes factual mistakes
+→ As long as grouping structure matches the conclusion, it's CONSISTENT.
 ```
 
 ## 修改文件

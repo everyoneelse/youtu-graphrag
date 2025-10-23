@@ -93,27 +93,31 @@ IGNORE:
 
 ### 4. 添加反面示例
 
-新增了"What NOT to report"示例，明确告诉LLM什么情况不应该报告：
+新增了"What NOT to report"**原则性**示例，明确告诉LLM什么情况不应该报告：
 
 ```python
-Example 3 (What NOT to report):
-Input:
-- Group 0: {members: [0, 1], rationale: "Both mention 54.7° angle"}
-But candidate [0] says "specific angle" (no 54.7° mentioned)
+Example 3 (What NOT to report - General principle):
+Scenario type: Rationale content inaccuracy but grouping structure is correct
 
-Analysis:
-This is a content accuracy issue (rationale mentions detail not in original text).
-But members [0, 1] ARE grouped together as rationale intended.
-✅ Conclusion (group together) = Structure (grouped) → CONSISTENT
-🚫 Do NOT report this - content accuracy is out of scope!
+Pattern:
+- Rationale says items should be grouped together → Members ARE grouped together ✅
+- BUT rationale's description/reasoning has factual errors ⚠️
 
-Output:
-{
-  "has_inconsistencies": false,
-  "inconsistencies": [],
-  "corrected_groups": null
-}
+Decision: DO NOT REPORT
+Reason: Content accuracy is out of scope. We only check structural consistency.
+
+Rule: If the grouping action (merge/separate) matches the rationale's conclusion,
+      then it's CONSISTENT, regardless of whether the rationale's reasoning is accurate.
+
+Examples of this pattern (all should NOT be reported):
+- Rationale mentions details not in original candidates
+- Rationale uses incorrect terminology or descriptions
+- Rationale's reasoning logic is flawed
+- Rationale makes factual mistakes
+→ As long as grouping structure matches the conclusion, it's CONSISTENT.
 ```
+
+**设计原则**：不列举具体案例（如"54.7°角度"），而是描述通用模式和原则。
 
 ### 5. 统一issue_type
 
