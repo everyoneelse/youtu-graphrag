@@ -175,7 +175,13 @@ DEFAULT_LLM_CLUSTERING_PROMPT = (
     "OUTPUT REQUIREMENTS:\n"
     "1. Every input index must appear in exactly one cluster\n"
     "2. Each cluster should contain semantically similar tails\n"
-    "3. Provide a brief description for each cluster explaining the grouping rationale\n\n"
+    "3. Provide a brief description for each cluster explaining the grouping rationale\n"
+    "4. **CRITICAL**: Ensure your 'members' array MATCHES your 'description':\n"
+    "   - If description says items should be \"merged\" or \"combined\" or are \"identical/equivalent\",\n"
+    "     then those items MUST be in the SAME cluster (same 'members' array)\n"
+    "   - If description says items should be \"kept separate\" or are \"distinct\",\n"
+    "     then those items MUST be in DIFFERENT clusters\n"
+    "   - Do NOT put items in separate clusters if your description says they should be merged!\n\n"
     "Respond with strict JSON using this schema:\n"
     "{{\n"
     "  \"clusters\": [\n"
@@ -921,6 +927,110 @@ class KTBuilder:
 
         return summaries
 
+    def _validate_and_fix_clustering_inconsistencies(self, clusters: list, cluster_details: list, 
+                                                     descriptions: list, index_offset: int) -> tuple:
+        """
+        Validate and fix inconsistencies between cluster members and rationales.
+        
+        Detects cases where:
+        - Rationale says items should be "merged/combined/same/identical/equivalent" but are in separate clusters
+        - Rationale says items should be "separate/distinct/different" but are in the same cluster
+        
+        Args:
+            clusters: List of cluster member lists
+            cluster_details: List of cluster detail dicts
+            descriptions: Original descriptions (for logging)
+            index_offset: Offset applied to indices
+            
+        Returns:
+            Tuple of (fixed_clusters, fixed_cluster_details)
+        """
+        import re
+        
+        merge_keywords = [
+            r'应该?合并', r'可合并', r'需要合并', r'建议合并',
+            r'should.*merge', r'can.*merge', r'need.*merge',
+            r'identical', r'equivalent', r'same', r'完全一致', r'信息.*一致',
+            r'互换使用', r'interchangeable', r'同义', r'synonym'
+        ]
+        
+        separate_keywords = [
+            r'应该?分开', r'保持.*独立', r'单独.*组', r'不.*合并',
+            r'should.*separate', r'keep.*separate', r'distinct', r'different',
+            r'不同', r'有差异', r'不一致'
+        ]
+        
+        inconsistencies_found = []
+        
+        for idx, detail in enumerate(cluster_details):
+            rationale = detail.get('rationale', '') or detail.get('llm_rationale', '') or detail.get('description', '')
+            members = detail.get('members', [])
+            
+            if not rationale or len(members) == 0:
+                continue
+            
+            rationale_lower = rationale.lower()
+            
+            # Check for merge keywords
+            has_merge_keyword = any(re.search(pattern, rationale_lower, re.IGNORECASE) 
+                                   for pattern in merge_keywords)
+            
+            # Check for separation keywords
+            has_separate_keyword = any(re.search(pattern, rationale_lower, re.IGNORECASE)
+                                      for pattern in separate_keywords)
+            
+            # Case 1: Rationale says "merge" but only 1 member (singleton cluster)
+            if has_merge_keyword and len(members) == 1 and not has_separate_keyword:
+                # Look for references to other clusters/groups in the rationale
+                # Common patterns: "与组1", "with group 1", "cluster 1", "成员0"
+                referenced_groups = []
+                
+                # Extract group numbers mentioned
+                group_matches = re.findall(r'组\s*(\d+)', rationale)
+                referenced_groups.extend([int(g) - 1 for g in group_matches if g.isdigit()])
+                
+                # Extract cluster numbers
+                cluster_matches = re.findall(r'cluster\s*(\d+)', rationale_lower)
+                referenced_groups.extend([int(c) for c in cluster_matches if c.isdigit()])
+                
+                # Extract member indices mentioned
+                member_matches = re.findall(r'(?:成员|member|项)\s*(\d+)', rationale_lower)
+                referenced_members = [int(m) - 1 + index_offset for m in member_matches if m.isdigit()]
+                
+                inconsistency = {
+                    'type': 'singleton_but_should_merge',
+                    'cluster_idx': idx,
+                    'members': members,
+                    'rationale': rationale,
+                    'referenced_groups': referenced_groups,
+                    'referenced_members': referenced_members,
+                    'description': f"Cluster {idx} has only 1 member {members} but rationale says should merge"
+                }
+                inconsistencies_found.append(inconsistency)
+                
+                logger.warning(
+                    "Clustering inconsistency detected: Cluster %d has 1 member %s but rationale says merge: '%s...'",
+                    idx, members, rationale[:100]
+                )
+        
+        # Log summary
+        if inconsistencies_found:
+            logger.warning(
+                "Found %d clustering inconsistencies. These are likely LLM output errors where rationale "
+                "contradicts the members array. Consider adjusting clustering prompt or reviewing results.",
+                len(inconsistencies_found)
+            )
+            
+            # Optionally save to file for analysis
+            if hasattr(self, '_save_clustering_inconsistencies'):
+                self._save_clustering_inconsistencies(inconsistencies_found, descriptions)
+        
+        # For now, we return the original clusters without automatic fixing
+        # Automatic fixing is risky without understanding the full context
+        # Users can review the logs and fix manually if needed
+        
+        return clusters, cluster_details
+    
     def _cluster_candidate_tails_with_llm(self, head_text: str, relation: str, descriptions: list, max_batch_size: int = 30) -> tuple:
         """
         Cluster candidate tails using LLM for initial grouping.
@@ -1058,7 +1168,8 @@ class KTBuilder:
                     "cluster_id": cluster_idx,
                     "members": cluster_members,
                     "description": cluster_info.get("description", "No description provided"),
-                    "llm_rationale": cluster_info.get("description", "")
+                    "llm_rationale": cluster_info.get("description", ""),
+                    "rationale": cluster_info.get("rationale", "")  # Preserve rationale if provided separately
                 })
         
         # Add unassigned items as singleton clusters
@@ -1070,8 +1181,14 @@ class KTBuilder:
                     "cluster_id": len(clusters) - 1,
                     "members": [singleton_idx],
                     "description": "Singleton cluster (unassigned by LLM)",
-                    "llm_rationale": ""
+                    "llm_rationale": "",
+                    "rationale": ""
                 })
+        
+        # Validate and fix inconsistencies between rationale and members
+        clusters, cluster_details = self._validate_and_fix_clustering_inconsistencies(
+            clusters, cluster_details, descriptions, index_offset
+        )
         
         return clusters, cluster_details
 
@@ -2115,8 +2232,14 @@ class KTBuilder:
                         all_clusters.append([adjusted_idx])
                         all_details.append({
                             "description": f"Singleton cluster for item {adjusted_idx}",
-                            "members": [adjusted_idx]
+                            "members": [adjusted_idx],
+                            "rationale": ""
                         })
+            
+            # Validate and fix inconsistencies
+            all_clusters, all_details = self._validate_and_fix_clustering_inconsistencies(
+                all_clusters, all_details, community_data.get('candidates', []), 0
+            )
             
             community_data['initial_clusters'] = all_clusters
             community_data['llm_clustering_details'] = all_details
@@ -2585,6 +2708,7 @@ class KTBuilder:
                         detail = {
                             "description": cluster_info.get("description", ""),
                             "llm_rationale": cluster_info.get("rationale", ""),
+                            "rationale": cluster_info.get("rationale", ""),
                             "members": cluster_members
                         }
                         all_details.append(detail)
@@ -2596,8 +2720,14 @@ class KTBuilder:
                         all_clusters.append([adjusted_idx])
                         all_details.append({
                             "description": f"Singleton cluster for item {adjusted_idx}",
-                            "members": [adjusted_idx]
+                            "members": [adjusted_idx],
+                            "rationale": ""
                         })
+            
+            # Validate and fix inconsistencies
+            all_clusters, all_details = self._validate_and_fix_clustering_inconsistencies(
+                all_clusters, all_details, candidate_descriptions, 0
+            )
             
             initial_clusters = all_clusters
             llm_clustering_details = all_details
@@ -3186,6 +3316,7 @@ class KTBuilder:
                         all_details.append({
                             "description": cluster_info.get("description", ""),
                             "llm_rationale": cluster_info.get("rationale", ""),
+                            "rationale": cluster_info.get("rationale", ""),
                             "members": cluster_members
                         })
                 
@@ -3196,8 +3327,14 @@ class KTBuilder:
                         all_clusters.append([adjusted_idx])
                         all_details.append({
                             "description": f"Singleton cluster for item {adjusted_idx}",
-                            "members": [adjusted_idx]
+                            "members": [adjusted_idx],
+                            "rationale": ""
                         })
+            
+            # Validate and fix inconsistencies
+            all_clusters, all_details = self._validate_and_fix_clustering_inconsistencies(
+                all_clusters, all_details, group_data.get('candidate_descriptions', []), 0
+            )
             
             group_data['initial_clusters'] = all_clusters
             group_data['llm_clustering_details'] = all_details
