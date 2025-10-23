@@ -141,11 +141,100 @@ DEFAULT_ATTRIBUTE_DEDUP_PROMPT = (
     "1. Every input index must appear in exactly one group\n"
     "2. Each group represents ONE property-value pair with its various expressions\n"
     "3. Choose the most complete and informative expression as representative\n"
-    "4. Provide clear rationale based on VALUE IDENTITY\n\n"
+    "4. Provide clear rationale based on VALUE IDENTITY\n"
+    "5. **CRITICAL CONSISTENCY**: Ensure your 'members' array MATCHES your 'rationale':\n"
+    "   - If rationale says \"X and Y are equivalent\" or \"express the same value\",\n"
+    "     then X and Y MUST be in the SAME group's members array\n"
+    "   - If rationale says \"different values\" or \"distinct properties\",\n"
+    "     then they MUST be in DIFFERENT groups\n"
+    "   - Do NOT put items in separate groups if your rationale says they are equivalent!\n\n"
     "Respond with strict JSON using this schema:\n"
     "{{\n"
     "  \"groups\": [\n"
     "    {{\"members\": [1, 3], \"representative\": 3, \"rationale\": \"Why these are equivalent (same property-value).\"}}\n"
+    "  ]\n"
+    "}}\n"
+)
+
+# Validation prompt for checking semantic deduplication consistency
+# Design principle: Use general consistency rules, NOT case-by-case patterns
+DEFAULT_SEMANTIC_DEDUP_VALIDATION_PROMPT = (
+    "You are a quality control assistant reviewing semantic deduplication results for consistency.\n\n"
+    "CONTEXT:\n"
+    "Head entity: {head}\n"
+    "Relation: {relation}\n\n"
+    "ORIGINAL CANDIDATES:\n"
+    "{candidates}\n\n"
+    "DEDUPLICATION RESULTS TO VALIDATE:\n"
+    "{dedup_results}\n\n"
+    "CORE TASK:\n"
+    "Check if each group's 'rationale' is LOGICALLY CONSISTENT with its 'members' array.\n\n"
+    "CONSISTENCY PRINCIPLE:\n"
+    "A group is CONSISTENT when:\n"
+    "  ✅ The rationale accurately describes WHY the members are grouped together\n"
+    "  ✅ If rationale says items are \"coreferent/equivalent/same\", they ARE in the same group\n"
+    "  ✅ If rationale says items are \"distinct/different\", they ARE in different groups\n"
+    "  ✅ The members array matches what the rationale claims\n\n"
+    "A group is INCONSISTENT when:\n"
+    "  ❌ Rationale and members contradict each other\n"
+    "  ❌ Rationale says \"same as group X\" but members don't include group X's items\n"
+    "  ❌ Rationale claims equivalence to other items not in the group\n"
+    "  ❌ Rationale says \"should be merged\" but items are in separate groups\n"
+    "  ❌ ANY logical mismatch between what rationale says and what members show\n\n"
+    "VALIDATION APPROACH:\n"
+    "1. Read each group's rationale carefully\n"
+    "2. Check if the members array matches the rationale's claim\n"
+    "3. If rationale mentions other groups/items, verify the relationship\n"
+    "4. Use your understanding of semantics and coreference\n"
+    "5. Consider the INTENT behind the rationale\n\n"
+    "IMPORTANT:\n"
+    "- Do NOT limit yourself to predefined patterns - find ANY inconsistency\n"
+    "- Use common sense and logical reasoning\n"
+    "- Consider context from the original candidates\n"
+    "- Focus on SEMANTIC consistency between rationale and members\n\n"
+    "OUTPUT FORMAT:\n"
+    "Respond with strict JSON:\n"
+    "{{\n"
+    "  \"has_inconsistencies\": true/false,\n"
+    "  \"inconsistencies\": [\n"
+    "    {{\n"
+    "      \"group_ids\": [list of affected group IDs],\n"
+    "      \"issue_type\": \"brief_category_name\",\n"
+    "      \"description\": \"Clear explanation of what's inconsistent\",\n"
+    "      \"suggested_fix\": \"How to fix it (e.g., 'merge group X into group Y')\"\n"
+    "    }}\n"
+    "  ],\n"
+    "  \"corrected_groups\": [\n"
+    "    {{\n"
+    "      \"members\": [member indices],\n"
+    "      \"representative\": index,\n"
+    "      \"rationale\": \"Updated rationale for the corrected group\"\n"
+    "    }}\n"
+    "  ]\n"
+    "}}\n\n"
+    "If NO inconsistencies found:\n"
+    "{{\n"
+    "  \"has_inconsistencies\": false,\n"
+    "  \"inconsistencies\": [],\n"
+    "  \"corrected_groups\": null\n"
+    "}}\n\n"
+    "EXAMPLE (for reference only - find ANY type of inconsistency):\n\n"
+    "Input groups:\n"
+    "- Group 0: {{members: [0, 1], representative: 0, rationale: \"These two refer to the same entity\"}}\n"
+    "- Group 1: {{members: [2], representative: 2, rationale: \"This is the same entity as items 0 and 1\"}}\n\n"
+    "Analysis: Group 1's rationale claims it's the same entity as items 0 and 1, but it's in a separate group.\n"
+    "This is inconsistent - if they're the same entity, they should be in one group.\n\n"
+    "Output:\n"
+    "{{\n"
+    "  \"has_inconsistencies\": true,\n"
+    "  \"inconsistencies\": [{{\n"
+    "    \"group_ids\": [1, 0],\n"
+    "    \"issue_type\": \"rationale_claims_coreference_but_separate\",\n"
+    "    \"description\": \"Group 1 claims to be the same entity as Group 0 members but is in a separate group\",\n"
+    "    \"suggested_fix\": \"merge group 1 into group 0\"\n"
+    "  }}],\n"
+    "  \"corrected_groups\": [\n"
+    "    {{\"members\": [0, 1, 2], \"representative\": 0, \"rationale\": \"These three expressions refer to the same entity\"}}\n"
     "  ]\n"
     "}}\n"
 )
@@ -1015,6 +1104,139 @@ class KTBuilder:
 
         return summaries
 
+    def _llm_validate_semantic_dedup(self, groups: list, original_candidates: list,
+                                     head_text: str = None, relation: str = None) -> tuple:
+        """
+        Use LLM to validate semantic deduplication results and fix inconsistencies.
+        This validates that each group's rationale matches its members.
+        
+        Args:
+            groups: List of dedup groups, each with members, representative, rationale
+            original_candidates: Original candidate descriptions  
+            head_text: Head entity text (optional, for context)
+            relation: Relation text (optional, for context)
+            
+        Returns:
+            Tuple of (corrected_groups, validation_report)
+        """
+        # Check if validation is enabled
+        semantic_config = getattr(self.config.construction, "semantic_dedup", None)
+        if not semantic_config or not getattr(semantic_config, "enable_semantic_dedup_validation", False):
+            # Validation disabled, return original
+            return groups, None
+        
+        if not groups or len(groups) <= 1:
+            # Nothing to validate (need at least 2 groups to check for merge opportunities)
+            return groups, None
+        
+        # Prepare candidates text
+        candidates_blocks = []
+        for idx, candidate in enumerate(original_candidates, start=1):
+            candidates_blocks.append(f"[{idx}] {candidate}")
+        candidates_text = "\n".join(candidates_blocks) if candidates_blocks else "[No candidates]"
+        
+        # Prepare dedup results text
+        dedup_results_blocks = []
+        for group_idx, group in enumerate(groups):
+            members = group.get('members', [])
+            # Convert to 1-based for LLM
+            members_1based = [m + 1 for m in members]
+            representative = group.get('representative', members[0] if members else 0) + 1
+            rationale = group.get('rationale', '')
+            dedup_results_blocks.append(
+                f"Group {group_idx}: {{members: {members_1based}, representative: {representative}, "
+                f"rationale: \"{rationale}\"}}"
+            )
+        dedup_results_text = "\n".join(dedup_results_blocks)
+        
+        # Build validation prompt
+        prompt = DEFAULT_SEMANTIC_DEDUP_VALIDATION_PROMPT.format(
+            head=head_text or "[UNKNOWN_HEAD]",
+            relation=relation or "[UNKNOWN_RELATION]",
+            candidates=candidates_text,
+            dedup_results=dedup_results_text
+        )
+        
+        # Call LLM for validation
+        try:
+            response = self.dedup_llm_client.call_api(prompt)
+        except Exception as e:
+            logger.warning("LLM semantic dedup validation call failed: %s, skipping validation", e)
+            return groups, None
+        
+        # Parse validation response
+        try:
+            parsed = json_repair.loads(response)
+        except Exception:
+            try:
+                parsed = json.loads(response)
+            except Exception as parse_error:
+                logger.warning("Failed to parse LLM semantic dedup validation response: %s, skipping validation", parse_error)
+                return groups, None
+        
+        has_inconsistencies = parsed.get('has_inconsistencies', False)
+        inconsistencies = parsed.get('inconsistencies', [])
+        corrected_groups_raw = parsed.get('corrected_groups')
+        
+        validation_report = {
+            'has_inconsistencies': has_inconsistencies,
+            'inconsistencies': inconsistencies,
+            'original_group_count': len(groups),
+            'validation_attempted': True
+        }
+        
+        if not has_inconsistencies or not corrected_groups_raw:
+            logger.info("LLM semantic dedup validation: No inconsistencies found or no corrections provided")
+            validation_report['corrected'] = False
+            return groups, validation_report
+        
+        # Apply corrections
+        logger.info("LLM semantic dedup validation found %d inconsistencies, applying corrections", len(inconsistencies))
+        
+        corrected_groups = []
+        for group_info in corrected_groups_raw:
+            if not isinstance(group_info, dict):
+                continue
+            
+            members_raw = group_info.get("members")
+            if not isinstance(members_raw, list):
+                continue
+            
+            # Convert 1-based to 0-based
+            corrected_members = []
+            for member in members_raw:
+                try:
+                    member_idx = int(member) - 1  # Convert to 0-based
+                except (TypeError, ValueError):
+                    continue
+                if 0 <= member_idx < len(original_candidates):
+                    corrected_members.append(member_idx)
+            
+            if corrected_members:
+                representative_raw = group_info.get("representative", corrected_members[0] + 1)
+                try:
+                    representative = int(representative_raw) - 1 if isinstance(representative_raw, (int, str)) else corrected_members[0]
+                except:
+                    representative = corrected_members[0]
+                
+                corrected_groups.append({
+                    "members": corrected_members,
+                    "representative": representative,
+                    "rationale": group_info.get("rationale", "Corrected by validation"),
+                    "validation_corrected": True
+                })
+        
+        validation_report['corrected'] = True
+        validation_report['corrected_group_count'] = len(corrected_groups)
+        validation_report['inconsistencies_fixed'] = inconsistencies
+        
+        logger.info(
+            "LLM semantic dedup validation corrections applied: %d groups → %d groups, fixed %d inconsistencies",
+            len(groups), len(corrected_groups), len(inconsistencies)
+        )
+        
+        return corrected_groups, validation_report
+    
     def _llm_validate_clustering(self, clusters: list, cluster_details: list, 
                                  descriptions: list, head_text: str = None, relation: str = None,
                                  index_offset: int = 0) -> tuple:
@@ -1645,6 +1867,17 @@ class KTBuilder:
         for idx in range(len(batch_entries)):
             if idx not in assigned:
                 groups.append({"representative": idx, "members": [idx], "rationale": None})
+        
+        # Two-step validation: LLM validates its own dedup results
+        # Extract candidate descriptions for validation
+        candidate_descriptions = [entry['description'] for entry in batch_entries]
+        
+        groups, validation_report = self._llm_validate_semantic_dedup(
+            groups, 
+            candidate_descriptions,
+            head_text=head_text,
+            relation=relation
+        )
 
         return groups
 

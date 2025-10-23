@@ -21,10 +21,11 @@ construction:
     # Use LLM for clustering (recommended when using validation)
     clustering_method: llm
     
-    # Enable two-step validation: LLM will check and correct its own clustering
-    # Step 1: Initial clustering
-    # Step 2: LLM validates clustering results and fixes inconsistencies
+    # Enable two-step validation: LLM will check and correct its own results
+    # Step 1: Initial clustering/deduplication
+    # Step 2: LLM validates results and fixes inconsistencies
     enable_clustering_validation: true
+    enable_semantic_dedup_validation: true
     
     # Clustering parameters
     embedding_threshold: 0.85
