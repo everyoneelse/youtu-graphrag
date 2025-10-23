@@ -92,6 +92,15 @@
 - 推广价值
 - **适合**：关注设计细节的开发者
 
+#### 5.1 [SEMANTIC_DEDUP_VALIDATION_FIX_SUMMARY.md](./SEMANTIC_DEDUP_VALIDATION_FIX_SUMMARY.md)
+**Semantic Dedup验证修复总结**
+
+- "rationale说要合并但未合并"问题修复
+- 中文关键词识别增强
+- 增强的验证prompt和示例
+- 测试用例和使用说明
+- **适合**：遇到semantic dedup不一致问题的用户
+
 ---
 
 ### 📋 方案对比
