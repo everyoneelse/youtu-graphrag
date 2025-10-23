@@ -4023,31 +4023,43 @@ class KTBuilder:
                             "rationale": None
                         })
                 
-                # ============================================================
-                # Two-step validation: Validate semantic dedup results
-                # ============================================================
+                semantic_groups[key] = {
+                    'groups': groups,
+                    'batch_indices': batch_indices,
+                    'overflow_indices': overflow_indices,
+                }
+            
+            # ============================================================
+            # Two-step validation: Validate semantic dedup results for all batches
+            # ============================================================
+            # Get head and relation info from group_data
+            head_text = group_data.get('head_name', '')
+            relation = group_data.get('relation', '')
+            
+            # Validate all groups in this cluster
+            for key, group_info in semantic_groups.items():
+                groups = group_info['groups']
+                batch_indices = group_info['batch_indices']
+                
+                if not groups:  # Skip if no groups (error case)
+                    group_info['validation_report'] = None
+                    continue
+                
                 # Extract candidate descriptions for this batch
                 batch_entries = [entries[i] for i in batch_indices]
                 candidate_descriptions = [entry['description'] for entry in batch_entries]
                 
-                # Get head and relation info from group_data
-                head_text = group_data.get('head_name', '')
-                relation = group_data.get('relation', '')
-                
                 # Validate groups for consistency (rationale vs members)
-                groups, validation_report = self._llm_validate_semantic_dedup(
+                validated_groups, validation_report = self._llm_validate_semantic_dedup(
                     groups,
                     candidate_descriptions,
                     head_text=head_text,
                     relation=relation
                 )
                 
-                semantic_groups[key] = {
-                    'groups': groups,  # Use validated groups
-                    'batch_indices': batch_indices,
-                    'overflow_indices': overflow_indices,
-                    'validation_report': validation_report  # Store validation report
-                }
+                # Update with validated results
+                group_info['groups'] = validated_groups
+                group_info['validation_report'] = validation_report
             
             group_data['semantic_results'] = semantic_groups
     
