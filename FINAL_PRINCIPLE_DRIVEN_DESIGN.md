@@ -332,9 +332,24 @@ DEFAULT_SEMANTIC_DEDUP_VALIDATION_PROMPT = (
 )
 ```
 
+## 🔧 附加修复：数据完整性保障
+
+在原则驱动设计的基础上，还修复了一个数据丢失的风险：
+
+### 问题
+LLM可能只返回需要修正的groups，导致正确的groups丢失。
+
+### 解决方案
+1. Prompt明确要求返回**所有groups**（包括未修改的）
+2. 代码验证所有items是否都被覆盖
+3. 如果有缺失，拒绝应用修正，保留原始groups
+
+详见：[VALIDATION_CORRECTED_GROUPS_FIX.md](./VALIDATION_CORRECTED_GROUPS_FIX.md)
+
 ---
 
 **设计原则**: Give principles, not patterns. Trust the LLM.  
+**数据原则**: Never lose data. Verify everything.  
 **版本**: V4.0 Final  
 **行数**: 30  
-**状态**: ✅ 原则驱动，不再是case by case
+**状态**: ✅ 原则驱动，不再是case by case，数据安全有保障
