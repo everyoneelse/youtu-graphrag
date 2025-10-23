@@ -1867,17 +1867,6 @@ class KTBuilder:
         for idx in range(len(batch_entries)):
             if idx not in assigned:
                 groups.append({"representative": idx, "members": [idx], "rationale": None})
-        
-        # Two-step validation: LLM validates its own dedup results
-        # Extract candidate descriptions for validation
-        candidate_descriptions = [entry['description'] for entry in batch_entries]
-        
-        groups, validation_report = self._llm_validate_semantic_dedup(
-            groups, 
-            candidate_descriptions,
-            head_text=head_text,
-            relation=relation
-        )
 
         return groups
 
@@ -3358,9 +3347,24 @@ class KTBuilder:
                 if idx not in assigned:
                     groups.append({"representative": idx, "members": [idx], "rationale": None})
             
+            # ============================================================
+            # Two-step validation: Validate semantic dedup results
+            # ============================================================
+            # Extract candidate descriptions for this batch
+            candidate_descriptions = [entry['description'] for entry in batch_entries]
+            
+            # Validate groups for consistency (rationale vs members)
+            groups, validation_report = self._llm_validate_semantic_dedup(
+                groups,
+                candidate_descriptions,
+                head_text=head_text,
+                relation=relation
+            )
+            
             semantic_groups_by_batch.append({
-                'groups': groups,
-                'metadata': metadata
+                'groups': groups,  # Use validated groups
+                'metadata': metadata,
+                'validation_report': validation_report  # Store validation report
             })
         
         # ============================================================
