@@ -1,0 +1,16 @@
+# 语言检测相关依赖
+
+# 推荐: fastText (速度快+准确率高)
+fasttext-wheel>=0.9.2
+
+# 可选: lingua (准确率最高，但速度较慢)
+# lingua-language-detector>=2.0.0
+
+# 可选: langdetect (稳定可靠，无需外部模型)
+# langdetect>=1.0.9
+
+# 可选: langid (轻量级，速度最快)
+# langid>=1.1.6
+
+# 可选: pycld3 (Google出品，需要编译环境)
+# pycld3>=0.22
