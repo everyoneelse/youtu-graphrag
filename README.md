@@ -214,6 +214,23 @@ curl -v http://localhost:8000
 ### 📖 Full Usage Guide
 For advanced config and usage：[**🚀 FullGuide**](FULLGUIDE.md)
 
+### 🌐 Neo4j Knowledge Graph Visualization
+
+Youtu-GraphRAG supports importing generated knowledge graphs into Neo4j for visualization and interactive querying:
+
+```bash
+# Quick start Neo4j visualization environment
+./start_neo4j_visualization.sh
+
+# Manual import knowledge graph
+python3 neo4j_importer.py --input output/graphs/demo_new.json --output demo_neo4j.cypher
+
+# Access Neo4j Browser: http://localhost:7474
+# Username: neo4j, Password: graphrag123
+```
+
+For detailed Neo4j visualization guide, please refer to: [**🌐 Neo4j Visualization Guide**](NEO4J_GUIDE.md)
+
 ### ⭐ **Start using Youtu-GraphRAG now and experience the intelligent question answering!** 🚀
 
 
