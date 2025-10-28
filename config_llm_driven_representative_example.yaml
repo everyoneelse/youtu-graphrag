@@ -1,0 +1,106 @@
+# Configuration Example: LLM-Driven Representative Selection
+# Updated version that asks LLM to choose the representative
+
+construction:
+  semantic_dedup:
+    head_dedup:
+      enabled: true
+      merge_strategy: "alias"  # Use alias method
+      
+      # NEW: Use LLM to select representative
+      use_llm_for_representative_selection: true  # Let LLM decide, not code heuristics
+      
+      # Alias configuration
+      alias_relation_name: "alias_of"
+      
+      # Semantic deduplication
+      enable_semantic: true
+      similarity_threshold: 0.85  # For post-filtering (not used in representative selection)
+      use_llm_validation: true     # Must be true for LLM-driven representative selection
+      max_candidates: 1000
+      candidate_similarity_threshold: 0.75
+
+prompts:
+  head_dedup:
+    # Original prompt (still available for backward compatibility)
+    general: |-
+      You are an expert in knowledge graph entity resolution.
+      TASK: Determine if the following two entities refer to the SAME real-world object.
+      ...
+      OUTPUT FORMAT (strict JSON):
+      {
+        "is_coreferent": true/false,
+        "rationale": "..."
+      }
+    
+    # NEW: Improved prompt with representative selection
+    with_representative_selection: |-
+      You are an expert in knowledge graph entity resolution.
+
+      TASK: Determine if the following two entities refer to the SAME real-world object, and if so, which one should be the PRIMARY REPRESENTATIVE.
+
+      Entity 1 (ID: {entity_1_id}): {entity_1_desc}
+      Related knowledge about Entity 1:
+      {context_1}
+
+      Entity 2 (ID: {entity_2_id}): {entity_2_desc}
+      Related knowledge about Entity 2:
+      {context_2}
+
+      CRITICAL RULES:
+
+      1. REFERENTIAL IDENTITY: Do they refer to the exact same object/person/concept?
+         - Same entity with different names → YES (e.g., "NYC" = "New York City")
+         - Different but related entities → NO (e.g., "Apple Inc." ≠ "Apple Store")
+
+      2. SUBSTITUTION TEST: Can you replace one with the other in all contexts?
+
+      3. PRIMARY REPRESENTATIVE SELECTION (if they are coreferent):
+         Choose the entity that should serve as the main reference based on:
+         
+         a) **Formality and Completeness**:
+            - Full name > Abbreviation (e.g., "World Health Organization" > "WHO")
+            - BUT: In technical domains, common abbreviations may be preferred (e.g., "AI" over "Artificial Intelligence")
+         
+         b) **Domain Convention**:
+            - Medical domain: Prefer standard medical terminology
+            - Popular context: Prefer commonly used form
+            - Academic context: Prefer formal academic names
+         
+         c) **Language and Cultural Context**:
+            - Consider the primary language of the knowledge graph
+            - For international entities, prefer widely recognized forms
+         
+         d) **Information Richness** (visible in the graph):
+            - Entity with MORE relationships (higher connectivity) is usually better
+            - Entity with MORE context/evidence is usually better
+         
+         e) **Naming Quality**:
+            - Official name > Colloquial name
+            - Standard spelling > Variant spelling
+            - Complete form > Partial form
+
+      4. CONSERVATIVE PRINCIPLE:
+         - When uncertain about coreference → answer NO
+         - When uncertain about representative → choose the one with MORE relationships in the graph
+         - False merge is worse than false split
+
+      OUTPUT FORMAT (strict JSON):
+      {{
+        "is_coreferent": true/false,
+        "preferred_representative": "{entity_1_id}" or "{entity_2_id}" or null,
+        "rationale": "Explain: (1) WHY they are the same/different, (2) If same, WHY you chose this representative based on the criteria above"
+      }}
+
+      IMPORTANT NOTES:
+      - Set "preferred_representative" ONLY if "is_coreferent" is true
+      - If "is_coreferent" is false, set "preferred_representative" to null
+      - The "preferred_representative" must be exactly one of: "{entity_1_id}" or "{entity_2_id}"
+      - Provide clear reasoning for your representative choice
+
+# Example usage in code:
+# 
+# config.construction.semantic_dedup.head_dedup.use_llm_for_representative_selection = True
+# 
+# Then call:
+# stats = builder.deduplicate_heads_with_llm_v2()

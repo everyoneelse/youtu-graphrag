@@ -1,0 +1,76 @@
+# Configuration Example: Alias-based Head Deduplication
+# Add this to your base_config.yaml
+
+construction:
+  semantic_dedup:
+    # ... existing tail dedup config ...
+    
+    head_dedup:
+      enabled: true
+      
+      # NEW: Choose merge strategy
+      merge_strategy: "alias"  # Options: "delete" (old), "alias" (new, recommended)
+      
+      # Alias relation configuration
+      alias_relation_name: "alias_of"  # Name of the alias relationship
+      
+      # Representative selection preferences
+      prefer_comprehensive_representative: true  # Choose entity with more relations
+      prefer_longer_names: true                  # Prefer full names over abbreviations
+      prefer_more_evidence: true                 # Prefer entities with more chunk_ids
+      
+      # Semantic deduplication settings (unchanged)
+      enable_semantic: true
+      similarity_threshold: 0.85
+      use_llm_validation: false
+      max_candidates: 1000
+      candidate_similarity_threshold: 0.75
+      max_relations_context: 10
+      
+      # Validation settings
+      validate_no_self_loops: true      # Ensure no self-loops after merge
+      validate_alias_chains: true       # Detect alias -> alias situations
+      
+      # Export options
+      export_alias_mapping: true        # Export CSV of all aliases
+      export_path: "output/alias_mapping.csv"
+
+# Prompt template for LLM validation (unchanged)
+prompts:
+  head_dedup:
+    general: |-
+      You are an expert in knowledge graph entity resolution.
+      
+      TASK: Determine if the following two entities refer to the SAME real-world object.
+      
+      Entity 1: {entity_1}
+      Related knowledge about Entity 1:
+      {context_1}
+      
+      Entity 2: {entity_2}
+      Related knowledge about Entity 2:
+      {context_2}
+      
+      CRITICAL RULES:
+      1. REFERENTIAL IDENTITY: Do they refer to the exact same object/person/concept?
+         - Same entity with different names → YES (e.g., "NYC" = "New York City")
+         - Different but related entities → NO (e.g., "Apple Inc." ≠ "Apple Store")
+      
+      2. SUBSTITUTION TEST: Can you replace one with the other in all contexts?
+         - If substitution changes information → NO
+         - If substitution preserves meaning → YES
+      
+      3. ALIAS DETECTION: If they are the same entity, identify which is the alias
+         - Typically shorter/abbreviated form is the alias
+         - Foreign language variant is the alias
+         - Informal name is the alias
+      
+      4. CONSERVATIVE PRINCIPLE:
+         - When uncertain → answer NO
+         - False merge is worse than false split
+      
+      OUTPUT FORMAT (strict JSON):
+      {{
+        "is_coreferent": true/false,
+        "rationale": "Clear explanation. If coreferent, explicitly mention they are ALIASES."
+      }}
