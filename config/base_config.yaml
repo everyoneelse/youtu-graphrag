@@ -92,6 +92,10 @@ construction:
       # false: Use only graph relations (recommended, faster)
       # true: Use both graph relations and text chunks (experimental, slower)
       use_hybrid_context: false
+      # Save intermediate results for debugging and analysis
+      save_intermediate_results: false
+      # Path to save intermediate results (optional, auto-generated if not specified)
+      # intermediate_results_path: "output/dedup_intermediate/"
 
 datasets:
   hotpot:

@@ -4530,6 +4530,22 @@ class KTBuilder:
         if max_candidates is None:
             max_candidates = getattr(config, 'max_candidates', 1000)
         
+        # Check if intermediate results should be saved
+        save_intermediate = getattr(config, 'save_intermediate_results', False)
+        
+        # Initialize intermediate results collector
+        intermediate_results = {
+            "dataset": self.dataset_name,
+            "config": {
+                "enable_semantic": enable_semantic,
+                "similarity_threshold": similarity_threshold,
+                "use_llm_validation": use_llm_validation,
+                "max_candidates": max_candidates,
+                "candidate_similarity_threshold": getattr(config, 'candidate_similarity_threshold', 0.75)
+            },
+            "phases": {}
+        } if save_intermediate else None
+        
         logger.info("=" * 70)
         logger.info("Starting Head Node Deduplication")
         logger.info("=" * 70)
@@ -4538,6 +4554,7 @@ class KTBuilder:
         logger.info(f"  - Similarity threshold: {similarity_threshold}")
         logger.info(f"  - Use LLM validation: {use_llm_validation}")
         logger.info(f"  - Max candidates: {max_candidates}")
+        logger.info(f"  - Save intermediate results: {save_intermediate}")
         logger.info("=" * 70)
         
         start_time = time.time()
@@ -4547,10 +4564,34 @@ class KTBuilder:
         candidates = self._collect_head_candidates()
         logger.info(f"✓ Found {len(candidates)} entity nodes")
         
+        # Record candidates info if saving intermediate results
+        if save_intermediate:
+            intermediate_results["phases"]["phase1_candidates"] = {
+                "total_candidates": len(candidates),
+                "candidate_ids": candidates[:100],  # Store first 100 for inspection
+                "sample_candidates": [{
+                    "node_id": node_id,
+                    "name": self.graph.nodes[node_id].get("properties", {}).get("name", ""),
+                    "description": self.graph.nodes[node_id].get("properties", {}).get("description", "")[:200]
+                } for node_id in candidates[:10]] if candidates else []  # Store first 10 samples
+            }
+        
         # Phase 2: Exact match deduplication
         logger.info("\n[Phase 2/4] Exact match deduplication...")
         exact_merge_mapping = self._deduplicate_heads_exact(candidates)
         logger.info(f"✓ Identified {len(exact_merge_mapping)} exact matches")
+        
+        # Record exact match results
+        if save_intermediate:
+            intermediate_results["phases"]["phase2_exact_match"] = {
+                "total_matches": len(exact_merge_mapping),
+                "merge_pairs": [{
+                    "duplicate_id": dup_id,
+                    "duplicate_name": self.graph.nodes.get(dup_id, {}).get("properties", {}).get("name", ""),
+                    "canonical_id": can_id,
+                    "canonical_name": self.graph.nodes.get(can_id, {}).get("properties", {}).get("name", "")
+                } for dup_id, can_id in list(exact_merge_mapping.items())[:50]]  # Store first 50 pairs
+            }
         
         # Apply exact match merging
         exact_merged_count = self._merge_head_nodes(exact_merge_mapping, {})
@@ -4580,6 +4621,21 @@ class KTBuilder:
                 )
                 logger.info(f"✓ Generated {len(candidate_pairs)} candidate pairs")
                 
+                # Record candidate pairs
+                if save_intermediate:
+                    intermediate_results["phases"]["phase3_semantic"] = {
+                        "remaining_nodes": len(remaining_nodes),
+                        "candidate_pairs_generated": len(candidate_pairs),
+                        "validation_method": "llm" if use_llm_validation else "embedding",
+                        "sample_candidate_pairs": [{
+                            "node_id_1": pair[0],
+                            "node_name_1": self.graph.nodes.get(pair[0], {}).get("properties", {}).get("name", ""),
+                            "node_id_2": pair[1],
+                            "node_name_2": self.graph.nodes.get(pair[1], {}).get("properties", {}).get("name", ""),
+                            "embedding_similarity": float(pair[2])
+                        } for pair in candidate_pairs[:20]]  # Store first 20 pairs
+                    }
+                
                 # Validate candidates
                 if candidate_pairs:
                     if use_llm_validation:
@@ -4596,6 +4652,19 @@ class KTBuilder:
                         )
                     
                     logger.info(f"✓ Identified {len(semantic_merge_mapping)} semantic matches")
+                    
+                    # Record semantic validation results
+                    if save_intermediate:
+                        intermediate_results["phases"]["phase3_semantic"]["validation_results"] = {
+                            "total_matches": len(semantic_merge_mapping),
+                            "merge_decisions": [{
+                                "duplicate_id": dup_id,
+                                "duplicate_name": self.graph.nodes.get(dup_id, {}).get("properties", {}).get("name", ""),
+                                "canonical_id": can_id,
+                                "canonical_name": self.graph.nodes.get(can_id, {}).get("properties", {}).get("name", ""),
+                                "metadata": metadata.get(dup_id, {})
+                            } for dup_id, can_id in list(semantic_merge_mapping.items())[:50]]  # Store first 50
+                        }
                     
                     # Apply semantic merging
                     semantic_merged_count = self._merge_head_nodes(semantic_merge_mapping, metadata)
@@ -4649,6 +4718,39 @@ class KTBuilder:
         logger.info(f"  - Reduction rate: {stats['reduction_rate']:.2f}%")
         logger.info(f"  - Time elapsed: {elapsed_time:.2f}s")
         logger.info("=" * 70)
+        
+        # Save intermediate results to file
+        if save_intermediate and intermediate_results:
+            import datetime
+            timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+            output_path = getattr(config, "intermediate_results_path", None)
+            
+            if not output_path:
+                output_path = f"output/dedup_intermediate/{self.dataset_name}_head_dedup_{timestamp}.json"
+            else:
+                # If path is a directory, add filename
+                if output_path.endswith('/'):
+                    output_path = f"{output_path}{self.dataset_name}_head_dedup_{timestamp}.json"
+                else:
+                    # Add _head suffix
+                    base, ext = os.path.splitext(output_path)
+                    output_path = f"{base}_head_{timestamp}{ext}"
+            
+            # Ensure directory exists
+            output_dir = os.path.dirname(output_path)
+            if output_dir:
+                os.makedirs(output_dir, exist_ok=True)
+            
+            # Add summary statistics
+            intermediate_results["summary"] = stats
+            
+            try:
+                with open(output_path, 'w', encoding='utf-8') as f:
+                    json.dump(intermediate_results, f, indent=2, ensure_ascii=False)
+                logger.info(f"Saved head deduplication intermediate results to: {output_path}")
+                logger.info(f"Summary: {intermediate_results['summary']}")
+            except Exception as e:
+                logger.warning(f"Failed to save intermediate results: {e}")
         
         # Export for review if configured
         if getattr(config, 'export_review', False):
