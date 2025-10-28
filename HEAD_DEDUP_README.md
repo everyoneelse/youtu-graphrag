@@ -67,9 +67,9 @@ prompts:
 
 **文件**: `models/constructor/kt_gen.py`
 
-**添加位置**: 第4471-5218行（约750行代码）
+**添加位置**: 第4471-4911行（约440行代码）
 
-**新增方法**: 15个
+**新增方法**: 14个
 - `deduplicate_heads()` - 主入口
 - `_collect_head_candidates()` - 收集候选
 - `_normalize_entity_name()` - 名称标准化
@@ -77,8 +77,7 @@ prompts:
 - `_generate_semantic_candidates()` - 生成候选对
 - `_validate_candidates_with_embedding()` - Embedding验证
 - `_validate_candidates_with_llm()` - LLM验证
-- `_build_head_dedup_prompt()` - 构建prompt
-- `_get_default_head_dedup_prompt()` - 默认prompt
+- `_build_head_dedup_prompt()` - 构建prompt（仅从配置加载）
 - `_collect_node_context()` - 收集上下文
 - `_parse_coreference_response()` - 解析响应
 - `_merge_head_nodes()` - 执行合并

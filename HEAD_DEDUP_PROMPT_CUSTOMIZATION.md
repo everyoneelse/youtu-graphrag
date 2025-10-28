@@ -325,18 +325,22 @@ prompts:
 
 ## 🔧 代码中的Prompt加载
 
-代码会按以下优先级加载prompt：
+代码**只从配置文件**加载prompt，不再有fallback机制：
 
 ```python
 def _build_head_dedup_prompt(self, node_id_1: str, node_id_2: str) -> str:
-    """Build LLM prompt for head deduplication."""
+    """Build LLM prompt for head deduplication.
+    
+    Loads prompt from config file (prompts.head_dedup.general).
+    If prompt is missing or malformed, raises an error.
+    """
     desc_1 = self._describe_node(node_id_1)
     desc_2 = self._describe_node(node_id_2)
     
     context_1 = self._collect_node_context(node_id_1)
     context_2 = self._collect_node_context(node_id_2)
     
-    # 1. 优先从配置文件读取
+    # Load prompt from config (no fallback)
     try:
         prompt_template = self.config.get_prompt_formatted(
             "head_dedup",          # prompt类别
@@ -348,10 +352,20 @@ def _build_head_dedup_prompt(self, node_id_1: str, node_id_2: str) -> str:
         )
         return prompt_template
     except Exception as e:
-        # 2. 如果配置文件读取失败，使用默认prompt
-        logger.debug(f"Failed to load prompt from config: {e}, using default")
-        return self._get_default_head_dedup_prompt(desc_1, context_1, desc_2, context_2)
+        # 如果配置文件读取失败，抛出明确错误
+        error_msg = (
+            f"Failed to load head_dedup prompt from config: {e}\n"
+            f"Please ensure 'prompts.head_dedup.general' is defined in your config file.\n"
+            f"See HEAD_DEDUP_PROMPT_CUSTOMIZATION.md for details."
+        )
+        logger.error(error_msg)
+        raise ValueError(error_msg)
 ```
+
+**为什么不保留fallback？**
+- ✅ **单一来源**: 只维护一份prompt，避免不一致
+- ✅ **明确错误**: 配置错误时立即知道，而不是静默使用旧prompt
+- ✅ **强制规范**: 确保所有部署都使用配置文件管理prompt
 
 ---
 
@@ -444,7 +458,7 @@ CONSERVATIVE PRINCIPLE:
 **A**: 检查以下几点：
 1. YAML格式是否正确（注意缩进）
 2. 重启程序以加载新配置
-3. 检查日志是否有"Failed to load prompt from config"
+3. 如果配置错误，程序会直接报错而不是使用默认prompt
 
 ### Q2: 变量没有被替换？
 

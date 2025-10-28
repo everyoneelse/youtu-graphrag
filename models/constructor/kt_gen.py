@@ -4879,14 +4879,18 @@ class KTBuilder:
         return merge_mapping, metadata
     
     def _build_head_dedup_prompt(self, node_id_1: str, node_id_2: str) -> str:
-        """Build LLM prompt for head deduplication."""
+        """Build LLM prompt for head deduplication.
+        
+        Loads prompt from config file (prompts.head_dedup.general).
+        If prompt is missing or malformed, raises an error.
+        """
         desc_1 = self._describe_node(node_id_1)
         desc_2 = self._describe_node(node_id_2)
         
         context_1 = self._collect_node_context(node_id_1)
         context_2 = self._collect_node_context(node_id_2)
         
-        # Try to get prompt from config
+        # Load prompt from config (no fallback)
         try:
             prompt_template = self.config.get_prompt_formatted(
                 "head_dedup", 
@@ -4898,58 +4902,13 @@ class KTBuilder:
             )
             return prompt_template
         except Exception as e:
-            logger.debug(f"Failed to load prompt from config: {e}, using default")
-            # Fallback to default prompt
-            return self._get_default_head_dedup_prompt(desc_1, context_1, desc_2, context_2)
-    
-    def _get_default_head_dedup_prompt(
-        self, 
-        desc_1: str, 
-        context_1: str, 
-        desc_2: str, 
-        context_2: str
-    ) -> str:
-        """Default head deduplication prompt (fallback)."""
-        return f"""You are an expert in knowledge graph entity resolution.
-
-TASK: Determine if the following two entities refer to the SAME real-world object.
-
-Entity 1: {desc_1}
-Related knowledge about Entity 1:
-{context_1}
-
-Entity 2: {desc_2}
-Related knowledge about Entity 2:
-{context_2}
-
-CRITICAL RULES:
-1. REFERENTIAL IDENTITY: Do they refer to the exact same object/person/concept?
-   - Same entity with different names → YES (e.g., "NYC" = "New York City")
-   - Different but related entities → NO (e.g., "Apple Inc." ≠ "Apple Store")
-
-2. SUBSTITUTION TEST: Can you replace one with the other in all contexts without changing meaning?
-   - If substitution changes information → NO
-   - If substitution preserves meaning → YES
-
-3. TYPE CONSISTENCY: Check entity types/categories
-   - Same name, different types → carefully verify with context
-
-4. CONSERVATIVE PRINCIPLE:
-   - When uncertain → answer NO
-   - False merge is worse than false split
-
-PROHIBITED MERGE REASONS (NOT valid reasons to merge):
-✗ Similar names: "John Smith" vs "John Smith Jr." → different persons
-✗ Related entities: "Apple Inc." vs "Apple Store" → company vs retail location
-✗ Same category: Both are cities → might be different cities
-
-OUTPUT FORMAT (strict JSON):
-{{
-  "is_coreferent": true/false,
-  "confidence": 0.0-1.0,
-  "rationale": "Clear explanation based on referential identity test"
-}}
-"""
+            error_msg = (
+                f"Failed to load head_dedup prompt from config: {e}\n"
+                f"Please ensure 'prompts.head_dedup.general' is defined in your config file.\n"
+                f"See HEAD_DEDUP_PROMPT_CUSTOMIZATION.md for details."
+            )
+            logger.error(error_msg)
+            raise ValueError(error_msg)
     
     def _collect_node_context(self, node_id: str, max_relations: int = 10) -> str:
         """Collect graph relations as context for a node."""
