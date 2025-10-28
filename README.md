@@ -82,7 +82,7 @@ Based on our unified agentic paradigm for Graph Retrieval-Augmented Generation (
 <strong>🧠 4. Advanced Construction and Reasoning Capabilities for real-world deployment</strong>
 
 - 🎯 **Performance Enhancement**: Less token costs and higher accuracy with optimized prompting, indexing and retrieval strategies
-- 🤹‍♀️ **User friendly visualization**: In ```output/graphs/```, the four-level knowledge tree supports visualization with neo4j import，making reasoning paths and knowledge organization vividly visable to users
+- 🤹‍♀️ **User friendly visualization**: One-click export of four-level knowledge tree from ```output/graphs/``` to Neo4j format for direct visualization of reasoning paths and knowledge organization. [View Neo4j Import Guide](docs/NEO4J_IMPORT_GUIDE.md)
 - ⚡ **Parallel Sub-question Processing**: Concurrent handling of decomposed questions for efficiency and complex scenarios
 - 🤔 **Iterative Reasoning**: Step-by-step answer construction with reasoning traces
 - 📊 **Domain Scalability**: Designed for enterprise-scale deployment with minimal manual intervention for new domains
@@ -150,6 +150,7 @@ youtu-graphrag/
 ├── 📁 retriever/                 # Retrieval Cache
 │
 ├── main.py                       # 🎯 Main program entry
+├── export_to_neo4j.py            # 🔗 Neo4j export tool
 ├── requirements.txt              # Dependencies list
 ├── setup_env.sh                  # install web dependency
 ├── start.sh                      # start web service
