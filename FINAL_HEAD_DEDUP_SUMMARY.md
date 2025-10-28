@@ -37,7 +37,7 @@ head_dedup:
 
 ### 2. 核心代码实现 (models/constructor/kt_gen.py)
 
-#### ✅ 新增方法 (15个)
+#### ✅ 新增方法 (14个)
 
 **主入口**:
 - `deduplicate_heads()` - 主方法，4阶段处理
@@ -51,8 +51,7 @@ head_dedup:
 - `_generate_semantic_candidates()` - 生成候选对（embedding）
 - `_validate_candidates_with_embedding()` - Embedding验证
 - `_validate_candidates_with_llm()` - LLM验证
-- `_build_head_dedup_prompt()` - 构建LLM prompt
-- `_get_default_head_dedup_prompt()` - 默认prompt（fallback）
+- `_build_head_dedup_prompt()` - 构建LLM prompt（仅从配置加载）
 - `_collect_node_context()` - 收集节点关系上下文
 - `_parse_coreference_response()` - 解析LLM响应
 
@@ -70,7 +69,7 @@ head_dedup:
 **辅助功能**:
 - `export_head_merge_candidates_for_review()` - 导出审核文件
 
-**代码行数**: 约750行
+**代码行数**: 约440行（移除了fallback方法）
 
 ### 3. 文档和示例
 
@@ -149,8 +148,8 @@ head_dedup:
 | 文件 | 路径 | 作用 |
 |------|------|------|
 | **配置文件** | `config/base_config.yaml` | 所有配置参数 |
-| **Prompt模板** | `config/base_config.yaml` → `prompts.head_dedup.general` | LLM prompt |
-| **核心代码** | `models/constructor/kt_gen.py` (第4471-5218行) | 全部实现 |
+| **Prompt模板** | `config/base_config.yaml` → `prompts.head_dedup.general` | LLM prompt（唯一来源）|
+| **核心代码** | `models/constructor/kt_gen.py` (第4471-4911行) | 全部实现 |
 | **使用示例** | `example_use_head_dedup.py` | 7个实际场景 |
 | **Prompt指南** | `HEAD_DEDUP_PROMPT_CUSTOMIZATION.md` | 如何自定义prompt |
 | **集成文档** | `HEAD_DEDUP_INTEGRATION_SUMMARY.md` | 完整使用说明 |
@@ -216,18 +215,14 @@ print(f"Integrity: {'✓ OK' if not any(issues.values()) else '⚠ Issues'}")
 
 ---
 
-## 💡 关键改进：Prompt可自定义
+## 💡 关键改进：Prompt**仅**在配置文件中 ⭐
 
-### 之前（硬编码）
-```python
-# prompt直接写在代码里
-def _build_head_dedup_prompt(...):
-    prompt = f"""You are an expert...
-    # 硬编码的prompt
-    """
-```
+### 设计原则
+- ✅ **单一数据源**: Prompt只在配置文件中，不在代码中
+- ✅ **明确错误**: 配置缺失时立即报错，不使用fallback
+- ✅ **强制规范**: 确保所有环境使用相同的配置管理方式
 
-### 现在（配置文件）✨
+### 配置文件（唯一来源）✨
 ```yaml
 # config/base_config.yaml
 prompts:
@@ -250,26 +245,30 @@ prompts:
 ```
 
 ```python
-# 代码自动从配置文件加载
+# 代码仅从配置文件加载，无fallback
 def _build_head_dedup_prompt(...):
     try:
-        # 优先从配置文件读取
+        # 从配置文件读取
         prompt = self.config.get_prompt_formatted(
             "head_dedup", "general",
             entity_1=desc_1, context_1=context_1,
             entity_2=desc_2, context_2=context_2
         )
-    except:
-        # 失败则使用默认prompt
-        prompt = self._get_default_head_dedup_prompt(...)
-    return prompt
+        return prompt
+    except Exception as e:
+        # 失败则报错，不使用fallback
+        raise ValueError(f"Failed to load prompt: {e}\n"
+                        f"Please ensure 'prompts.head_dedup.general' is defined.")
 ```
 
-**优势**:
-- ✅ 无需修改代码即可调整prompt
-- ✅ 支持多语言、多领域prompt
-- ✅ 方便A/B测试不同prompt
-- ✅ 与现有tail去重prompt管理方式一致
+**为什么不用fallback？**
+- ✅ **单一来源**: 只维护一份prompt，避免配置和代码不一致
+- ✅ **明确错误**: 配置错误立即发现，不会静默使用旧prompt
+- ✅ **强制规范**: 确保所有部署都使用配置文件管理prompt
+- ✅ **代码简洁**: 减少50行fallback代码
+- ✅ **架构一致**: 与现有tail去重prompt管理方式完全一致
+
+详见: `PROMPT_IN_CONFIG_ONLY.md`
 
 ---
 

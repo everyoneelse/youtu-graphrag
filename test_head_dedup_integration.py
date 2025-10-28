@@ -57,6 +57,7 @@ def test_methods_exist():
         '_merge_node_properties',
         'validate_graph_integrity_after_head_dedup',
         'export_head_merge_candidates_for_review',
+        # Note: _get_default_head_dedup_prompt removed - prompt only in config
     ]
     
     missing = []
