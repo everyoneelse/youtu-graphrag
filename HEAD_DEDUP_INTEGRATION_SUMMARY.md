@@ -10,15 +10,22 @@
 
 ### 1. 配置文件
 - **文件**: `config/base_config.yaml`
-- **修改**: 在 `semantic_dedup` 下添加 `head_dedup` 配置节
+- **修改内容**:
+  - ✅ 在 `construction.semantic_dedup` 下添加 `head_dedup` 配置节
+  - ✅ 在 `prompts` 下添加 `head_dedup.general` prompt模板
 
 ### 2. 核心实现
 - **文件**: `models/constructor/kt_gen.py`
-- **添加**: 约720行代码，14个新方法
+- **添加**: 约750行代码，15个新方法
+- **修改**: prompt从配置文件加载，支持自定义
 
 ### 3. 使用示例
 - **文件**: `example_use_head_dedup.py` (新建)
 - **内容**: 7个使用场景示例
+
+### 4. 文档
+- **文件**: `HEAD_DEDUP_PROMPT_CUSTOMIZATION.md` (新建)
+- **内容**: Prompt自定义指南
 
 ---
 
@@ -183,6 +190,51 @@ similarity_threshold: 0.90  # 更严格，减少候选对
 use_llm_validation: false
 max_candidates: 500
 ```
+
+---
+
+## 🎨 Prompt自定义
+
+### Prompt位置
+
+Head去重的prompt现在存储在配置文件中：
+
+**文件**: `config/base_config.yaml`  
+**路径**: `prompts.head_dedup.general`
+
+### 可用变量
+
+在prompt中可以使用以下变量：
+- `{entity_1}` - 第一个实体的描述
+- `{context_1}` - 第一个实体的关系上下文
+- `{entity_2}` - 第二个实体的描述
+- `{context_2}` - 第二个实体的关系上下文
+
+### 自定义示例
+
+编辑 `config/base_config.yaml`:
+
+```yaml
+prompts:
+  head_dedup:
+    general: |-
+      You are an expert in knowledge graph entity resolution.
+      
+      TASK: Determine if the following two entities refer to the SAME real-world object.
+      
+      Entity 1: {entity_1}
+      Related knowledge about Entity 1:
+      {context_1}
+      
+      Entity 2: {entity_2}
+      Related knowledge about Entity 2:
+      {context_2}
+      
+      # 在这里自定义你的判断规则...
+      # 详见 HEAD_DEDUP_PROMPT_CUSTOMIZATION.md
+```
+
+**详细的Prompt自定义指南**: 请参考 `HEAD_DEDUP_PROMPT_CUSTOMIZATION.md`
 
 ---
 

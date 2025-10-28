@@ -4886,7 +4886,31 @@ class KTBuilder:
         context_1 = self._collect_node_context(node_id_1)
         context_2 = self._collect_node_context(node_id_2)
         
-        prompt = f"""You are an expert in knowledge graph entity resolution.
+        # Try to get prompt from config
+        try:
+            prompt_template = self.config.get_prompt_formatted(
+                "head_dedup", 
+                "general",
+                entity_1=desc_1,
+                context_1=context_1,
+                entity_2=desc_2,
+                context_2=context_2
+            )
+            return prompt_template
+        except Exception as e:
+            logger.debug(f"Failed to load prompt from config: {e}, using default")
+            # Fallback to default prompt
+            return self._get_default_head_dedup_prompt(desc_1, context_1, desc_2, context_2)
+    
+    def _get_default_head_dedup_prompt(
+        self, 
+        desc_1: str, 
+        context_1: str, 
+        desc_2: str, 
+        context_2: str
+    ) -> str:
+        """Default head deduplication prompt (fallback)."""
+        return f"""You are an expert in knowledge graph entity resolution.
 
 TASK: Determine if the following two entities refer to the SAME real-world object.
 
@@ -4914,6 +4938,11 @@ CRITICAL RULES:
    - When uncertain → answer NO
    - False merge is worse than false split
 
+PROHIBITED MERGE REASONS (NOT valid reasons to merge):
+✗ Similar names: "John Smith" vs "John Smith Jr." → different persons
+✗ Related entities: "Apple Inc." vs "Apple Store" → company vs retail location
+✗ Same category: Both are cities → might be different cities
+
 OUTPUT FORMAT (strict JSON):
 {{
   "is_coreferent": true/false,
@@ -4921,7 +4950,6 @@ OUTPUT FORMAT (strict JSON):
   "rationale": "Clear explanation based on referential identity test"
 }}
 """
-        return prompt
     
     def _collect_node_context(self, node_id: str, max_relations: int = 10) -> str:
         """Collect graph relations as context for a node."""
