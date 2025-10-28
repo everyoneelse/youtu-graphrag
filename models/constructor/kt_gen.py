@@ -4468,6 +4468,731 @@ class KTBuilder:
     def save_graphml(self, output_path: str):
         graph_processor.save_graph(self.graph, output_path)
     
+    # ============================================================
+    # Head Node Deduplication Methods
+    # ============================================================
+    
+    def deduplicate_heads(
+        self,
+        enable_semantic: bool = None,
+        similarity_threshold: float = None,
+        use_llm_validation: bool = None,
+        max_candidates: int = None
+    ) -> Dict[str, Any]:
+        """
+        Main entry point for head node deduplication.
+        
+        Deduplicates entity nodes globally (across all relations).
+        Should be run AFTER tail deduplication for best results.
+        
+        Args:
+            enable_semantic: Enable semantic deduplication (default from config)
+            similarity_threshold: Similarity threshold for semantic dedup (default from config)
+            use_llm_validation: Use LLM for validation (default from config)
+            max_candidates: Maximum number of candidate pairs to process (default from config)
+        
+        Returns:
+            Dictionary with deduplication statistics
+        """
+        # Get configuration
+        config = self.config.construction.semantic_dedup.head_dedup if hasattr(
+            self.config.construction.semantic_dedup, 'head_dedup'
+        ) else None
+        
+        if not config or not getattr(config, 'enabled', False):
+            logger.info("Head deduplication is disabled in config")
+            return {"enabled": False}
+        
+        # Use config values if not specified
+        if enable_semantic is None:
+            enable_semantic = getattr(config, 'enable_semantic', True)
+        if similarity_threshold is None:
+            similarity_threshold = getattr(config, 'similarity_threshold', 0.85)
+        if use_llm_validation is None:
+            use_llm_validation = getattr(config, 'use_llm_validation', False)
+        if max_candidates is None:
+            max_candidates = getattr(config, 'max_candidates', 1000)
+        
+        logger.info("=" * 70)
+        logger.info("Starting Head Node Deduplication")
+        logger.info("=" * 70)
+        logger.info(f"Configuration:")
+        logger.info(f"  - Enable semantic dedup: {enable_semantic}")
+        logger.info(f"  - Similarity threshold: {similarity_threshold}")
+        logger.info(f"  - Use LLM validation: {use_llm_validation}")
+        logger.info(f"  - Max candidates: {max_candidates}")
+        logger.info("=" * 70)
+        
+        start_time = time.time()
+        
+        # Phase 1: Collect head candidates
+        logger.info("\n[Phase 1/4] Collecting head candidates...")
+        candidates = self._collect_head_candidates()
+        logger.info(f"✓ Found {len(candidates)} entity nodes")
+        
+        # Phase 2: Exact match deduplication
+        logger.info("\n[Phase 2/4] Exact match deduplication...")
+        exact_merge_mapping = self._deduplicate_heads_exact(candidates)
+        logger.info(f"✓ Identified {len(exact_merge_mapping)} exact matches")
+        
+        # Apply exact match merging
+        exact_merged_count = self._merge_head_nodes(exact_merge_mapping, {})
+        logger.info(f"✓ Merged {exact_merged_count} nodes")
+        
+        # Phase 3: Semantic deduplication (optional)
+        semantic_merge_mapping = {}
+        semantic_merged_count = 0
+        
+        if enable_semantic:
+            logger.info("\n[Phase 3/4] Semantic deduplication...")
+            
+            # Get remaining nodes
+            remaining_nodes = [
+                node_id for node_id in candidates
+                if node_id not in exact_merge_mapping and node_id in self.graph
+            ]
+            logger.info(f"  Remaining nodes after exact match: {len(remaining_nodes)}")
+            
+            if len(remaining_nodes) >= 2:
+                # Generate candidate pairs
+                candidate_similarity_threshold = getattr(config, 'candidate_similarity_threshold', 0.75)
+                candidate_pairs = self._generate_semantic_candidates(
+                    remaining_nodes,
+                    max_candidates=max_candidates,
+                    similarity_threshold=candidate_similarity_threshold
+                )
+                logger.info(f"✓ Generated {len(candidate_pairs)} candidate pairs")
+                
+                # Validate candidates
+                if candidate_pairs:
+                    if use_llm_validation:
+                        logger.info("  Using LLM validation (high accuracy mode)...")
+                        semantic_merge_mapping, metadata = self._validate_candidates_with_llm(
+                            candidate_pairs,
+                            similarity_threshold
+                        )
+                    else:
+                        logger.info("  Using embedding validation (fast mode)...")
+                        semantic_merge_mapping, metadata = self._validate_candidates_with_embedding(
+                            candidate_pairs,
+                            similarity_threshold
+                        )
+                    
+                    logger.info(f"✓ Identified {len(semantic_merge_mapping)} semantic matches")
+                    
+                    # Apply semantic merging
+                    semantic_merged_count = self._merge_head_nodes(semantic_merge_mapping, metadata)
+                    logger.info(f"✓ Merged {semantic_merged_count} nodes")
+                else:
+                    logger.info("  No candidate pairs generated")
+            else:
+                logger.info("  Not enough nodes for semantic deduplication")
+        else:
+            logger.info("\n[Phase 3/4] Semantic deduplication skipped (disabled)")
+        
+        # Phase 4: Integrity validation
+        logger.info("\n[Phase 4/4] Validating graph integrity...")
+        issues = self.validate_graph_integrity_after_head_dedup()
+        
+        if any(issues.values()):
+            logger.warning(f"⚠ Found integrity issues: {issues}")
+        else:
+            logger.info("✓ Graph integrity validated")
+        
+        elapsed_time = time.time() - start_time
+        
+        # Statistics
+        final_entity_count = len([
+            n for n, d in self.graph.nodes(data=True)
+            if d.get("label") == "entity"
+        ])
+        
+        stats = {
+            "enabled": True,
+            "total_candidates": len(candidates),
+            "exact_merges": exact_merged_count,
+            "semantic_merges": semantic_merged_count,
+            "total_merges": exact_merged_count + semantic_merged_count,
+            "initial_entity_count": len(candidates),
+            "final_entity_count": final_entity_count,
+            "reduction_rate": (exact_merged_count + semantic_merged_count) / len(candidates) * 100 if candidates else 0,
+            "elapsed_time_seconds": elapsed_time,
+            "integrity_issues": issues
+        }
+        
+        logger.info("\n" + "=" * 70)
+        logger.info("Head Deduplication Completed")
+        logger.info("=" * 70)
+        logger.info(f"Summary:")
+        logger.info(f"  - Initial entities: {stats['initial_entity_count']}")
+        logger.info(f"  - Final entities: {stats['final_entity_count']}")
+        logger.info(f"  - Total merges: {stats['total_merges']}")
+        logger.info(f"    • Exact matches: {stats['exact_merges']}")
+        logger.info(f"    • Semantic matches: {stats['semantic_merges']}")
+        logger.info(f"  - Reduction rate: {stats['reduction_rate']:.2f}%")
+        logger.info(f"  - Time elapsed: {elapsed_time:.2f}s")
+        logger.info("=" * 70)
+        
+        # Export for review if configured
+        if getattr(config, 'export_review', False):
+            review_path = os.path.join(
+                getattr(config, 'review_output_dir', 'output/review'),
+                f"head_merge_{self.dataset_name}_{int(time.time())}.csv"
+            )
+            min_conf, max_conf = getattr(config, 'review_confidence_range', [0.70, 0.90])
+            self.export_head_merge_candidates_for_review(
+                output_path=review_path,
+                min_confidence=min_conf,
+                max_confidence=max_conf
+            )
+        
+        return stats
+    
+    def _collect_head_candidates(self) -> List[str]:
+        """Collect all entity nodes for deduplication."""
+        candidates = [
+            node_id
+            for node_id, data in self.graph.nodes(data=True)
+            if data.get("label") == "entity"
+        ]
+        return candidates
+    
+    def _normalize_entity_name(self, name: str) -> str:
+        """Normalize entity name for exact matching."""
+        if not name:
+            return ""
+        
+        # Convert to lowercase and strip
+        normalized = name.lower().strip()
+        
+        # Merge multiple spaces
+        normalized = ' '.join(normalized.split())
+        
+        # Remove common punctuation
+        for char in ['.', ',', '!', '?', ':', ';', '"', "'", '(', ')', '[', ']', '{', '}']:
+            normalized = normalized.replace(char, '')
+        
+        return normalized
+    
+    def _deduplicate_heads_exact(self, candidates: List[str]) -> Dict[str, str]:
+        """Exact match deduplication based on normalized names."""
+        logger.info("Starting exact match deduplication for head nodes...")
+        
+        # Group by normalized name
+        name_groups = defaultdict(list)
+        
+        for node_id in candidates:
+            if node_id not in self.graph:
+                continue
+            
+            node_data = self.graph.nodes[node_id]
+            name = node_data.get("properties", {}).get("name", "")
+            
+            if not name:
+                continue
+            
+            normalized_name = self._normalize_entity_name(name)
+            name_groups[normalized_name].append((node_id, name))
+        
+        # Build merge mapping
+        merge_mapping = {}
+        
+        for normalized_name, node_list in name_groups.items():
+            if len(node_list) <= 1:
+                continue
+            
+            # Choose canonical node (smallest ID)
+            node_list_sorted = sorted(node_list, key=lambda x: int(x[0].split('_')[1]))
+            canonical_id = node_list_sorted[0][0]
+            
+            for node_id, original_name in node_list_sorted[1:]:
+                merge_mapping[node_id] = canonical_id
+        
+        logger.info(f"Exact match found {len(merge_mapping)} duplicate head nodes")
+        return merge_mapping
+    
+    def _generate_semantic_candidates(
+        self,
+        remaining_nodes: List[str],
+        max_candidates: int = 1000,
+        similarity_threshold: float = 0.75
+    ) -> List[Tuple[str, str, float]]:
+        """Generate candidate node pairs using embedding similarity."""
+        logger.info("Generating semantic deduplication candidates...")
+        
+        if len(remaining_nodes) < 2:
+            return []
+        
+        # Get node descriptions
+        node_descriptions = {}
+        for node_id in remaining_nodes:
+            if node_id not in self.graph:
+                continue
+            desc = self._describe_node_for_clustering(node_id)
+            if desc:
+                node_descriptions[node_id] = desc
+        
+        if len(node_descriptions) < 2:
+            return []
+        
+        # Get embeddings
+        nodes = list(node_descriptions.keys())
+        descriptions = [node_descriptions[node_id] for node_id in nodes]
+        
+        try:
+            embeddings = self._batch_get_embeddings(descriptions)
+            embeddings_array = np.array(embeddings)
+        except Exception as e:
+            logger.error(f"Failed to get embeddings: {e}")
+            return []
+        
+        # Compute similarity matrix
+        from sklearn.metrics.pairwise import cosine_similarity
+        similarity_matrix = cosine_similarity(embeddings_array)
+        
+        # Extract high similarity pairs
+        candidates = []
+        n = len(nodes)
+        
+        for i in range(n):
+            for j in range(i + 1, n):
+                sim = similarity_matrix[i][j]
+                if sim >= similarity_threshold:
+                    candidates.append((nodes[i], nodes[j], float(sim)))
+        
+        # Sort by similarity and take top-K
+        candidates.sort(key=lambda x: x[2], reverse=True)
+        
+        if len(candidates) > max_candidates:
+            candidates = candidates[:max_candidates]
+        
+        return candidates
+    
+    def _validate_candidates_with_embedding(
+        self,
+        candidate_pairs: List[Tuple[str, str, float]],
+        threshold: float
+    ) -> Tuple[Dict[str, str], Dict[str, dict]]:
+        """Validate candidates using embedding similarity only."""
+        merge_mapping = {}
+        metadata = {}
+        
+        # Use Union-Find to handle transitivity
+        parent = {}
+        
+        def find(x):
+            if x not in parent:
+                parent[x] = x
+            if parent[x] != x:
+                parent[x] = find(parent[x])
+            return parent[x]
+        
+        def union(x, y):
+            px, py = find(x), find(y)
+            if px != py:
+                if int(px.split('_')[1]) < int(py.split('_')[1]):
+                    parent[py] = px
+                else:
+                    parent[px] = py
+        
+        # Process valid pairs
+        valid_pairs = []
+        for node_id_1, node_id_2, similarity in candidate_pairs:
+            if similarity >= threshold:
+                union(node_id_1, node_id_2)
+                valid_pairs.append((node_id_1, node_id_2, similarity))
+        
+        # Build merge_mapping
+        canonical_map = {}
+        
+        for node_id_1, node_id_2, similarity in valid_pairs:
+            root = find(node_id_1)
+            
+            if root not in canonical_map:
+                canonical_map[root] = root
+            
+            for node in [node_id_1, node_id_2]:
+                node_root = find(node)
+                if node != canonical_map[node_root]:
+                    merge_mapping[node] = canonical_map[node_root]
+                    if node not in metadata:
+                        metadata[node] = {
+                            "rationale": f"High embedding similarity (threshold={threshold})",
+                            "confidence": float(similarity),
+                            "method": "embedding"
+                        }
+        
+        return merge_mapping, metadata
+    
+    def _validate_candidates_with_llm(
+        self,
+        candidate_pairs: List[Tuple[str, str, float]],
+        threshold: float
+    ) -> Tuple[Dict[str, str], Dict[str, dict]]:
+        """Validate candidates using LLM."""
+        logger.info(f"Validating {len(candidate_pairs)} candidates with LLM...")
+        
+        # Build prompts
+        prompts = []
+        for node_id_1, node_id_2, embedding_sim in candidate_pairs:
+            prompt_text = self._build_head_dedup_prompt(node_id_1, node_id_2)
+            prompts.append({
+                "prompt": prompt_text,
+                "metadata": {
+                    "node_id_1": node_id_1,
+                    "node_id_2": node_id_2,
+                    "embedding_similarity": embedding_sim
+                }
+            })
+        
+        # Concurrent LLM calls
+        llm_results = self._concurrent_llm_calls(prompts)
+        
+        # Parse results
+        merge_mapping = {}
+        metadata = {}
+        
+        for result in llm_results:
+            meta = result.get("metadata", {})
+            response = result.get("response", "")
+            
+            parsed = self._parse_coreference_response(response)
+            is_coreferent = parsed.get("is_coreferent", False)
+            confidence = parsed.get("confidence", 0.0)
+            rationale = parsed.get("rationale", "")
+            
+            if is_coreferent and confidence >= threshold:
+                node_id_1 = meta["node_id_1"]
+                node_id_2 = meta["node_id_2"]
+                
+                canonical = min(node_id_1, node_id_2, key=lambda x: int(x.split('_')[1]))
+                duplicate = node_id_2 if canonical == node_id_1 else node_id_1
+                
+                merge_mapping[duplicate] = canonical
+                metadata[duplicate] = {
+                    "rationale": rationale,
+                    "confidence": confidence,
+                    "embedding_similarity": meta.get("embedding_similarity", 0.0),
+                    "method": "llm"
+                }
+        
+        return merge_mapping, metadata
+    
+    def _build_head_dedup_prompt(self, node_id_1: str, node_id_2: str) -> str:
+        """Build LLM prompt for head deduplication."""
+        desc_1 = self._describe_node(node_id_1)
+        desc_2 = self._describe_node(node_id_2)
+        
+        context_1 = self._collect_node_context(node_id_1)
+        context_2 = self._collect_node_context(node_id_2)
+        
+        prompt = f"""You are an expert in knowledge graph entity resolution.
+
+TASK: Determine if the following two entities refer to the SAME real-world object.
+
+Entity 1: {desc_1}
+Related knowledge about Entity 1:
+{context_1}
+
+Entity 2: {desc_2}
+Related knowledge about Entity 2:
+{context_2}
+
+CRITICAL RULES:
+1. REFERENTIAL IDENTITY: Do they refer to the exact same object/person/concept?
+   - Same entity with different names → YES (e.g., "NYC" = "New York City")
+   - Different but related entities → NO (e.g., "Apple Inc." ≠ "Apple Store")
+
+2. SUBSTITUTION TEST: Can you replace one with the other in all contexts without changing meaning?
+   - If substitution changes information → NO
+   - If substitution preserves meaning → YES
+
+3. TYPE CONSISTENCY: Check entity types/categories
+   - Same name, different types → carefully verify with context
+
+4. CONSERVATIVE PRINCIPLE:
+   - When uncertain → answer NO
+   - False merge is worse than false split
+
+OUTPUT FORMAT (strict JSON):
+{{
+  "is_coreferent": true/false,
+  "confidence": 0.0-1.0,
+  "rationale": "Clear explanation based on referential identity test"
+}}
+"""
+        return prompt
+    
+    def _collect_node_context(self, node_id: str, max_relations: int = 10) -> str:
+        """Collect graph relations as context for a node."""
+        config = self.config.construction.semantic_dedup.head_dedup if hasattr(
+            self.config.construction.semantic_dedup, 'head_dedup'
+        ) else None
+        
+        if config:
+            max_relations = getattr(config, 'max_relations_context', 10)
+        
+        contexts = []
+        
+        # Outgoing edges
+        out_edges = list(self.graph.out_edges(node_id, data=True))[:max_relations]
+        for _, tail_id, data in out_edges:
+            relation = data.get("relation", "related_to")
+            tail_desc = self._describe_node(tail_id)
+            contexts.append(f"  • {relation} → {tail_desc}")
+        
+        # Incoming edges
+        in_edges = list(self.graph.in_edges(node_id, data=True))[:max_relations]
+        for head_id, _, data in in_edges:
+            relation = data.get("relation", "related_to")
+            head_desc = self._describe_node(head_id)
+            contexts.append(f"  • {head_desc} → {relation}")
+        
+        return "\n".join(contexts) if contexts else "  (No relations found)"
+    
+    def _parse_coreference_response(self, response: str) -> dict:
+        """Parse LLM response for coreference decision."""
+        try:
+            parsed = json_repair.loads(response)
+            return {
+                "is_coreferent": bool(parsed.get("is_coreferent", False)),
+                "confidence": float(parsed.get("confidence", 0.0)),
+                "rationale": str(parsed.get("rationale", ""))
+            }
+        except Exception as e:
+            logger.warning(f"Failed to parse LLM coreference response: {e}")
+            return {
+                "is_coreferent": False,
+                "confidence": 0.0,
+                "rationale": "Parse error"
+            }
+    
+    def _merge_head_nodes(
+        self,
+        merge_mapping: Dict[str, str],
+        metadata: Dict[str, dict]
+    ) -> int:
+        """Execute head node merging and update graph structure."""
+        if not merge_mapping:
+            return 0
+        
+        merged_count = 0
+        
+        for duplicate_id, canonical_id in merge_mapping.items():
+            if duplicate_id not in self.graph or canonical_id not in self.graph:
+                continue
+            
+            if duplicate_id == canonical_id:
+                continue
+            
+            try:
+                # Transfer outgoing edges
+                self._reassign_outgoing_edges(duplicate_id, canonical_id)
+                
+                # Transfer incoming edges
+                self._reassign_incoming_edges(duplicate_id, canonical_id)
+                
+                # Merge node properties
+                self._merge_node_properties(
+                    duplicate_id,
+                    canonical_id,
+                    metadata.get(duplicate_id, {})
+                )
+                
+                # Remove duplicate node
+                self.graph.remove_node(duplicate_id)
+                merged_count += 1
+                
+            except Exception as e:
+                logger.error(f"Error merging {duplicate_id} into {canonical_id}: {e}")
+                continue
+        
+        return merged_count
+    
+    def _reassign_outgoing_edges(self, source_id: str, target_id: str):
+        """Transfer outgoing edges from source to target node."""
+        outgoing = list(self.graph.out_edges(source_id, keys=True, data=True))
+        
+        for _, tail_id, key, data in outgoing:
+            if tail_id == target_id:
+                continue
+            
+            edge_exists, existing_key = self._find_similar_edge(target_id, tail_id, data)
+            
+            if not edge_exists:
+                self.graph.add_edge(target_id, tail_id, **copy.deepcopy(data))
+            else:
+                self._merge_edge_chunks(target_id, tail_id, existing_key, data)
+    
+    def _reassign_incoming_edges(self, source_id: str, target_id: str):
+        """Transfer incoming edges from source to target node."""
+        incoming = list(self.graph.in_edges(source_id, keys=True, data=True))
+        
+        for head_id, _, key, data in incoming:
+            if head_id == target_id:
+                continue
+            
+            edge_exists, existing_key = self._find_similar_edge(head_id, target_id, data)
+            
+            if not edge_exists:
+                self.graph.add_edge(head_id, target_id, **copy.deepcopy(data))
+            else:
+                self._merge_edge_chunks(head_id, target_id, existing_key, data)
+    
+    def _find_similar_edge(self, u: str, v: str, new_data: dict) -> Tuple[bool, Any]:
+        """Check if a similar edge already exists."""
+        new_relation = new_data.get("relation")
+        
+        if not self.graph.has_edge(u, v):
+            return False, None
+        
+        for key, data in self.graph[u][v].items():
+            if data.get("relation") == new_relation:
+                return True, key
+        
+        return False, None
+    
+    def _merge_edge_chunks(self, u: str, v: str, edge_key: Any, new_data: dict):
+        """Merge chunk information of edges."""
+        existing_data = self.graph[u][v][edge_key]
+        
+        existing_chunks = set(existing_data.get("source_chunks", []))
+        new_chunks = set(new_data.get("source_chunks", []))
+        merged_chunks = list(existing_chunks | new_chunks)
+        
+        if merged_chunks:
+            existing_data["source_chunks"] = merged_chunks
+    
+    def _merge_node_properties(
+        self,
+        duplicate_id: str,
+        canonical_id: str,
+        merge_meta: dict
+    ):
+        """Merge node properties and record provenance."""
+        canonical_data = self.graph.nodes[canonical_id]
+        duplicate_data = self.graph.nodes[duplicate_id]
+        
+        # Initialize head_dedup metadata
+        properties = canonical_data.setdefault("properties", {})
+        if "head_dedup" not in properties:
+            properties["head_dedup"] = {
+                "merged_nodes": [],
+                "merge_history": []
+            }
+        
+        # Record merge info
+        properties["head_dedup"]["merged_nodes"].append(duplicate_id)
+        properties["head_dedup"]["merge_history"].append({
+            "merged_node_id": duplicate_id,
+            "merged_node_name": duplicate_data.get("properties", {}).get("name", ""),
+            "rationale": merge_meta.get("rationale", "Semantic similarity"),
+            "confidence": merge_meta.get("confidence", 1.0),
+            "method": merge_meta.get("method", "unknown"),
+            "timestamp": time.time()
+        })
+        
+        # Merge chunk info if available
+        canonical_chunks = set(properties.get("chunk_ids", []))
+        duplicate_chunks = set(duplicate_data.get("properties", {}).get("chunk_ids", []))
+        merged_chunks = list(canonical_chunks | duplicate_chunks)
+        
+        if merged_chunks:
+            properties["chunk_ids"] = merged_chunks
+    
+    def validate_graph_integrity_after_head_dedup(self) -> Dict[str, List]:
+        """Validate graph integrity after head deduplication."""
+        issues = {
+            "orphan_nodes": [],
+            "self_loops": [],
+            "dangling_references": [],
+            "missing_metadata": []
+        }
+        
+        # Check orphan nodes
+        for node_id, data in self.graph.nodes(data=True):
+            if data.get("label") == "entity":
+                in_degree = self.graph.in_degree(node_id)
+                out_degree = self.graph.out_degree(node_id)
+                if in_degree == 0 and out_degree == 0:
+                    issues["orphan_nodes"].append(node_id)
+        
+        # Check self loops
+        for u, v in self.graph.edges():
+            if u == v:
+                issues["self_loops"].append((u, v))
+        
+        # Check dangling references
+        for u, v, data in self.graph.edges(data=True):
+            if u not in self.graph.nodes:
+                issues["dangling_references"].append(("head", u, v))
+            if v not in self.graph.nodes:
+                issues["dangling_references"].append(("tail", u, v))
+        
+        # Check metadata completeness
+        for node_id, data in self.graph.nodes(data=True):
+            if "head_dedup" in data.get("properties", {}):
+                dedup_info = data["properties"]["head_dedup"]
+                if not isinstance(dedup_info, dict):
+                    issues["missing_metadata"].append((node_id, "invalid_type"))
+                elif "merged_nodes" not in dedup_info or "merge_history" not in dedup_info:
+                    issues["missing_metadata"].append((node_id, "missing_fields"))
+        
+        return issues
+    
+    def export_head_merge_candidates_for_review(
+        self,
+        output_path: str,
+        min_confidence: float = 0.70,
+        max_confidence: float = 0.90
+    ):
+        """Export merge candidates for human review."""
+        logger.info(f"Exporting head merge candidates for review (confidence: {min_confidence}-{max_confidence})...")
+        
+        candidates = []
+        
+        for node_id, data in self.graph.nodes(data=True):
+            if data.get("label") != "entity":
+                continue
+            
+            dedup_info = data.get("properties", {}).get("head_dedup", {})
+            
+            for merge_record in dedup_info.get("merge_history", []):
+                confidence = merge_record.get("confidence", 1.0)
+                
+                if min_confidence <= confidence <= max_confidence:
+                    candidates.append({
+                        "canonical_node_id": node_id,
+                        "canonical_name": data.get("properties", {}).get("name", ""),
+                        "merged_node_id": merge_record["merged_node_id"],
+                        "merged_name": merge_record["merged_node_name"],
+                        "confidence": confidence,
+                        "method": merge_record.get("method", "unknown"),
+                        "rationale": merge_record["rationale"]
+                    })
+        
+        # Export as CSV
+        if candidates:
+            import csv
+            os.makedirs(os.path.dirname(output_path), exist_ok=True)
+            with open(output_path, 'w', newline='', encoding='utf-8') as f:
+                fieldnames = [
+                    "canonical_node_id", "canonical_name",
+                    "merged_node_id", "merged_name",
+                    "confidence", "method", "rationale"
+                ]
+                writer = csv.DictWriter(f, fieldnames=fieldnames)
+                writer.writeheader()
+                writer.writerows(candidates)
+            
+            logger.info(f"✓ Exported {len(candidates)} merge candidates to {output_path}")
+        else:
+            logger.info("No candidates found in the specified confidence range")
+    
+    # ============================================================
+    # End of Head Node Deduplication Methods
+    # ============================================================
+    
     def build_knowledge_graph(self, corpus):
         logger.info(f"========{'Start Building':^20}========")
         logger.info(f"{'➖' * 30}")

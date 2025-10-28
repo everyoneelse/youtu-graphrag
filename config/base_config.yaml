@@ -59,6 +59,39 @@ construction:
       # base_url: "https://api.openai.com/v1"
       # api_key: "${DEDUP_LLM_API_KEY}"
       # temperature: 0.0
+    
+    # Head node deduplication configuration
+    # This deduplicates entity nodes globally (across all relations)
+    # Should be run AFTER tail deduplication for best results
+    head_dedup:
+      enabled: false
+      # Enable semantic deduplication (exact match always runs first)
+      enable_semantic: true
+      # Similarity threshold for semantic deduplication (0.0-1.0)
+      # Recommended: 0.85-0.90 for production, 0.80-0.85 for exploratory analysis
+      similarity_threshold: 0.85
+      # Use LLM for validation (slower but more accurate)
+      # false: Use embedding-only (fast mode)
+      # true: Use LLM to validate candidates (high precision mode)
+      use_llm_validation: false
+      # Maximum number of candidate pairs to process
+      # Recommended: 1000 for medium graphs, 500 for large graphs, 2000 for small graphs
+      max_candidates: 1000
+      # Embedding similarity threshold for candidate generation (pre-filtering)
+      # Lower than similarity_threshold to avoid missing potential matches
+      candidate_similarity_threshold: 0.75
+      # Maximum number of relations to include in context for each entity
+      max_relations_context: 10
+      # Export candidates for human review
+      export_review: false
+      # Confidence range for human review (only export if confidence in this range)
+      review_confidence_range: [0.70, 0.90]
+      # Output directory for review files
+      review_output_dir: "output/review"
+      # Use hybrid context (both graph relations and text chunks)
+      # false: Use only graph relations (recommended, faster)
+      # true: Use both graph relations and text chunks (experimental, slower)
+      use_hybrid_context: false
 
 datasets:
   hotpot:
