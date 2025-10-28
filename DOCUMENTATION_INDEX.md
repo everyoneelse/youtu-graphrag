@@ -92,6 +92,38 @@
 - 推广价值
 - **适合**：关注设计细节的开发者
 
+#### 5.1 [SEMANTIC_DEDUP_VALIDATION_V4_FINAL.md](./SEMANTIC_DEDUP_VALIDATION_V4_FINAL.md) ⭐⭐⭐
+**Semantic Dedup验证V4.0 - 真正的原则驱动**
+
+- **彻底去除case by case** - 不列举短语、不给具体案例
+- **核心原则** - intent(rationale) = reality(members)
+- **信任LLM** - 让LLM用自己的理解判断，而非匹配关键词
+- **极简设计** - 从150行缩减到30行（-80%）
+- **适合**：所有人（必读，这是最终版本）
+
+#### 5.1.1 [SEMANTIC_DEDUP_VALIDATION_V2_CHANGELOG.md](./SEMANTIC_DEDUP_VALIDATION_V2_CHANGELOG.md)
+**V1.0→V2.0→V3.0变更日志**
+
+- V1-V3的演进过程
+- 为什么V1-V3仍然是case by case
+- **适合**：想了解历史的开发者
+
+#### 5.1.2 [SEMANTIC_DEDUP_VALIDATION_V3_NOTES.md](./SEMANTIC_DEDUP_VALIDATION_V3_NOTES.md)
+**V3.0设计笔记（已被V4.0取代）**
+
+- V3.0的设计思路
+- 为什么V3.0仍然不够好
+- **适合**：了解设计演进
+
+#### 5.2 [SEMANTIC_DEDUP_VALIDATION_FIX_SUMMARY.md](./SEMANTIC_DEDUP_VALIDATION_FIX_SUMMARY.md)
+**Semantic Dedup验证修复总结**
+
+- "rationale说要合并但未合并"问题修复
+- 中文关键词识别增强
+- 增强的验证prompt和示例
+- 测试用例和使用说明
+- **适合**：遇到semantic dedup不一致问题的用户
+
 ---
 
 ### 📋 方案对比

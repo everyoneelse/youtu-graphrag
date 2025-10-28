@@ -43,6 +43,7 @@ construction:
     # When enabled, after semantic deduplication, LLM will check for inconsistencies
     # between group rationales and members, and automatically correct them.
     # This addresses the issue where rationale says "should merge" but members are separate.
+    # Now with enhanced detection for Chinese keywords like "可合并", "完全一致", "信息无差异".
     # Recommended: true for critical data, false for cost-sensitive scenarios
     enable_semantic_dedup_validation: false
     
