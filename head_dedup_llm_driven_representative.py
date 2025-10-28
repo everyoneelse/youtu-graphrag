@@ -321,58 +321,146 @@ IMPORTANT:
         metadata: Dict[str, dict]
     ) -> Dict[str, str]:
         """
-        Revised version: Trust LLM's representative selection.
+        Revised version with frequency-based priority.
         
-        This function now does minimal post-processing, mainly handling
-        transitive cases where LLM decisions need to be reconciled.
+        Key improvement: If an entity appears in multiple pairs (high frequency),
+        it's likely a more standard/canonical name and should become the representative.
         
         Example:
-          LLM says: A -> B (B is representative)
-          LLM says: B -> C (C is representative)
-          Result: Both A and B should point to C
+          Pairs: (A, B), (A, C), (A, D) all coreferent
+          → A is high-frequency, so A becomes representative
+          Result: B -> A, C -> A, D -> A
         
         Args:
             merge_mapping: Initial {duplicate: canonical} from LLM
             metadata: Metadata containing LLM's rationale
             
         Returns:
-            Revised merge_mapping handling transitivity
+            Revised merge_mapping with frequency-aware selection
         """
         from collections import defaultdict
         
-        # Build a graph of merge relationships
+        # Step 1: Count entity frequency (how many pairs each entity appears in)
+        entity_frequency = defaultdict(int)
+        for duplicate, canonical in merge_mapping.items():
+            entity_frequency[duplicate] += 1
+            entity_frequency[canonical] += 1
+        
+        # Step 2: Identify high-frequency entities
+        # Adaptive threshold: min(3, max_freq - 1)
+        if entity_frequency:
+            max_freq = max(entity_frequency.values())
+            HIGH_FREQ_THRESHOLD = max(2, min(3, max_freq - 1))
+        else:
+            HIGH_FREQ_THRESHOLD = 2
+        
+        high_freq_entities = {
+            entity for entity, freq in entity_frequency.items()
+            if freq >= HIGH_FREQ_THRESHOLD
+        }
+        
+        if high_freq_entities:
+            logger.info(
+                f"Identified {len(high_freq_entities)} high-frequency entities "
+                f"(threshold={HIGH_FREQ_THRESHOLD}): "
+                f"{sorted(high_freq_entities)[:5]}{'...' if len(high_freq_entities) > 5 else ''}"
+            )
+        
+        # Step 3: Build Union-Find with frequency priority
         parent = {}
+        rank = {}
         
         def find(x):
             if x not in parent:
                 parent[x] = x
+                rank[x] = 0
             if parent[x] != x:
                 parent[x] = find(parent[x])
             return parent[x]
         
-        def union(duplicate, canonical):
-            # Canonical is preferred, so canonical becomes the root
-            pd, pc = find(duplicate), find(canonical)
-            if pd != pc:
-                parent[pd] = pc  # Duplicate's root points to canonical's root
+        def union(entity1, entity2):
+            """Union with frequency priority."""
+            root1, root2 = find(entity1), find(entity2)
+            if root1 == root2:
+                return
+            
+            # Check if either is high-frequency
+            is_high_freq_1 = root1 in high_freq_entities
+            is_high_freq_2 = root2 in high_freq_entities
+            
+            if is_high_freq_1 and not is_high_freq_2:
+                # root1 is high-freq → make it representative
+                parent[root2] = root1
+                logger.debug(
+                    f"Union: {root2} -> {root1} "
+                    f"(high-freq priority, freq={entity_frequency[root1]})"
+                )
+            elif is_high_freq_2 and not is_high_freq_1:
+                # root2 is high-freq → make it representative
+                parent[root1] = root2
+                logger.debug(
+                    f"Union: {root1} -> {root2} "
+                    f"(high-freq priority, freq={entity_frequency[root2]})"
+                )
+            elif is_high_freq_1 and is_high_freq_2:
+                # Both high-freq → choose one with higher frequency
+                if entity_frequency[root1] > entity_frequency[root2]:
+                    parent[root2] = root1
+                    logger.debug(
+                        f"Union: {root2} -> {root1} "
+                        f"(higher freq: {entity_frequency[root1]} > {entity_frequency[root2]})"
+                    )
+                elif entity_frequency[root1] < entity_frequency[root2]:
+                    parent[root1] = root2
+                    logger.debug(
+                        f"Union: {root1} -> {root2} "
+                        f"(higher freq: {entity_frequency[root2]} > {entity_frequency[root1]})"
+                    )
+                else:
+                    # Same frequency → use rank optimization
+                    if rank[root1] < rank[root2]:
+                        parent[root1] = root2
+                    elif rank[root1] > rank[root2]:
+                        parent[root2] = root1
+                    else:
+                        parent[root2] = root1
+                        rank[root1] += 1
+            else:
+                # Neither is high-freq → use rank optimization (standard Union-Find)
+                if rank[root1] < rank[root2]:
+                    parent[root1] = root2
+                elif rank[root1] > rank[root2]:
+                    parent[root2] = root1
+                else:
+                    parent[root2] = root1
+                    rank[root1] += 1
         
-        # Apply all LLM decisions
+        # Step 4: Apply all merge decisions with frequency-aware union
         for duplicate, canonical in merge_mapping.items():
             union(duplicate, canonical)
         
-        # Build final mapping
+        # Step 5: Build final mapping
         revised_mapping = {}
+        representative_changes = 0
+        
         for duplicate, original_canonical in merge_mapping.items():
             final_canonical = find(duplicate)
             if duplicate != final_canonical:
                 revised_mapping[duplicate] = final_canonical
                 
-                # Update metadata if changed
+                # Log if representative changed
                 if final_canonical != original_canonical:
-                    logger.debug(
-                        f"Transitive merge: {duplicate} -> {original_canonical} "
-                        f"revised to {duplicate} -> {final_canonical}"
+                    representative_changes += 1
+                    logger.info(
+                        f"Representative revised: {duplicate} -> {original_canonical} "
+                        f"changed to {duplicate} -> {final_canonical} "
+                        f"(freq: {entity_frequency[final_canonical]})"
                     )
+        
+        if representative_changes > 0:
+            logger.info(
+                f"✓ Revised {representative_changes} representatives based on frequency"
+            )
         
         return revised_mapping
     
