@@ -95,6 +95,37 @@ def _validate_candidates_with_llm_v2(
     logger.info(f"LLM validated {len(merge_mapping)} merges with representative selection")
     return merge_mapping, metadata
 
+def _collect_chunk_context(self, node_id: str, max_length: int = 500) -> str:
+    """
+    Collect chunk text context for a node.
+    
+    Args:
+        node_id: Node ID
+        max_length: Maximum length of chunk text to include (characters)
+        
+    Returns:
+        Formatted chunk context string
+    """
+    if node_id not in self.graph:
+        return "  (Node not found in graph)"
+    
+    node_data = self.graph.nodes[node_id]
+    properties = node_data.get("properties", {})
+    chunk_id = properties.get("chunk id") or properties.get("chunk_id")
+    
+    if not chunk_id:
+        return "  (No chunk information)"
+    
+    chunk_text = self.all_chunks.get(chunk_id)
+    if not chunk_text:
+        return f"  (Chunk {chunk_id} not found)"
+    
+    # Truncate if too long
+    if len(chunk_text) > max_length:
+        chunk_text = chunk_text[:max_length] + "..."
+    
+    return f"  Source text: \"{chunk_text}\""
+
 def _build_head_dedup_prompt_v2(self, node_id_1: str, node_id_2: str) -> str:
     """
     Build improved LLM prompt that asks for representative selection.
@@ -109,9 +140,27 @@ def _build_head_dedup_prompt_v2(self, node_id_1: str, node_id_2: str) -> str:
     desc_1 = self._describe_node(node_id_1)
     desc_2 = self._describe_node(node_id_2)
     
-    # Get graph context
+    # Get graph context (always included)
     context_1 = self._collect_node_context(node_id_1, max_relations=10)
     context_2 = self._collect_node_context(node_id_2, max_relations=10)
+    
+    # Check if hybrid context is enabled
+    config = self.config.construction.semantic_dedup.head_dedup if hasattr(
+        self.config.construction.semantic_dedup, 'head_dedup'
+    ) else None
+    
+    use_hybrid_context = False
+    if config:
+        use_hybrid_context = getattr(config, 'use_hybrid_context', False)
+    
+    # Add chunk context if hybrid mode is enabled
+    if use_hybrid_context:
+        chunk_context_1 = self._collect_chunk_context(node_id_1)
+        chunk_context_2 = self._collect_chunk_context(node_id_2)
+        
+        # Combine graph relations and chunk text
+        context_1 = f"{context_1}\n{chunk_context_1}"
+        context_2 = f"{context_2}\n{chunk_context_2}"
     
     # Try to load from config first
     try:

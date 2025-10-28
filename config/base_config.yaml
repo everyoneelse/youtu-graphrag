@@ -90,7 +90,8 @@ construction:
       review_output_dir: "output/review"
       # Use hybrid context (both graph relations and text chunks)
       # false: Use only graph relations (recommended, faster)
-      # true: Use both graph relations and text chunks (experimental, slower)
+      # true: Use both graph relations and text chunks (provides more context, slower and more tokens)
+      # When enabled, adds the source chunk text to help LLM make better decisions
       use_hybrid_context: false
       # Save intermediate results for debugging and analysis
       save_intermediate_results: false
