@@ -51,6 +51,7 @@ class OfflineSemanticDeduper(KTBuilder):
     triple_deduplicate = KTBuilder.triple_deduplicate
     _deduplicate_keyword_nodes = KTBuilder._deduplicate_keyword_nodes
     _semantic_dedup_enabled = KTBuilder._semantic_dedup_enabled
+    deduplicate_heads = KTBuilder.deduplicate_heads  # Head entity deduplication
     
     def load_keyword_cluster_results(self, cluster_file: Path) -> None:
         """Load previously saved keyword clustering results from intermediate results file."""
@@ -222,6 +223,7 @@ def main() -> None:
 
     original_edge_count = deduper.graph.number_of_edges()
     original_keyword_count = sum(1 for _, data in deduper.graph.nodes(data=True) if data.get("label") == "keyword")
+    original_entity_count = sum(1 for _, data in deduper.graph.nodes(data=True) if data.get("label") == "entity")
 
     if not deduper._semantic_dedup_enabled():
         logger.warning("Semantic deduplication is disabled in the configuration. No changes will be made.")
@@ -236,16 +238,38 @@ def main() -> None:
             deduper._deduplicate_keyword_nodes(keyword_mapping)
         else:
             logger.info("No keyword mapping detected; skipping keyword deduplication")
+        
+        # Head entity deduplication
+        head_dedup_config = getattr(config.construction.semantic_dedup, 'head_dedup', None)
+        if head_dedup_config and getattr(head_dedup_config, 'enabled', False):
+            logger.info("Running head entity deduplication")
+            try:
+                head_stats = deduper.deduplicate_heads()
+                logger.info(
+                    "Head dedup: %d entities → %d entities (merged %d, reduced %.1f%%)",
+                    head_stats['initial_entity_count'],
+                    head_stats['final_entity_count'],
+                    head_stats['total_merges'],
+                    head_stats['reduction_rate']
+                )
+            except Exception as e:
+                logger.error(f"Head deduplication failed: {e}")
+                logger.info("Continuing without head deduplication...")
+        else:
+            logger.info("Head entity deduplication is disabled; skipping")
 
     deduped_edge_count = deduper.graph.number_of_edges()
     deduped_keyword_count = sum(1 for _, data in deduper.graph.nodes(data=True) if data.get("label") == "keyword")
+    deduped_entity_count = sum(1 for _, data in deduper.graph.nodes(data=True) if data.get("label") == "entity")
 
     logger.info(
-        "Edges: %d → %d | Keyword nodes: %d → %d",
+        "Edges: %d → %d | Keyword nodes: %d → %d | Entity nodes: %d → %d",
         original_edge_count,
         deduped_edge_count,
         original_keyword_count,
         deduped_keyword_count,
+        original_entity_count,
+        deduped_entity_count,
     )
 
     args.output.parent.mkdir(parents=True, exist_ok=True)
