@@ -11,8 +11,8 @@
 
 | 文件 | 行数/大小 | 作用 | 优先级 |
 |------|----------|------|--------|
-| `config/base_config.yaml` | +70行 | 配置参数 + Prompt模板 | ⭐⭐⭐⭐⭐ |
-| `models/constructor/kt_gen.py` | +750行 | 核心实现（15个方法） | ⭐⭐⭐⭐⭐ |
+| `config/base_config.yaml` | +70行 | 配置参数 + Prompt模板（唯一来源）| ⭐⭐⭐⭐⭐ |
+| `models/constructor/kt_gen.py` | +440行 | 核心实现（14个方法） | ⭐⭐⭐⭐⭐ |
 
 ### 📖 使用文档
 
