@@ -31,6 +31,7 @@
 | `HEAD_DEDUP_LLM_CORE_LOGIC.md` | 20页 | LLM判断逻辑详解 | 算法工程师 |
 | `PROMPT_COMPARISON_HEAD_VS_TAIL_DEDUP.md` | 25页 | 与tail去重对比 | 研究人员 |
 | `PROFESSIONAL_EVALUATION_PROMPTS.md` | 20页 | 专业度客观评估 | 技术Leader |
+| `PROMPT_IN_CONFIG_ONLY.md` ⭐ | 15页 | 为何Prompt只在配置文件 | 所有人 |
 
 ### 💻 代码示例
 
@@ -111,14 +112,14 @@
 ### 代码文件
 - **修改**: 2个文件（kt_gen.py, base_config.yaml）
 - **新增**: 4个文件（3个示例 + 1个测试）
-- **总计**: +约2000行代码
+- **总计**: +约1800行代码（移除fallback后更精简）
 
 ### 文档文件
-- **设计文档**: 4个（~95页）
+- **设计文档**: 5个（~110页，含PROMPT_IN_CONFIG_ONLY.md）
 - **使用文档**: 4个（~35页）
 - **总结文档**: 2个（~10页）
 - **示例说明**: 2个（~15页）
-- **总计**: 12个文档（~155页）
+- **总计**: 13个文档（~170页）
 
 ### 完整列表（按字母顺序）
 
@@ -140,6 +141,7 @@ HEAD节点去重相关文件：
   HEAD_DEDUPLICATION_SOLUTION.md                    [新建] 方案设计
   PROFESSIONAL_EVALUATION_PROMPTS.md                [新建] 专业评估
   PROMPT_COMPARISON_HEAD_VS_TAIL_DEDUP.md          [新建] Prompt对比
+  PROMPT_IN_CONFIG_ONLY.md                          [新建] Prompt设计说明 ⭐
 
 代码示例:
   example_head_deduplication.py                     [新建] 8个示例
@@ -225,7 +227,8 @@ HEAD节点去重相关文件：
 - `HEAD_DEDUP_README.md` → 快速使用章节
 
 **如何自定义Prompt**: 
-- `HEAD_DEDUP_PROMPT_CUSTOMIZATION.md`
+- `HEAD_DEDUP_PROMPT_CUSTOMIZATION.md` - 详细指南
+- `PROMPT_IN_CONFIG_ONLY.md` - 设计原理
 
 **为什么这样设计**: 
 - `HEAD_DEDUPLICATION_SOLUTION.md` → 方案设计原则
