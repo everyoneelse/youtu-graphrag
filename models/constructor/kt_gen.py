@@ -4928,7 +4928,14 @@ class KTBuilder:
             raise ValueError(error_msg)
     
     def _collect_node_context(self, node_id: str, max_relations: int = 10) -> str:
-        """Collect graph relations as context for a node."""
+        """Collect context for a node (graph relations + text chunks).
+        
+        This method now collects both:
+        1. Graph relations (outgoing and incoming edges)
+        2. Original text contexts (chunks where the entity appears)
+        
+        This is consistent with how tail deduplication uses context.
+        """
         config = self.config.construction.semantic_dedup.head_dedup if hasattr(
             self.config.construction.semantic_dedup, 'head_dedup'
         ) else None
@@ -4936,7 +4943,17 @@ class KTBuilder:
         if config:
             max_relations = getattr(config, 'max_relations_context', 10)
         
+        # Check if text context is enabled (default: True for consistency with tail dedup)
+        include_text_context = getattr(config, 'include_text_context', True) if config else True
+        max_text_chunks = getattr(config, 'max_text_chunks', 5) if config else 5
+        chunk_max_chars = getattr(config, 'chunk_max_chars', 200) if config else 200
+        
         contexts = []
+        
+        # =====================================================================
+        # Part 1: Graph Relations (existing functionality)
+        # =====================================================================
+        contexts.append("Graph relations:")
         
         # Outgoing edges
         out_edges = list(self.graph.out_edges(node_id, data=True))[:max_relations]
@@ -4952,7 +4969,57 @@ class KTBuilder:
             head_desc = self._describe_node(head_id)
             contexts.append(f"  • {head_desc} → {relation}")
         
-        return "\n".join(contexts) if contexts else "  (No relations found)"
+        if not out_edges and not in_edges:
+            contexts.append("  (No relations found)")
+        
+        # =====================================================================
+        # Part 2: Original Text Contexts (NEW - consistent with tail dedup)
+        # =====================================================================
+        if include_text_context:
+            contexts.append("\nOriginal text contexts:")
+            
+            # Collect chunk IDs from multiple sources
+            chunk_ids = []
+            
+            # 1. Chunks directly associated with this node
+            chunk_ids.extend(self._collect_node_chunk_ids(node_id))
+            
+            # 2. Chunks from outgoing edges (where this entity is the subject)
+            for _, _, data in out_edges:
+                chunk_ids.extend(self._extract_edge_chunk_ids(data))
+            
+            # 3. Chunks from incoming edges (where this entity is the object)
+            for _, _, data in in_edges:
+                chunk_ids.extend(self._extract_edge_chunk_ids(data))
+            
+            # Remove duplicates while preserving order
+            seen = set()
+            unique_chunk_ids = []
+            for chunk_id in chunk_ids:
+                if chunk_id and chunk_id not in seen:
+                    seen.add(chunk_id)
+                    unique_chunk_ids.append(chunk_id)
+            
+            # Limit number of chunks
+            unique_chunk_ids = unique_chunk_ids[:max_text_chunks]
+            
+            # Generate chunk summaries
+            if unique_chunk_ids:
+                chunk_summaries = self._summarize_contexts(
+                    unique_chunk_ids, 
+                    max_items=max_text_chunks, 
+                    max_chars=chunk_max_chars
+                )
+                
+                if chunk_summaries:
+                    for summary in chunk_summaries:
+                        contexts.append(f"  - {summary}")
+                else:
+                    contexts.append("  (No text contexts available)")
+            else:
+                contexts.append("  (No text contexts available)")
+        
+        return "\n".join(contexts)
     
     def _parse_coreference_response(self, response: str) -> dict:
         """Parse LLM response for coreference decision."""

@@ -82,16 +82,23 @@ construction:
       candidate_similarity_threshold: 0.75
       # Maximum number of relations to include in context for each entity
       max_relations_context: 10
+      
+      # ===== Text Context Configuration (NEW) =====
+      # Include original text chunks as context (consistent with tail deduplication)
+      # true: Use both graph relations AND text chunks (recommended for accuracy)
+      # false: Use only graph relations (faster but less accurate)
+      include_text_context: true
+      # Maximum number of text chunks to include per entity
+      max_text_chunks: 5
+      # Maximum characters per chunk summary
+      chunk_max_chars: 200
+      
       # Export candidates for human review
       export_review: false
       # Confidence range for human review (only export if confidence in this range)
       review_confidence_range: [0.70, 0.90]
       # Output directory for review files
       review_output_dir: "output/review"
-      # Use hybrid context (both graph relations and text chunks)
-      # false: Use only graph relations (recommended, faster)
-      # true: Use both graph relations and text chunks (experimental, slower)
-      use_hybrid_context: false
 
 datasets:
   hotpot:
@@ -337,27 +344,34 @@ prompts:
       You are an expert in knowledge graph entity resolution.
 
       TASK: Determine if the following two entities refer to the SAME real-world object.
+      
+      You will be given TWO types of context for each entity:
+      1. Graph relations - structural connections in the knowledge graph
+      2. Original text contexts - text excerpts where the entity appears
+      
+      Use BOTH sources to make an accurate decision.
 
       Entity 1: {entity_1}
-      Related knowledge about Entity 1:
       {context_1}
 
       Entity 2: {entity_2}
-      Related knowledge about Entity 2:
       {context_2}
 
       CRITICAL RULES:
       1. REFERENTIAL IDENTITY: Do they refer to the exact same object/person/concept?
          - Same entity with different names → YES (e.g., "NYC" = "New York City")
          - Different but related entities → NO (e.g., "Apple Inc." ≠ "Apple Store")
+         - Use BOTH graph relations AND original text to verify identity
 
       2. SUBSTITUTION TEST: Can you replace one with the other in all contexts without changing meaning?
          - If substitution changes information → NO
          - If substitution preserves meaning → YES
+         - Check this against BOTH graph structure and text contexts
 
       3. TYPE CONSISTENCY: Check entity types/categories
-         - Same name, different types → carefully verify with context
+         - Same name, different types → carefully verify with BOTH graph and text
          - Example: "Apple (company)" ≠ "Apple (fruit)"
+         - Original text often provides clear type disambiguation
 
       4. CONSERVATIVE PRINCIPLE:
          - When uncertain → answer NO
@@ -373,10 +387,11 @@ prompts:
       DECISION PROCEDURE:
       For Entity 1 and Entity 2:
         1. Check if names are variations of the same entity (e.g., abbreviations, translations)
-        2. Compare their relation patterns - do they have consistent relationships?
-        3. Look for contradictions - if any key relations conflict, they are DIFFERENT
-        4. Apply substitution test - can they be swapped in all contexts?
-        5. If uncertain → answer NO (conservative principle)
+        2. Compare their graph relation patterns - do they have consistent relationships?
+        3. Examine original text contexts - do they describe the same real-world object?
+        4. Look for contradictions in EITHER graph or text - if any key info conflicts, they are DIFFERENT
+        5. Apply substitution test - can they be swapped in all contexts (graph AND text)?
+        6. If uncertain → answer NO (conservative principle)
 
       OUTPUT FORMAT (strict JSON):
       {{
@@ -387,23 +402,41 @@ prompts:
 
       EXAMPLES:
       
-      Example 1 - SHOULD MERGE:
-      Entity 1: "UN", relations: [founded→1945, member→United States]
-      Entity 2: "United Nations", relations: [established→1945, member→USA]
+      Example 1 - SHOULD MERGE (abbreviation):
+      Entity 1: "UN"
+      Graph relations: [founded→1945, member→United States]
+      Original text: "The UN was established in 1945 to promote international cooperation."
+      
+      Entity 2: "United Nations"
+      Graph relations: [established→1945, member→USA]
+      Original text: "The United Nations is an intergovernmental organization founded after WWII."
+      
       → is_coreferent: true, confidence: 0.95
-      → Rationale: "UN" is abbreviation of "United Nations", consistent founding year and members
+      → Rationale: "UN" is abbreviation of "United Nations". Graph relations are consistent (same founding year, same member country). Text contexts both describe the same international organization.
       
-      Example 2 - SHOULD NOT MERGE:
-      Entity 1: "Apple Inc.", relations: [founded_by→Steve Jobs, produces→iPhone]
-      Entity 2: "Apple Store", relations: [owned_by→Apple Inc., located_in→New York]
+      Example 2 - SHOULD NOT MERGE (related but different):
+      Entity 1: "Apple Inc."
+      Graph relations: [founded_by→Steve Jobs, produces→iPhone]
+      Original text: "Apple Inc. is a technology company that designs consumer electronics."
+      
+      Entity 2: "Apple Store"
+      Graph relations: [owned_by→Apple Inc., located_in→New York]
+      Original text: "The Apple Store on Fifth Avenue is a retail location selling Apple products."
+      
       → is_coreferent: false, confidence: 0.95
-      → Rationale: Different entities - Apple Inc. is company, Apple Store is retail location, ownership relation indicates hierarchy
+      → Rationale: Different entities - Apple Inc. is a company, Apple Store is a retail location. Graph shows ownership relation (store owned by company). Text clearly distinguishes company vs retail store.
       
-      Example 3 - UNCERTAIN (should answer NO):
-      Entity 1: "张三", relations: [works_at→清华大学, age→45]
-      Entity 2: "张三", relations: [studies_at→北京大学, age→22]
+      Example 3 - UNCERTAIN (same name, contradicting info → should answer NO):
+      Entity 1: "张三"
+      Graph relations: [works_at→清华大学, age→45]
+      Original text: "张三是清华大学的教授，已经在学术界工作了20多年。"
+      
+      Entity 2: "张三"
+      Graph relations: [studies_at→北京大学, age→22]
+      Original text: "张三是北京大学的研究生，今年刚刚入学。"
+      
       → is_coreferent: false, confidence: 0.80
-      → Rationale: Same name but different age and occupation suggest different persons (conservative principle applied)
+      → Rationale: Same name but contradicting information. Graph shows different ages (45 vs 22) and different roles (professor vs student). Text contexts confirm they are different persons (professor with 20+ years vs new graduate student). Conservative principle applied.
 
       
   decomposition:
