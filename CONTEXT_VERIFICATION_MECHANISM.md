@@ -1,8 +1,8 @@
-# Context Verification Mechanism for Head Deduplication
+# Context Usage Guidance for Head Deduplication
 
 ## 概述
 
-本文档说明在head_dedup的LLM去重中新增的**Context验证机制**。该机制专门用于验证待去重实体的context信息，确保LLM在做共指决策时能够充分利用和验证上下文信息。
+本文档说明在head_dedup的LLM去重中新增的**Context使用指导**。该机制指导LLM如何使用context信息（关系和源文本）来做更准确的共指判断，而不是验证context本身。
 
 ## 背景
 
@@ -13,75 +13,59 @@
 3. **信息不足时过于激进**: 即使context信息不足，也可能做出合并决策
 4. **缺乏系统化分析**: 没有强制要求LLM系统化地分析context
 
-## 新增的Context验证机制
+## 新增的Context使用指导
 
-### 验证步骤（5个强制步骤）
+Context（关系和源文本）是帮助LLM做共指判断的**额外信息**，而不是需要验证的对象。指导原则如下：
 
-#### Step A: Context Relevance Check (相关性检查)
-验证提供的context信息是否真实描述这两个实体：
-- ✓ 关系和文本是否真的与实体相关
-- ✓ Context信息是否直接相关于比较的实体
-- ✗ 如果context缺失、不相关或过于模糊 → 标注在rationale中并应用保守原则
+### 4个使用原则
 
-#### Step B: Context Consistency Check (一致性检查) 🔴 关键
-检查两个实体的context是否包含矛盾信息：
-- **时间属性冲突**: 成立日期、时期、年龄
-- **空间属性冲突**: 地点、地理信息
-- **类型/类别冲突**: 人 vs 组织，公司 vs 产品
-- **功能角色冲突**: 创始人 vs 员工，父公司 vs 子公司
-- **数量属性冲突**: 不同的规模、人口、数量
+#### 1. **识别矛盾信息** (Identify contradictions)
+如果contexts揭示了两个实体的矛盾信息 → 它们是不同实体，回答NO
 
-**规则**: 如果存在**任何**关键矛盾 → 它们是不同实体，回答NO
+示例：
+- 年龄矛盾：45岁 vs 22岁
+- 角色矛盾：教授 vs 学生
+- 所属机构矛盾：清华大学 vs 北京大学
 
-#### Step C: Context Completeness Assessment (完整性评估)
-评估提供的context是否足够做出可靠的共指决策：
-- **高置信度**: 多个一致的关系，清晰的context
-- **中置信度**: 一些关系，部分context
-- **低置信度**: 最少的信息，不清晰的context
+#### 2. **寻找支持证据** (Find supporting evidence)
+如果contexts显示一致且互补的信息 → 支持共指假设
 
-**规则**: 如果信息不足且不确定性高 → 应用保守原则（回答NO）
+示例：
+- 成立时间一致：founded→1945, established→1945
+- 成员信息一致：member→United States, member→USA
 
-#### Step D: Relationship Pattern Analysis (关系模式分析)
-比较两个实体的关系模式：
-- 是否共享共同的关系类型？
-- 共享的关系是否与"同一实体"假设一致？
-- 关系目标是否对齐还是冲突？
+#### 3. **评估信息充分性** (Assess information sufficiency)
+如果context信息过于有限，无法做出可靠判断 → 应用保守原则，回答NO
 
-**强共指证据**:
-- 多个重叠关系且目标相同或等价
-- 关系形成一致且连贯的模式
-- 无冲突的关系信息
+示例：
+- 仅有通用属性：age→30, gender→male
+- 缺乏区分性信息
 
-**反共指证据**:
-- 关系暗示层级结构（所有者-被所有，父-子）
-- 关系描述不同的范围或领域
-- 关系目标相互矛盾
+#### 4. **识别层级关系** (Recognize hierarchical relationships)
+如果context显示一个实体拥有/包含/管理另一个实体 → 它们是不同实体，回答NO
 
-#### Step E: Source Text Validation (源文本验证)
-当启用`hybrid_context`时验证源文本：
-- 文本是否真的提到这些实体名称？
-- 文本context是否支持或反驳共指假设？
-- 实体在源文本中的使用方式是否相似或不同？
+示例：
+- owned_by关系：Apple Store owned_by Apple Inc.
+- 子公司关系：subsidiary_of
 
-**强文本证据**:
-- 实体在文本中可互换使用
-- 文本明确陈述等价性（例如："也被称为"，"缩写为"）
-- 跨文本的一致使用模式
+### 重要原则
+
+**不要验证context本身** - 信任并使用context来做更好的共指决策
 
 ### 决策流程
 
 ```
-PHASE 1: CONTEXT VERIFICATION (执行步骤 A-E)
-  → 验证context相关性、一致性、完整性
-  → 分析关系模式和源文本
-  → 记录发现的任何问题或顾虑
+PHASE 1: USE CONTEXT TO INFORM COREFERENCE DECISION (使用context辅助共指判断)
+  → 使用提供的context识别矛盾或支持证据
+  → 如果context揭示矛盾或层级关系 → 不同实体
+  → 如果context信息不足 → 应用保守原则
 
 PHASE 2: COREFERENCE DETERMINATION (共指判断)
   → 检查名称是否为同一实体的变体
-  → 验证关系模式是否一致
-  → 查找矛盾 - 如有任何关键关系冲突 → 不同实体
+  → 使用context验证关系模式是否一致
+  → 查找context中的矛盾 - 如有任何关键信息冲突 → 不同实体
   → 应用替换测试
-  → 如果在context验证后仍不确定 → 回答NO
+  → 如果不确定 → 回答NO
 
 PHASE 3: REPRESENTATIVE SELECTION (代表选择)
   → 仅在确定共指后执行
@@ -91,7 +75,7 @@ PHASE 3: REPRESENTATIVE SELECTION (代表选择)
 ### 输出要求
 
 rationale必须包含三部分：
-1. **Context验证摘要** (步骤A-E的结果)
+1. **如何使用context** (怎样利用context信息做判断)
 2. **共指决策推理**
 3. **如果共指，代表选择推理**
 
@@ -112,7 +96,7 @@ Relations: [established→1945, member→USA]
 {
   "is_coreferent": true,
   "preferred_representative": "entity_100",
-  "rationale": "(Context Verification) Step A: Context相关，都描述国际组织。Step B: 一致 - 成立年份1945匹配，成员对齐。Step C: 信息充足，共5个关系。Step D: 强模式对齐。Step E: N/A。(Coreference) 'UN'是'United Nations'的标准缩写，所有关系一致，通过替换测试。(Representative) 选择entity_100 (UN)：(1)更多关系(3 vs 2)，(2)'UN'是国际关系语境中广泛认可的标准形式。"
+  "rationale": "(Context Usage) Contexts显示一致信息：成立年份1945匹配，成员对齐(United States/USA指同一国家)。未发现矛盾。Context支持这是同一实体的不同名称形式。(Coreference) 'UN'是'United Nations'的标准缩写，所有关系一致。(Representative) 选择entity_100 (UN)：(1)更多关系(3 vs 2)，(2)'UN'是广泛认可的标准形式。"
 }
 ```
 
@@ -131,7 +115,7 @@ Relations: [studies_at→北京大学, age→22, status→学生]
 {
   "is_coreferent": false,
   "preferred_representative": null,
-  "rationale": "(Context Verification) Step A: Contexts相关。Step B: 关键矛盾 - 年龄不同(45 vs 22)，角色冲突(教授 vs 学生)，不同机构。Step C: 充足信息显示冲突。Step D: 完全不同的模式。(Decision) Context验证揭示矛盾，它们是不同的同名人物。应用保守原则。"
+  "rationale": "(Context Usage) Contexts揭示关键矛盾：年龄不同(45 vs 22)，一个是清华大学教授，另一个是北京大学学生。这些矛盾表明它们是同名不同人。(Decision) 同名但context信息矛盾。应用保守原则。"
 }
 ```
 
@@ -150,7 +134,7 @@ Relations: [gender→male]
 {
   "is_coreferent": false,
   "preferred_representative": null,
-  "rationale": "(Context Verification) Step A: 最小context。Step B: 无矛盾但也无确认信息。Step C: 信息不足 - 仅2个通用属性，无法可靠确定身份。Step D: 无有意义的模式。(Decision) context不足无法做出可靠决策，应用保守原则避免错误合并。"
+  "rationale": "(Context Usage) Contexts提供非常有限的信息：仅通用属性(年龄30、性别男)，很多人共享这些属性。无区分性信息来可靠判断是否同一人。(Decision) Context不足无法做出可靠决策。保守原则：回答NO避免错误合并。"
 }
 ```
 
@@ -208,19 +192,18 @@ stats = builder.deduplicate_heads_with_llm_v2(
 
 ## 优势
 
-1. **系统化验证**: 强制LLM系统化地检查context的各个方面
-2. **减少错误合并**: 通过一致性检查捕获矛盾信息
+1. **简洁清晰**: 不列举具体检查项，给LLM更多判断空间
+2. **减少错误合并**: 强调识别矛盾信息和层级关系
 3. **保守原则**: 在信息不足时明确要求保守决策
-4. **可追溯性**: rationale中必须包含验证结果，便于审计
+4. **正确定位**: Context是辅助信息，不是验证对象
 5. **混合context利用**: 充分利用图关系和文本chunk的信息
 6. **层级关系识别**: 专门识别所有权、父子等层级关系，避免错误合并
 
 ## 注意事项
 
-1. **Token消耗**: Context验证会增加prompt长度，特别是在`use_hybrid_context=True`时
-2. **处理时间**: 更详细的验证可能略微增加LLM处理时间
-3. **保守倾向**: 机制设计偏向保守，可能减少一些真实的合并，但减少错误合并
-4. **Step E可选**: 源文本验证仅在`use_hybrid_context=True`时适用
+1. **Token消耗**: Context会增加prompt长度，特别是在`use_hybrid_context=True`时
+2. **保守倾向**: 机制设计偏向保守，可能减少一些真实的合并，但减少错误合并
+3. **信任context**: 不要让LLM质疑context的相关性或质量，直接使用它来辅助判断
 
 ## 验证状态
 

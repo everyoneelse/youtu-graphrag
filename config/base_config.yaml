@@ -452,69 +452,34 @@ prompts:
       ✗ Shared relations: Both have similar relations → need comprehensive match
       ✗ Partial overlap: Some relations match → need ALL key relations to match
       
-      CONTEXT VERIFICATION (MANDATORY - Must execute for every comparison):
+      CONTEXT USAGE GUIDANCE (MANDATORY):
       
-      Use the provided context (relationships and source text) to make informed coreference decisions:
+      The provided context (relationships and source text) is additional information to help you determine coreference. Use it wisely:
       
-      Step A: **Context Consistency Check** (CRITICAL for avoiding false merges)
-         ✓ Do the two entities' contexts contain contradictory information?
-         ✓ Check for conflicts in:
-            - Temporal attributes (founding dates, time periods, ages)
-            - Spatial attributes (locations, geographic information)
-            - Type/category information (person vs organization, company vs product)
-            - Functional roles (founder vs employee, parent vs subsidiary)
-            - Quantitative attributes (different sizes, populations, counts)
-         ✗ If ANY key contradiction exists → they are DIFFERENT entities, answer NO
-         ✓ If contexts are consistent or complementary → proceed to next step
-         
-      Step B: **Context Completeness Assessment**
-         ✓ Is the provided context sufficient to make a reliable coreference decision?
-         ✓ Assess information quality:
-            - High confidence: Multiple consistent relationships, clear context
-            - Medium confidence: Some relationships, partial context
-            - Low confidence: Minimal information, unclear context
-         ✗ If information is insufficient and uncertainty is high → apply CONSERVATIVE PRINCIPLE (answer NO)
-         
-      Step C: **Relationship Pattern Analysis**
-         ✓ Compare the relationship patterns of both entities:
-            - Do they share common relationship types?
-            - Are the shared relationships consistent with being the same entity?
-            - Do relationship targets align or conflict?
-         ✓ Strong evidence for coreference:
-            - Multiple overlapping relationships with same or equivalent targets
-            - Relationships form consistent and coherent pattern
-            - No conflicting relationship information
-         ✗ Evidence against coreference:
-            - Relationships suggest hierarchical structure (owner-owned, parent-child)
-            - Relationships describe different scopes or domains
-            - Relationship targets are contradictory
+      1. **Identify contradictions**: If the contexts reveal contradictory information about the two entities, they are DIFFERENT entities → answer NO
       
-      Step D: **Source Text Validation** (when hybrid_context is enabled)
-         ✓ If source text chunks are provided, verify:
-            - Does the text context support or contradict the coreference hypothesis?
-            - Are the entities used in similar or different ways in their source texts?
-         ✓ Strong textual evidence:
-            - Entities are used interchangeably in text
-            - Text explicitly states equivalence (e.g., "also known as", "abbreviated as")
-            - Consistent usage patterns across texts
-         ✗ Weak or contradictory textual evidence → be more conservative
+      2. **Find supporting evidence**: If the contexts show consistent and complementary information, it supports the coreference hypothesis
+      
+      3. **Assess information sufficiency**: If context is too limited to make a confident decision, apply CONSERVATIVE PRINCIPLE → answer NO
+      
+      4. **Recognize hierarchical relationships**: If context shows one entity owns/contains/manages the other (e.g., company vs subsidiary, organization vs department), they are DIFFERENT entities → answer NO
+      
+      IMPORTANT: Do NOT verify the context itself - trust it and USE it to make better coreference decisions.
       
       DECISION PROCEDURE:
       For Entity 1 and Entity 2, follow these steps IN ORDER:
         
-        PHASE 1: CONTEXT VERIFICATION (Execute Steps A-D above)
-          → Check context consistency for contradictions
-          → Assess context completeness and information quality
-          → Analyze relationship patterns
-          → Validate source text evidence (if available)
-          → Document any issues or concerns found
+        PHASE 1: USE CONTEXT TO INFORM COREFERENCE DECISION
+          → Use the provided context (relationships and source text) to identify contradictions or supporting evidence
+          → If context reveals contradictions or hierarchical relationships → they are DIFFERENT
+          → If context is insufficient → apply conservative principle
         
         PHASE 2: COREFERENCE DETERMINATION
           Step 1: Check if names are variations of the same entity (e.g., abbreviations, translations)
-          Step 2: Verify relation patterns are consistent (not just similar, but CONSISTENT)
-          Step 3: Look for contradictions - if ANY key relations conflict → they are DIFFERENT
+          Step 2: Use context to verify relation patterns are consistent (not just similar, but CONSISTENT)
+          Step 3: Look for contradictions in context - if ANY key information conflicts → they are DIFFERENT
           Step 4: Apply substitution test - can they be swapped in ALL contexts?
-          Step 5: If uncertain after context verification → answer NO (conservative principle)
+          Step 5: If uncertain → answer NO (conservative principle)
         
         PHASE 3: REPRESENTATIVE SELECTION (only if coreferent)
           Choose PRIMARY REPRESENTATIVE based on:
@@ -528,7 +493,7 @@ prompts:
       {{
         "is_coreferent": true/false,
         "preferred_representative": "{entity_1_id}" or "{entity_2_id}" or null,
-        "rationale": "MUST include: (1) Context verification summary (Steps A-D results), (2) Coreference decision reasoning, (3) If coreferent, representative selection reasoning"
+        "rationale": "MUST include: (1) How you used the context to inform your decision, (2) Coreference decision reasoning, (3) If coreferent, representative selection reasoning"
       }}
 
       IMPORTANT:
@@ -536,42 +501,42 @@ prompts:
       - If "is_coreferent" is false, set "preferred_representative" to null
       - The "preferred_representative" must be exactly "{entity_1_id}" or "{entity_2_id}"
 
-      EXAMPLES (with Context Verification):
+      EXAMPLES (demonstrating context usage):
       
-      Example 1 - SHOULD MERGE (abbreviation case with context verification):
+      Example 1 - SHOULD MERGE (context supports with consistent information):
       Entity 1 (entity_100): "UN", relations: [founded→1945, member→United States, headquarters→New York]
       Entity 2 (entity_150): "United Nations", relations: [established→1945, member→USA]
       → is_coreferent: true
       → preferred_representative: "entity_100"
-      → Rationale: "(Context Verification) Step A: Consistent - founding year 1945 matches (founded/established are equivalent), members align (United States/USA are same), no contradictions. Step B: Sufficient information with 5 total relationships providing clear evidence. Step C: Strong pattern alignment - organizational founding and membership info overlap. Step D: N/A (no source text provided). (Coreference) 'UN' is standard abbreviation of 'United Nations', all relationships consistent, pass substitution test. (Representative) Choose entity_100 (UN) because: (1) more relationships (3 vs 2), (2) 'UN' is the widely recognized standard form in international relations context."
+      → Rationale: "(Context Usage) The contexts show consistent information: founding year 1945 matches (founded/established are equivalent), members align (United States/USA refer to same country). No contradictions found. The contexts support that these are the same entity with different name forms. (Coreference) 'UN' is standard abbreviation of 'United Nations', all relationships consistent, pass substitution test. (Representative) Choose entity_100 (UN) because: (1) more relationships (3 vs 2), (2) 'UN' is the widely recognized standard form in international relations context."
       
       Example 2 - SHOULD NOT MERGE (context reveals hierarchical relationship):
       Entity 1 (entity_200): "Apple Inc.", relations: [founded_by→Steve Jobs, produces→iPhone, type→公司]
       Entity 2 (entity_250): "Apple Store", relations: [owned_by→Apple Inc., located_in→New York, type→零售店]
       → is_coreferent: false
       → preferred_representative: null
-      → Rationale: "(Context Verification) Step A: CRITICAL INCONSISTENCY - type conflict (公司 vs 零售店), ownership relation reveals hierarchy not identity. Step B: Sufficient information showing they're different entities. Step C: Relationship patterns show hierarchical structure (owned_by→Apple Inc.), not coreference. Step D: N/A. (Coreference Decision) Different entities: Apple Inc. is the company, Apple Store is a retail location owned by the company. Hierarchical relationship ≠ identity. Type consistency fails. Substitution test fails - cannot replace 'founded by Steve Jobs' with Apple Store context."
+      → Rationale: "(Context Usage) Context reveals hierarchical relationship: 'owned_by→Apple Inc.' shows Apple Store is owned by Apple Inc., not the same entity. Type information confirms: 公司 (company) vs 零售店 (retail store) are different categories. This is owner-owned relationship, not identity. (Coreference Decision) Different entities. Substitution test fails - cannot replace 'Apple Inc. founded by Steve Jobs' with 'Apple Store' context."
       
       Example 3 - SHOULD NOT MERGE (context shows contradictions):
       Entity 1 (entity_300): "张三", relations: [works_at→清华大学, age→45, position→教授]
       Entity 2 (entity_350): "张三", relations: [studies_at→北京大学, age→22, status→学生]
       → is_coreferent: false
       → preferred_representative: null
-      → Rationale: "(Context Verification) Step A: CRITICAL CONTRADICTIONS - age differs (45 vs 22), role conflict (教授 vs 学生), institution differs (清华 vs 北大), activity differs (works vs studies). Step B: Sufficient information showing conflicts. Step C: Completely different relationship patterns. Step D: N/A. (Coreference Decision) Same name but contradictory attributes and roles suggest different persons. Multiple contradictions fail consistency check. Conservative principle: when uncertain with contradictions, answer NO."
+      → Rationale: "(Context Usage) Contexts reveal critical contradictions: age differs (45 vs 22), one is professor at Tsinghua while other is student at Peking University. These contradictions indicate different persons with the same name. (Coreference Decision) Same name but contradictory context information. Conservative principle applied: answer NO."
       
-      Example 4 - SHOULD MERGE (formal vs colloquial, context supports):
+      Example 4 - SHOULD MERGE (context shows complementary information):
       Entity 1 (entity_400): "北京", relations: [population→21M]
       Entity 2 (entity_450): "北京市", relations: [capital_of→中国, area→16410km², governor→..., founded→1045]
       → is_coreferent: true
       → preferred_representative: "entity_450"
-      → Rationale: "(Context Verification) Step A: Consistent - no contradictions, complementary information (population + administrative info for same geographic location). Step B: Entity 2 has significantly richer context (4 relationships vs 1), sufficient for reliable decision. Step C: Relationships are consistent with being the same city, just different completeness levels. Step D: N/A. (Coreference) '北京' is colloquial, '北京市' is official administrative name for China's capital. Geographic references align, information is complementary not contradictory, pass substitution test. (Representative) Choose entity_450 (北京市): (1) official administrative name, (2) significantly more comprehensive relationships (4 vs 1), (3) authoritative representative for formal knowledge graph."
+      → Rationale: "(Context Usage) Contexts show complementary information about the same geographic location: population data and administrative details are consistent with being the same city. No contradictions found. '北京' is colloquial form, '北京市' is official administrative name. (Coreference) Pass substitution test. (Representative) Choose entity_450 (北京市): (1) official administrative name, (2) significantly more comprehensive relationships (4 vs 1)."
       
-      Example 5 - INSUFFICIENT CONTEXT (should answer NO conservatively):
+      Example 5 - INSUFFICIENT CONTEXT (conservative principle):
       Entity 1 (entity_500): "李明", relations: [age→30]
       Entity 2 (entity_550): "李明", relations: [gender→male]
       → is_coreferent: false
       → preferred_representative: null
-      → Rationale: "(Context Verification) Step A: No contradictions but also no confirming information. Step B: INSUFFICIENT - only 2 generic attributes, no distinctive information to reliably determine identity. Step C: No meaningful relationship pattern overlap. Step D: N/A. (Coreference Decision) Same name but extremely limited context. Age 30 and male gender don't provide enough distinctive information - many people share these attributes. Conservative principle: insufficient information for reliable decision, answer NO to avoid false merge."
+      → Rationale: "(Context Usage) Contexts provide very limited information: only generic attributes (age 30, gender male) that many people share. No distinctive information to confidently determine if they are the same person. (Coreference Decision) Insufficient context for reliable decision. Conservative principle: answer NO to avoid false merge."
 
 
   
