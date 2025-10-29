@@ -15,7 +15,11 @@
 
 ## 新增的Context使用指导
 
-Context（关系和源文本）是帮助LLM做共指判断的**额外信息**，而不是需要验证的对象。指导原则如下：
+Context包含两部分信息，在prompt中明确区分：
+1. **Graph relationships**（图谱关系）：实体的结构化关系信息
+2. **Source text**（源文本）：实体所在的原始chunk文本
+
+这两种信息是帮助LLM做共指判断的**额外信息**，而不是需要验证的对象。指导原则如下：
 
 ### 4个使用原则
 
@@ -141,21 +145,24 @@ Relations: [gender→male]
 ## 修改的文件
 
 ### 1. `/workspace/config/base_config.yaml`
-- 在`prompts.head_dedup.with_representative_selection`中添加了完整的Context验证机制
-- 更新了DECISION PROCEDURE，明确分为3个PHASE
-- 更新了OUTPUT FORMAT的rationale要求
-- 添加了5个包含context验证的示例
+- 在prompt中明确区分`{graph_context_1/2}`和`{chunk_context_1/2}`
+- 添加了"Graph relationships:"和"Source text:"标签
+- 更新了Context使用指导
+- 更新了示例说明
 
 ### 2. `/workspace/config_llm_driven_representative_example.yaml`
-- 添加了完整的Context验证步骤（Steps A-E）
-- 更新了DECISION PROCEDURE
-- 更新了OUTPUT FORMAT的rationale要求
+- 同步修改prompt，区分graph relationships和source text
+- 更新了Context使用指导
 
 ### 3. `/workspace/HEAD_DEDUP_LLM_REPRESENTATIVE_SELECTION.md`
-- 重构了文档结构，添加了"CONTEXT VERIFICATION (MANDATORY)"部分
-- 详细说明了5个验证步骤
-- 添加了包含context验证的完整示例
-- 明确了决策流程的3个阶段
+- 更新prompt模板，区分两种context信息
+- 更新文档说明
+
+### 4. `/workspace/head_dedup_llm_driven_representative.py`
+- 修改`_build_head_dedup_prompt_v2()`方法
+- 分别传入`graph_context_1/2`和`chunk_context_1/2`
+- 当`use_hybrid_context=False`时，chunk_context显示为"(Not available)"
+- 更新`_get_embedded_prompt_template_v2()`函数签名
 
 ## 使用方法
 
@@ -182,13 +189,13 @@ stats = builder.deduplicate_heads_with_llm_v2(
 )
 ```
 
-### Context验证的自动执行
+### Context的自动收集和区分
 
 当使用`_build_head_dedup_prompt_v2()`方法时：
-1. 自动收集图关系context (`_collect_node_context()`)
-2. 如果`use_hybrid_context=True`，自动添加chunk text context (`_collect_chunk_context()`)
-3. 将完整context填充到prompt模板
-4. LLM按照prompt中的强制步骤执行context验证
+1. 自动收集图关系context (`_collect_node_context()`) → 填充到`{graph_context_1}`和`{graph_context_2}`
+2. 如果`use_hybrid_context=True`，自动收集chunk text context (`_collect_chunk_context()`) → 填充到`{chunk_context_1}`和`{chunk_context_2}`
+3. 如果`use_hybrid_context=False`，chunk_context显示为"(Not available)"
+4. Prompt中明确区分"Graph relationships"和"Source text"，让LLM清楚知道信息来源
 
 ## 优势
 

@@ -419,12 +419,16 @@ prompts:
       TASK: Determine if the following two entities refer to the SAME real-world object, and if so, which one should be the PRIMARY REPRESENTATIVE.
 
       Entity 1 (ID: {entity_1_id}): {entity_1_desc}
-      Related knowledge about Entity 1:
-      {context_1}
+      Graph relationships:
+      {graph_context_1}
+      Source text:
+      {chunk_context_1}
 
       Entity 2 (ID: {entity_2_id}): {entity_2_desc}
-      Related knowledge about Entity 2:
-      {context_2}
+      Graph relationships:
+      {graph_context_2}
+      Source text:
+      {chunk_context_2}
 
       CRITICAL RULES:
 
