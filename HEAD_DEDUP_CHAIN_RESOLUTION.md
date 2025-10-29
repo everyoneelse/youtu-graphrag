@@ -229,6 +229,61 @@ def _revise_representative_selection(
 
 ---
 
+## 最简化版本（不考虑频率）
+
+如果**只想解决链式等价问题**，不需要频率优化，可以使用这个最简化版本：
+
+```python
+def resolve_chain_mapping_simple(merge_mapping: dict) -> dict:
+    """
+    最简化的链式解析 - 只需要find + union
+    
+    ⚠️ 关键：find()本身不够！必须先union()建立关系，再find()查找结果
+    
+    Example:
+        输入: {'A': 'B', 'B': 'C'}
+        输出: {'A': 'C', 'B': 'C'}
+    """
+    parent = {}
+    
+    def find(x):
+        """查找x的最终root（带路径压缩）"""
+        if x not in parent:
+            parent[x] = x
+        if parent[x] != x:
+            parent[x] = find(parent[x])  # 递归查找 + 路径压缩
+        return parent[x]
+    
+    def union(x, y):
+        """合并x和y所在的集合"""
+        root_x = find(x)
+        root_y = find(y)
+        if root_x != root_y:
+            parent[root_x] = root_y
+    
+    # ✅ 步骤1: 必须先用union建立所有关系
+    for duplicate, canonical in merge_mapping.items():
+        union(duplicate, canonical)
+    
+    # ✅ 步骤2: 用find查找每个duplicate的最终canonical
+    resolved_mapping = {}
+    for duplicate in merge_mapping.keys():
+        final_canonical = find(duplicate)
+        if duplicate != final_canonical:
+            resolved_mapping[duplicate] = final_canonical
+    
+    return resolved_mapping
+```
+
+**为什么find()不够？**
+- find()只能查找已存在的parent关系
+- 必须先用union()建立parent结构
+- 否则parent字典是空的，find()只能返回自己
+
+详细解释请看：`WHY_FIND_NOT_ENOUGH.md` 和示例代码 `simple_chain_resolution_example.py`
+
+---
+
 ## 推荐使用方式
 
 ### 对于LLM驱动的去重（推荐）
