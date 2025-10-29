@@ -91,41 +91,56 @@ IMPORTANT NOTES:
 
 ## Examples Demonstrating Context Usage
 
-### Example 1: SHOULD MERGE (context supports with consistent information)
-Entity 1 (entity_100): "UN", relations: [founded→1945, member→United States]
-Entity 2 (entity_150): "United Nations", relations: [established→1945, member→USA]
+### Example 1: SHOULD MERGE (consistent information)
+```
+Entity 1 (entity_100): "UN"
+Graph relationships:
+  • founded → 1945
+  • member → United States
+Source text:
+  (Not available)
+
+Entity 2 (entity_150): "United Nations"
+Graph relationships:
+  • established → 1945
+  • member → USA
+Source text:
+  (Not available)
+```
 
 Output:
 ```json
 {
   "is_coreferent": true,
   "preferred_representative": "entity_100",
-  "rationale": "(Context Usage) Contexts show consistent information: founding year 1945 matches, members align (United States/USA refer to same country). No contradictions found. Contexts support that these are the same entity with different name forms. (Coreference) 'UN' is standard abbreviation of 'United Nations'. (Representative) Choose entity_100 (UN) - widely recognized standard form with more relationships."
+  "rationale": "(Context Usage) Graph relationships show consistent information: founding year matches, members align. No contradictions. (Coreference) 'UN' is standard abbreviation of 'United Nations'. (Representative) Choose entity_100: more relationships and widely recognized form."
 }
 ```
 
-### Example 2: SHOULD NOT MERGE (context reveals contradictions)
-Entity 1 (entity_300): "张三", relations: [works_at→清华大学, age→45, position→教授]
-Entity 2 (entity_350): "张三", relations: [studies_at→北京大学, age→22, status→学生]
+### Example 2: SHOULD NOT MERGE (contradictions)
+```
+Entity 1 (entity_300): "张三"
+Graph relationships:
+  • works_at → 清华大学
+  • age → 45
+  • position → 教授
+Source text:
+  (Not available)
+
+Entity 2 (entity_350): "张三"
+Graph relationships:
+  • studies_at → 北京大学
+  • age → 22
+  • status → 学生
+Source text:
+  (Not available)
+```
 
 Output:
 ```json
 {
   "is_coreferent": false,
   "preferred_representative": null,
-  "rationale": "(Context Usage) Contexts reveal critical contradictions: age differs (45 vs 22), one is professor at Tsinghua while other is student at Peking University. These contradictions indicate different persons with the same name. (Decision) Same name but contradictory context information. Conservative principle applied."
-}
-```
-
-### Example 3: INSUFFICIENT CONTEXT (conservative principle)
-Entity 1 (entity_500): "李明", relations: [age→30]
-Entity 2 (entity_550): "李明", relations: [gender→male]
-
-Output:
-```json
-{
-  "is_coreferent": false,
-  "preferred_representative": null,
-  "rationale": "(Context Usage) Contexts provide very limited information: only generic attributes that many people share. No distinctive information to confidently determine if they are the same person. (Decision) Insufficient context for reliable decision. Conservative principle: answer NO to avoid false merge."
+  "rationale": "(Context Usage) Graph relationships show contradictions: age (45 vs 22), role (教授 vs 学生), different institutions. (Decision) Same name but different persons. Conservative principle applied."
 }
 ```

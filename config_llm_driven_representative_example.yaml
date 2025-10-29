@@ -120,7 +120,27 @@ prompts:
       - Set "preferred_representative" ONLY if "is_coreferent" is true
       - If "is_coreferent" is false, set "preferred_representative" to null
       - The "preferred_representative" must be exactly one of: "{entity_1_id}" or "{entity_2_id}"
-      - Always include context verification results in rationale to demonstrate thorough analysis
+      - Always explain how context informed your decision
+
+      EXAMPLE:
+      Entity 1 (entity_100): "UN"
+      Graph relationships:
+        • founded → 1945
+        • member → United States
+      Source text:
+        (Not available)
+      
+      Entity 2 (entity_150): "United Nations"
+      Graph relationships:
+        • established → 1945
+      Source text:
+        (Not available)
+      
+      → Output: {{
+        "is_coreferent": true,
+        "preferred_representative": "entity_100",
+        "rationale": "(Context Usage) Graph relationships consistent: founding year matches. (Coreference) 'UN' is abbreviation of 'United Nations'. (Representative) Choose entity_100: more relationships."
+      }}
 
 # Example usage in code:
 # 

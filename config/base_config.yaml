@@ -510,40 +510,65 @@ prompts:
 
       EXAMPLES (demonstrating context usage):
       
-      Example 1 - SHOULD MERGE (context supports with consistent information):
-      Entity 1 (entity_100): "UN", relations: [founded→1945, member→United States, headquarters→New York]
-      Entity 2 (entity_150): "United Nations", relations: [established→1945, member→USA]
+      Example 1 - SHOULD MERGE (consistent information):
+      Entity 1 (entity_100): "UN"
+      Graph relationships:
+        • founded → 1945
+        • member → United States
+        • headquarters → New York
+      Source text:
+        (Not available)
+      
+      Entity 2 (entity_150): "United Nations"
+      Graph relationships:
+        • established → 1945
+        • member → USA
+      Source text:
+        (Not available)
+      
       → is_coreferent: true
       → preferred_representative: "entity_100"
-      → Rationale: "(Context Usage) The contexts show consistent information: founding year 1945 matches (founded/established are equivalent), members align (United States/USA refer to same country). No contradictions found. The contexts support that these are the same entity with different name forms. (Coreference) 'UN' is standard abbreviation of 'United Nations', all relationships consistent, pass substitution test. (Representative) Choose entity_100 (UN) because: (1) more relationships (3 vs 2), (2) 'UN' is the widely recognized standard form in international relations context."
+      → Rationale: "(Context Usage) Graph relationships show consistent information: founding year 1945 matches, members align. No contradictions. (Coreference) 'UN' is standard abbreviation of 'United Nations'. (Representative) Choose entity_100: more relationships and widely recognized form."
       
-      Example 2 - SHOULD NOT MERGE (context reveals hierarchical relationship):
-      Entity 1 (entity_200): "Apple Inc.", relations: [founded_by→Steve Jobs, produces→iPhone, type→公司]
-      Entity 2 (entity_250): "Apple Store", relations: [owned_by→Apple Inc., located_in→New York, type→零售店]
+      Example 2 - SHOULD NOT MERGE (hierarchical relationship):
+      Entity 1 (entity_200): "Apple Inc."
+      Graph relationships:
+        • founded_by → Steve Jobs
+        • type → 公司
+      Source text:
+        (Not available)
+      
+      Entity 2 (entity_250): "Apple Store"
+      Graph relationships:
+        • owned_by → Apple Inc.
+        • type → 零售店
+      Source text:
+        (Not available)
+      
       → is_coreferent: false
       → preferred_representative: null
-      → Rationale: "(Context Usage) Context reveals hierarchical relationship: 'owned_by→Apple Inc.' shows Apple Store is owned by Apple Inc., not the same entity. Type information confirms: 公司 (company) vs 零售店 (retail store) are different categories. This is owner-owned relationship, not identity. (Coreference Decision) Different entities. Substitution test fails - cannot replace 'Apple Inc. founded by Steve Jobs' with 'Apple Store' context."
+      → Rationale: "(Context Usage) Graph relationships reveal hierarchical: 'owned_by→Apple Inc.' shows ownership, not identity. Different types (公司 vs 零售店). (Decision) Different entities with hierarchical relationship."
       
-      Example 3 - SHOULD NOT MERGE (context shows contradictions):
-      Entity 1 (entity_300): "张三", relations: [works_at→清华大学, age→45, position→教授]
-      Entity 2 (entity_350): "张三", relations: [studies_at→北京大学, age→22, status→学生]
+      Example 3 - SHOULD NOT MERGE (contradictions):
+      Entity 1 (entity_300): "张三"
+      Graph relationships:
+        • works_at → 清华大学
+        • age → 45
+        • position → 教授
+      Source text:
+        (Not available)
+      
+      Entity 2 (entity_350): "张三"
+      Graph relationships:
+        • studies_at → 北京大学
+        • age → 22
+        • status → 学生
+      Source text:
+        (Not available)
+      
       → is_coreferent: false
       → preferred_representative: null
-      → Rationale: "(Context Usage) Contexts reveal critical contradictions: age differs (45 vs 22), one is professor at Tsinghua while other is student at Peking University. These contradictions indicate different persons with the same name. (Coreference Decision) Same name but contradictory context information. Conservative principle applied: answer NO."
-      
-      Example 4 - SHOULD MERGE (context shows complementary information):
-      Entity 1 (entity_400): "北京", relations: [population→21M]
-      Entity 2 (entity_450): "北京市", relations: [capital_of→中国, area→16410km², governor→..., founded→1045]
-      → is_coreferent: true
-      → preferred_representative: "entity_450"
-      → Rationale: "(Context Usage) Contexts show complementary information about the same geographic location: population data and administrative details are consistent with being the same city. No contradictions found. '北京' is colloquial form, '北京市' is official administrative name. (Coreference) Pass substitution test. (Representative) Choose entity_450 (北京市): (1) official administrative name, (2) significantly more comprehensive relationships (4 vs 1)."
-      
-      Example 5 - INSUFFICIENT CONTEXT (conservative principle):
-      Entity 1 (entity_500): "李明", relations: [age→30]
-      Entity 2 (entity_550): "李明", relations: [gender→male]
-      → is_coreferent: false
-      → preferred_representative: null
-      → Rationale: "(Context Usage) Contexts provide very limited information: only generic attributes (age 30, gender male) that many people share. No distinctive information to confidently determine if they are the same person. (Coreference Decision) Insufficient context for reliable decision. Conservative principle: answer NO to avoid false merge."
+      → Rationale: "(Context Usage) Graph relationships show contradictions: age (45 vs 22), role (教授 vs 学生), institution differs. (Decision) Same name but different persons. Conservative principle applied."
 
 
   
