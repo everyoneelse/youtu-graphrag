@@ -339,74 +339,82 @@ prompts:
   # Head node deduplication prompt (for entity coreference resolution)
   head_dedup:
     general: |-
-      You are an expert in knowledge graph entity resolution.
+      You are an expert in knowledge graph entity deduplication.
 
-      TASK: Determine if the following two entities refer to the SAME real-world object.
+      TASK: Determine if the following two entities are COREFERENT (refer to the exact same real-world object).
 
       Entity 1: {entity_1}
-      Related knowledge about Entity 1:
+      Related knowledge about Entity 1 (graph relations and source text):
       {context_1}
 
       Entity 2: {entity_2}
-      Related knowledge about Entity 2:
+      Related knowledge about Entity 2 (graph relations and source text):
       {context_2}
 
       CRITICAL RULES:
-      1. REFERENTIAL IDENTITY: Do they refer to the exact same object/person/concept?
-         - Same entity with different names → YES (e.g., "NYC" = "New York City")
-         - Different but related entities → NO (e.g., "Apple Inc." ≠ "Apple Store")
 
-      2. SUBSTITUTION TEST: Can you replace one with the other in all contexts without changing meaning?
-         - If substitution changes information → NO
-         - If substitution preserves meaning → YES
+      1. REFERENTIAL IDENTITY: Do the entities refer to the exact same object in the real world?
+         - MERGE: Same entity with different names → YES (e.g., 'NYC' = 'New York City')
+         - DO NOT MERGE: Different entities → NO (even if highly related)
 
-      3. TYPE CONSISTENCY: Check entity types/categories
-         - Same name, different types → carefully verify with context
-         - Example: "Apple (company)" ≠ "Apple (fruit)"
+      2. SUBSTITUTION TEST: Can you replace one entity with the other in ALL contexts without changing meaning?
+         - If substitution changes information → DO NOT MERGE
+         - If substitution preserves meaning → MERGE
 
-      4. CONSERVATIVE PRINCIPLE:
-         - When uncertain → answer NO
-         - False merge is worse than false split
+      3. TYPE CONSISTENCY: Check entity types/categories carefully
+         - Same name, different types → carefully verify with all available context
+         - Example: 'Apple (company)' ≠ 'Apple (fruit)'
 
-      PROHIBITED MERGE REASONS (NOT valid reasons to merge):
-      ✗ Similar names: "John Smith" vs "John Smith Jr." → different persons
-      ✗ Related entities: "Apple Inc." vs "Apple Store" → company vs retail location
+      4. CONSERVATIVE PRINCIPLE: When uncertain → DO NOT MERGE
+         - False merge (merging distinct entities) is worse than false split
+         - When in doubt, keep entities separate
+
+      CRITICAL DISTINCTION - Related vs Coreferent:
+      ⚠️  Entities can have similar relations or contexts but still be DIFFERENT entities.
+      Example: 'Apple Inc.' and 'Apple Store' are related (ownership) but DIFFERENT entities (company vs retail location).
+      Only merge if they are the SAME entity with different names/expressions.
+
+      PROHIBITED MERGE REASONS (these are NOT valid reasons to merge):
+      ✗ Similar names: 'John Smith' vs 'John Smith Jr.' → different persons
+      ✗ Related entities: 'Apple Inc.' vs 'Apple Store' → company vs retail location
       ✗ Same category: Both are cities → might be different cities
       ✗ Shared relations: Both have similar relations → need comprehensive match
       ✗ Partial overlap: Some relations match → need ALL key relations to match
+      ✗ Hierarchical relationship: One contains/owns the other → different entities
       
       DECISION PROCEDURE:
       For Entity 1 and Entity 2:
-        1. Check if names are variations of the same entity (e.g., abbreviations, translations)
-        2. Compare their relation patterns - do they have consistent relationships?
-        3. Look for contradictions - if any key relations conflict, they are DIFFERENT
-        4. Apply substitution test - can they be swapped in all contexts?
-        5. If uncertain → answer NO (conservative principle)
+        1. Check if names are variations of the same entity (abbreviations, translations, aliases)
+        2. Compare their graph relations - do they have consistent relationships?
+        3. Compare their source text contexts - do they describe the SAME entity?
+        4. Look for contradictions - if any key information conflicts, they are DIFFERENT
+        5. Apply SUBSTITUTION TEST: Can they be swapped in all contexts?
+        6. If uncertain → answer NO (conservative principle)
 
       OUTPUT FORMAT (strict JSON):
       {{
         "is_coreferent": true/false,
         "confidence": 0.0-1.0,
-        "rationale": "Clear explanation based on referential identity test"
+        "rationale": "Clear explanation based on referential identity and context analysis"
       }}
 
       EXAMPLES:
       
       Example 1 - SHOULD MERGE:
-      Entity 1: "UN", relations: [founded→1945, member→United States]
-      Entity 2: "United Nations", relations: [established→1945, member→USA]
+      Entity 1: 'UN', relations: [founded→1945, member→United States]
+      Entity 2: 'United Nations', relations: [established→1945, member→USA]
       → is_coreferent: true, confidence: 0.95
-      → Rationale: "UN" is abbreviation of "United Nations", consistent founding year and members
+      → Rationale: 'UN' is abbreviation of 'United Nations', consistent founding year and members
       
       Example 2 - SHOULD NOT MERGE:
-      Entity 1: "Apple Inc.", relations: [founded_by→Steve Jobs, produces→iPhone]
-      Entity 2: "Apple Store", relations: [owned_by→Apple Inc., located_in→New York]
+      Entity 1: 'Apple Inc.', relations: [founded_by→Steve Jobs, produces→iPhone]
+      Entity 2: 'Apple Store', relations: [owned_by→Apple Inc., located_in→New York]
       → is_coreferent: false, confidence: 0.95
-      → Rationale: Different entities - Apple Inc. is company, Apple Store is retail location, ownership relation indicates hierarchy
+      → Rationale: Different entities - Apple Inc. is company, Apple Store is retail location owned by Apple Inc.
       
       Example 3 - UNCERTAIN (should answer NO):
-      Entity 1: "张三", relations: [works_at→清华大学, age→45]
-      Entity 2: "张三", relations: [studies_at→北京大学, age→22]
+      Entity 1: '张三', relations: [works_at→清华大学, age→45]
+      Entity 2: '张三', relations: [studies_at→北京大学, age→22]
       → is_coreferent: false, confidence: 0.80
       → Rationale: Same name but different age and occupation suggest different persons (conservative principle applied)
 
