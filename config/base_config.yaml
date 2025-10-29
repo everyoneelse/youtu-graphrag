@@ -533,14 +533,25 @@ prompts:
         Explanation: Entity A contains MORE SPECIFIC information (which bandwidth).
         They refer to the same operation, but A is more precise than B.
 
-      Example 3 - Different scenarios (KEEP SEPARATE):
-        Entity A: "提高带宽" in context "解决流动伪影"
-        Entity B: "提高带宽" in context "解决化学位移伪影"
+      Example 3 - Contextual binding (KEEP SEPARATE):
+        Entity A: "提高带宽" 
+          Source text: "流动伪影可通过提高带宽来减轻"
+        Entity B: "提高带宽"
+          Source text: "化学位移伪影的解决方法：提高带宽"
         
-        Even though both describe similar operations, they are BOUND TO DIFFERENT PROBLEMS.
-        Replacing A with B loses the contextual binding to "flow artifacts problem".
+        Test A→B: "流动伪影可通过[提高带宽(from B)]来减轻"
+                  Information loss? Yes, loses the context that this bandwidth 
+                  adjustment is specifically for flow artifacts ✗
         
-        Result: Different contextual information → KEEP SEPARATE
+        Test B→A: "化学位移伪影的解决方法：[提高带宽(from A)]"
+                  Information loss? Yes, loses the context that this bandwidth
+                  adjustment is specifically for chemical shift artifacts ✗
+        
+        Result: Both directions have contextual information loss → KEEP SEPARATE
+        
+        Explanation: Although both describe "提高带宽" operation, each entity 
+        contains CONTEXTUAL BINDING INFORMATION to a specific problem. Replacing
+        one with the other loses which problem it's bound to.
 
       ═══════════════════════════════════════════════════════════
 
