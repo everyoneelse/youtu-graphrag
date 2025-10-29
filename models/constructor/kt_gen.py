@@ -21,33 +21,32 @@ from utils.logger import logger
 import numpy as np
 
 DEFAULT_SEMANTIC_DEDUP_PROMPT = (
-    "You are a knowledge graph curation assistant performing entity deduplication.\n"
+    "You are an expert in knowledge graph entity deduplication.\n"
     "All listed triples share the same head entity and relation.\n\n"
     "Head entity: {head}\n"
     "Relation: {relation}\n\n"
-    "Head entity related knowledge (graph relations):\n{head_graph_context}\n\n"
-    "Head entity contexts (source text):\n{head_context}\n\n"
+    "Head contexts (source text):\n{head_context}\n\n"
     "Candidate tails:\n"
     "{candidates}\n\n"
     "TASK: Identify which tails are COREFERENT (refer to the exact same entity/concept).\n\n"
-    "FUNDAMENTAL PRINCIPLE:\n"
-    "COREFERENCE requires REFERENTIAL IDENTITY: Two expressions must denote the exact same referent.\n"
-    "- MERGE: 'Entity_A' and 'Entity_A_alias' → same referent (different names for one thing)\n"
-    "- DO NOT MERGE: 'Entity_X' and 'Entity_Y' → different referents (two distinct things)\n\n"
+    "CRITICAL RULES:\n\n"
+    "1. REFERENTIAL IDENTITY: Do the tails refer to the exact same entity in the real world?\n"
+    "   - MERGE: Same entity with different names → YES (e.g., 'NYC' = 'New York City')\n"
+    "   - DO NOT MERGE: Different entities → NO (even if highly related)\n\n"
+    "2. SUBSTITUTION TEST: Can you replace one tail with another in ALL contexts without changing meaning?\n"
+    "   - If substitution changes information → DO NOT MERGE\n"
+    "   - If substitution preserves meaning → MERGE\n\n"
+    "3. EQUIVALENCE CLASS: Each group must represent ONE single entity.\n"
+    "   - Do NOT create groups containing multiple distinct entities\n"
+    "   - Each group = one entity with different linguistic expressions\n\n"
+    "4. CONSERVATIVE PRINCIPLE: When uncertain → KEEP SEPARATE\n"
+    "   - False merge (merging distinct entities) is worse than false split\n"
+    "   - When in doubt, preserve distinctions\n\n"
     "CRITICAL DISTINCTION - Relation Satisfaction vs Entity Identity:\n"
     "⚠️  If multiple tails all satisfy relation R with head H, this does NOT make them coreferent.\n"
     "Each tail can be a DIFFERENT entity that happens to satisfy the SAME relation.\n"
-    "Formal logic: (H,R,X) ∧ (H,R,Y) ↛ X=Y  (relation satisfaction does not imply entity identity)\n\n"
-    "MERGE CONDITIONS - ALL must hold:\n"
-    "1. REFERENT TEST: Do the two tails refer to exactly the same entity in the real world?\n"
-    "   • Same entity, different names → MERGE (e.g., 'NYC' = 'New York City')\n"
-    "   • Different entities → KEEP SEPARATE (even if highly related)\n\n"
-    "2. SUBSTITUTION TEST: Can you replace one tail with the other in ALL contexts without changing truth value?\n"
-    "   • If substitution changes meaning/information → KEEP SEPARATE\n"
-    "   • If substitution preserves meaning → MERGE\n\n"
-    "3. EQUIVALENCE CLASS: After merging, all members must denote the SAME single entity.\n"
-    "   • Do NOT create groups containing multiple distinct entities\n"
-    "   • Each group = one entity with different linguistic expressions\n\n"
+    "Example: 'Zhang San works_at Tsinghua University' and 'Zhang San works_at Computer Science Department'\n"
+    "→ Both satisfy 'works_at', but they are DIFFERENT entities (university vs department)\n\n"
     "PROHIBITED MERGE REASONS (these are NOT valid reasons to merge):\n"
     "✗ Shared relation: \"Both satisfy R with H\" → NOT sufficient for coreference\n"
     "✗ Semantic similarity: \"X and Y are similar/related\" → similarity ≠ identity\n"
@@ -56,18 +55,13 @@ DEFAULT_SEMANTIC_DEDUP_PROMPT = (
     "✗ Functional relationship: \"X causes/affects/contains Y\" → relationship ≠ identity\n"
     "✗ Shared properties: \"X and Y have property P\" → property sharing ≠ entity identity\n"
     "✗ Part of same set: \"X, Y ∈ Set_S\" → set membership ≠ element identity\n\n"
-    "MULTI-VALUED RELATIONS:\n"
-    "Many relations map one head to MULTIPLE distinct tail entities. Each tail is a separate instance.\n"
-    "Pattern: If H has relation R to {T1, T2, ..., Tn}, each Ti is typically a DIFFERENT entity.\n"
-    "Only merge Ti and Tj if they are different names for the SAME entity, not just because both satisfy R.\n\n"
     "DECISION PROCEDURE:\n"
     "For each pair of tails (Ti, Tj):\n"
-    "  1. Ask: \"Do Ti and Tj refer to the same entity?\" (not \"Are they related?\")\n"
-    "  2. Apply SUBSTITUTION TEST: Would swapping them change the information?\n"
-    "  3. If uncertain → KEEP SEPARATE (conservative principle)\n\n"
-    "CONSERVATIVE PRINCIPLE:\n"
-    "False splits (keeping coreferent entities separate) < False merges (merging distinct entities)\n"
-    "When in doubt, preserve distinctions.\n\n"
+    "  1. Check if they are variations of the same entity (abbreviations, translations, aliases)\n"
+    "  2. Compare their source text contexts - do they describe the SAME entity?\n"
+    "  3. Apply SUBSTITUTION TEST: Can they be swapped in all contexts?\n"
+    "  4. Look for contradictions - if any key information conflicts, they are DIFFERENT\n"
+    "  5. If uncertain → KEEP SEPARATE (conservative principle)\n\n"
     "OUTPUT REQUIREMENTS:\n"
     "1. Every input index must appear in exactly one group\n"
     "2. Each group represents ONE entity with its various expressions\n"
@@ -1771,41 +1765,19 @@ class KTBuilder:
         head_context_lines: list,
         batch_entries: list,
     ) -> str:
+        # semantic_dedup uses ONLY chunk contexts (not graph relations)
         candidate_blocks = []
         for idx, entry in enumerate(batch_entries, start=1):
             description = entry.get("description") or "[NO DESCRIPTION]"
             context_lines = entry.get("context_summaries") or ["- (no context available)"]
             context_block = "\n        ".join(context_lines)
-            
-            # Get tail node ID and collect graph relations for tail
-            tail_node_id = entry.get("node_id")
-            if tail_node_id and tail_node_id in self.graph:
-                tail_graph_context = self._collect_node_context(tail_node_id, max_relations=5)
-                candidate_blocks.append(
-                    f"[{idx}] Tail: {description}\n"
-                    f"    Related knowledge (graph relations):\n{tail_graph_context}\n"
-                    f"    Source text contexts:\n        {context_block}"
-                )
-            else:
-                candidate_blocks.append(
-                    f"[{idx}] Tail: {description}\n"
-                    f"    Related knowledge (graph relations): (No relations found)\n"
-                    f"    Source text contexts:\n        {context_block}"
-                )
+            candidate_blocks.append(
+                f"[{idx}] Tail: {description}\n    Contexts:\n        {context_block}"
+            )
 
         candidates_text = "\n".join(candidate_blocks) if candidate_blocks else "[No candidates]"
         relation_text = relation or "[UNKNOWN]"
         head_context_text = "\n".join(head_context_lines) if head_context_lines else "- (no context available)"
-        
-        # Collect head node graph context
-        # Extract head node ID from head_text if available
-        head_node_id = None
-        if hasattr(self, '_current_head_node_id'):
-            head_node_id = self._current_head_node_id
-        
-        head_graph_context = "(No graph relations available)"
-        if head_node_id and head_node_id in self.graph:
-            head_graph_context = self._collect_node_context(head_node_id, max_relations=10)
 
         # Auto-detect prompt type based on relation
         config = self._get_semantic_dedup_config()
@@ -1822,7 +1794,6 @@ class KTBuilder:
         prompt_kwargs = {
             "head": head_text or "[UNKNOWN_HEAD]",
             "relation": relation_text,
-            "head_graph_context": head_graph_context,
             "head_context": head_context_text,
             "candidates": candidates_text,
         }
