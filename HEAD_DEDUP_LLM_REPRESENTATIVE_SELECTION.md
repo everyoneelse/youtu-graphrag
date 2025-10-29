@@ -27,14 +27,9 @@ CRITICAL RULES:
 
 ## CONTEXT VERIFICATION (MANDATORY)
 
-Before making any coreference decision, you MUST verify the provided context information:
+Use the provided context (relationships and source text) to make informed coreference decisions:
 
-### Step A: Context Relevance Check
-- ✓ Are the provided relationships and text truly describing these two entities?
-- ✓ Is the context information directly relevant to the entities being compared?
-- ✓ If context is missing, irrelevant, or too vague → note this in rationale and apply CONSERVATIVE PRINCIPLE
-
-### Step B: Context Consistency Check (CRITICAL for avoiding false merges)
+### Step A: Context Consistency Check (CRITICAL for avoiding false merges)
 - ✓ Do the two entities' contexts contain contradictory information?
 - ✓ Check for conflicts in:
   - Temporal attributes (founding dates, time periods, ages)
@@ -45,7 +40,7 @@ Before making any coreference decision, you MUST verify the provided context inf
 - ✗ If ANY key contradiction exists → they are DIFFERENT entities, answer NO
 - ✓ If contexts are consistent or complementary → proceed to next step
 
-### Step C: Context Completeness Assessment
+### Step B: Context Completeness Assessment
 - ✓ Is the provided context sufficient to make a reliable coreference decision?
 - ✓ Assess information quality:
   - High confidence: Multiple consistent relationships, clear context
@@ -53,7 +48,7 @@ Before making any coreference decision, you MUST verify the provided context inf
   - Low confidence: Minimal information, unclear context
 - ✗ If information is insufficient and uncertainty is high → apply CONSERVATIVE PRINCIPLE (answer NO)
 
-### Step D: Relationship Pattern Analysis
+### Step C: Relationship Pattern Analysis
 - ✓ Compare the relationship patterns of both entities:
   - Do they share common relationship types?
   - Are the shared relationships consistent with being the same entity?
@@ -67,7 +62,7 @@ Before making any coreference decision, you MUST verify the provided context inf
   - Relationships describe different scopes or domains
   - Relationship targets are contradictory
 
-### Step E: Source Text Validation (when hybrid_context is enabled)
+### Step D: Source Text Validation (when hybrid_context is enabled)
 - ✓ If source text chunks are provided, verify:
   - Does the text actually mention these entity names?
   - Does the text context support or contradict the coreference hypothesis?
@@ -83,9 +78,11 @@ Before making any coreference decision, you MUST verify the provided context inf
 Follow these steps IN ORDER:
 
 ### PHASE 1: CONTEXT VERIFICATION
-Execute Steps A-E above:
-- Verify context relevance, consistency, completeness
-- Analyze relationship patterns and source texts
+Execute Steps A-D above:
+- Check context consistency for contradictions
+- Assess context completeness and information quality
+- Analyze relationship patterns
+- Validate source text evidence (if available)
 - Document any issues or concerns found
 
 ### PHASE 2: COREFERENCE DETERMINATION
@@ -107,7 +104,7 @@ OUTPUT FORMAT (strict JSON):
 {
   "is_coreferent": true/false,
   "preferred_representative": "{entity_1_id}" or "{entity_2_id}" or null,
-  "rationale": "MUST include: (1) Context verification summary (Steps A-E results), (2) Coreference decision reasoning, (3) If coreferent, representative selection reasoning"
+  "rationale": "MUST include: (1) Context verification summary (Steps A-D results), (2) Coreference decision reasoning, (3) If coreferent, representative selection reasoning"
 }
 
 IMPORTANT NOTES:
@@ -128,7 +125,7 @@ Output:
 {
   "is_coreferent": true,
   "preferred_representative": "entity_100",
-  "rationale": "(Context Verification) Step A: Context relevant, both describe international organization. Step B: Consistent - founding year 1945 matches, members align. Step C: Sufficient information. Step D: Strong pattern alignment. (Coreference) 'UN' is standard abbreviation of 'United Nations', relationships consistent. (Representative) Choose entity_100 (UN) - widely recognized standard form."
+  "rationale": "(Context Verification) Step A: Consistent - founding year 1945 matches, members align, no contradictions. Step B: Sufficient information with clear evidence. Step C: Strong pattern alignment. Step D: N/A. (Coreference) 'UN' is standard abbreviation of 'United Nations', relationships consistent. (Representative) Choose entity_100 (UN) - widely recognized standard form."
 }
 ```
 
@@ -141,7 +138,7 @@ Output:
 {
   "is_coreferent": false,
   "preferred_representative": null,
-  "rationale": "(Context Verification) Step A: Contexts relevant. Step B: CRITICAL CONTRADICTIONS - age differs (45 vs 22), role conflict (教授 vs 学生), different institutions. Step C: Sufficient information showing conflicts. Step D: Completely different patterns. (Decision) Context verification reveals contradictions, they are different persons with same name. Conservative principle applied."
+  "rationale": "(Context Verification) Step A: CRITICAL CONTRADICTIONS - age differs (45 vs 22), role conflict (教授 vs 学生), different institutions. Step B: Sufficient information showing conflicts. Step C: Completely different patterns. Step D: N/A. (Decision) Context verification reveals contradictions, they are different persons with same name. Conservative principle applied."
 }
 ```
 
@@ -154,6 +151,6 @@ Output:
 {
   "is_coreferent": false,
   "preferred_representative": null,
-  "rationale": "(Context Verification) Step A: Minimal context. Step B: No contradictions but no confirming info. Step C: INSUFFICIENT - only 2 generic attributes, cannot reliably determine identity. Step D: No meaningful pattern. (Decision) Insufficient context for reliable decision, applying conservative principle to avoid false merge."
+  "rationale": "(Context Verification) Step A: No contradictions but no confirming info. Step B: INSUFFICIENT - only 2 generic attributes, cannot reliably determine identity. Step C: No meaningful pattern. Step D: N/A. (Decision) Insufficient context for reliable decision, applying conservative principle to avoid false merge."
 }
 ```
