@@ -179,8 +179,9 @@ class TailDedupApplicator:
         """
         Apply deduplication mapping to all edges (triples) in the graph.
         
-        For each edge, if the target (tail) node should be replaced,
-        create a new edge with the representative and remove the old one.
+        For each edge, replace BOTH head and tail nodes with their representatives
+        if they are in a dedup cluster. This ensures all occurrences of deduplicated
+        nodes are replaced, regardless of their position in the triple.
         """
         logger.info("Applying deduplication to edges...")
         
@@ -188,23 +189,24 @@ class TailDedupApplicator:
         edges_to_remove = []
         
         for u, v, key, data in self.graph.edges(keys=True, data=True):
-            # Get representative for the tail node
+            # Get representatives for BOTH head and tail nodes
+            u_rep = self._get_representative(u)
             v_rep = self._get_representative(v)
             
-            # If tail should be replaced
-            if v_rep != v:
+            # If either head or tail should be replaced
+            if u_rep != u or v_rep != v:
                 relation = data.get('relation', '')
                 
-                # Check if edge with representative already exists
+                # Check if edge with representatives already exists
                 edge_exists = False
-                if self.graph.has_edge(u, v_rep):
-                    for edge_key, edge_data in self.graph[u][v_rep].items():
+                if self.graph.has_edge(u_rep, v_rep):
+                    for edge_key, edge_data in self.graph[u_rep][v_rep].items():
                         if edge_data.get('relation') == relation:
                             edge_exists = True
                             break
                 
                 if not edge_exists:
-                    edges_to_add.append((u, v_rep, data))
+                    edges_to_add.append((u_rep, v_rep, data))
                 
                 edges_to_remove.append((u, v, key))
                 self.stats['edges_updated'] += 1

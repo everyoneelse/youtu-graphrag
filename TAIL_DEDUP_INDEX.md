@@ -2,7 +2,9 @@
 
 ## 📚 概述
 
-这是一套完整的工具，用于将 `semantic_dedup_group` 处理得到的tail去重结果应用到 Youtu-GraphRAG 生成的知识图谱中。
+这是一套完整的工具，用于将 `semantic_dedup_group` 处理得到的去重结果应用到 Youtu-GraphRAG 生成的知识图谱中。
+
+**✨ 最新更新**：现在支持**全图去重**！不仅替换tail位置的节点，也替换head位置的节点。详见：[`FULL_GRAPH_DEDUP_EXPLANATION.md`](FULL_GRAPH_DEDUP_EXPLANATION.md)
 
 ---
 
@@ -53,6 +55,7 @@ python3 complete_dedup_workflow.py \
 | **TAIL_DEDUP_APPLICATION_GUIDE.md** | 应用指南 | 🔧 高级用法 |
 | **TAIL_DEDUP_DETAILED_EXPLANATION.md** | 技术细节 | 💡 深入理解 |
 | **TAIL_DEDUP_INDEX.md** | 本文档 | 🗂️ 快速导航 |
+| **FULL_GRAPH_DEDUP_EXPLANATION.md** | 全图去重说明 | ⚡ 重要更新 |
 
 ---
 
@@ -167,8 +170,8 @@ graph_processor.save_graph_to_json(graph, 'deduped_graph.json')
 
 ## 🔧 核心功能
 
-### 1. 三元组（Edges）去重
-- 替换tail节点为代表节点
+### 1. 三元组（Edges）去重 ⚡ 已更新
+- 替换**HEAD和TAIL**节点为代表节点（全图去重！）
 - 自动检测并避免重复边
 - 支持MultiDiGraph
 
