@@ -205,7 +205,7 @@ class HeadDeduplicationLLMDrivenMixin:
         entity_2_id: str, entity_2_desc: str, graph_context_2: str, chunk_context_2: str
     ) -> str:
         """
-        Embedded prompt template with representative selection.
+        Embedded fallback prompt template (mirrors config prompt).
         """
         return f"""You are an expert in knowledge graph entity resolution.
 
@@ -223,47 +223,74 @@ Graph relationships:
 Source text:
 {chunk_context_2}
 
-CRITICAL RULES:
+FUNDAMENTAL PRINCIPLE:
 
-1. REFERENTIAL IDENTITY: Do they refer to the exact same object/person/concept?
-   - Same entity with different names → YES (e.g., "NYC" = "New York City")
-   - Different but related entities → NO (e.g., "Apple Inc." ≠ "Apple Store")
+COREFERENCE requires REFERENTIAL IDENTITY: Two entities must denote the exact same real-world object.
+- MERGE: Different names/forms for ONE object (e.g., "UN" = "United Nations")
+- DO NOT MERGE: Two DIFFERENT objects (e.g., "Apple Inc." ≠ "Apple Store")
 
-2. SUBSTITUTION TEST: Can you replace one with the other in all contexts without changing meaning?
+═══════════════════════════════════════════════════════════
 
-3. COREFERENCE DETERMINATION (综合使用上下文和知识图谱):
-   Use BOTH the source text AND the graph relationships together throughout your analysis:
-   
-   Step 1: **Name Variation Check** (using source text + graph context)
-     - Are names different forms of the same entity?
-     - Do source text and graph relationships support this?
-   
-   Step 2: **Contradiction Detection** (using source text + graph context)
-     - Look for contradictions in EITHER source text OR graph relationships
-     - Hierarchical relationships indicate DIFFERENT entities
-   
-   Step 3: **Consistency Verification** (using source text + graph context)
-     - Do graph relationships show CONSISTENT patterns?
-     - Does source text support the same referent?
-   
-   Step 4: **Substitution Test** (using source text + graph context)
-     - Can you replace one with the other in ALL contexts?
-   
-   Step 5: **Conservative Principle**
-     - When uncertain → answer NO
+CRITICAL DISTINCTION - Similar Relations ≠ Same Entity:
 
-4. REPRESENTATIVE SELECTION (only if coreferent):
-   a) **Formality and Completeness**: Full name > Abbreviation (but domain matters)
-   b) **Domain Convention**: Medical/Academic prefer standard terms
-   c) **Information Richness**: Entity with MORE relationships
-   d) **Naming Quality**: Official name > Colloquial
-   e) **Source Evidence**: Prefer entity with richer source text
+⚠️  If two entities have similar graph relationships or appear in similar contexts, 
+    this does NOT automatically make them the same entity.
+
+Two entities can have similar patterns but be DIFFERENT entities.
+
+═══════════════════════════════════════════════════════════
+
+MERGE CONDITIONS - ALL must hold:
+
+1. REFERENT TEST: Do the two entities refer to exactly the same real-world object?
+   • Same object, different names → MERGE
+   • Different objects → KEEP SEPARATE
+
+2. SUBSTITUTION TEST: Can you replace one with the other in ALL contexts?
+   • If substitution changes meaning → KEEP SEPARATE
+   • If substitution preserves meaning → MERGE
+
+3. NO CONTRADICTIONS: The evidence must be consistent.
+   • Any contradiction → KEEP SEPARATE
+   • Hierarchical relations → KEEP SEPARATE
+
+4. EQUIVALENCE CLASS: Both entities must denote the SAME single object.
+
+═══════════════════════════════════════════════════════════
+
+PROHIBITED MERGE REASONS:
+✗ Similar names  ✗ Same category  ✗ Similar relations  ✗ Related entities
+✗ Co-occurrence  ✗ Shared properties  ✗ Same community  ✗ Partial match
+
+═══════════════════════════════════════════════════════════
+
+DECISION PROCEDURE:
+
+Use BOTH source text AND graph relationships together.
+
+1. Ask: "Do they refer to the SAME real-world object?"
+2. Check for ANY contradictions
+3. Apply SUBSTITUTION TEST in ALL contexts
+4. If uncertain → answer NO
+
+CONSERVATIVE PRINCIPLE: When in doubt, preserve distinctions.
+
+═══════════════════════════════════════════════════════════
+
+REPRESENTATIVE SELECTION (only if coreferent):
+- Formality & completeness
+- Domain convention
+- Information richness (more graph relationships)
+- Naming quality
+- Source evidence
+
+═══════════════════════════════════════════════════════════
 
 OUTPUT FORMAT (strict JSON):
 {{
   "is_coreferent": true/false,
   "preferred_representative": "{entity_1_id}" or "{entity_2_id}" or null,
-  "rationale": "Provide a UNIFIED analysis integrating source text and graph relationships. DO NOT separate into sections. Explain: (1) How combined evidence (text + graph) supports/contradicts coreference, (2) Substitution test result, (3) If coreferent, why you chose this representative."
+  "rationale": "UNIFIED analysis integrating source text and graph relationships. DO NOT separate into sections. Explain how combined evidence supports/contradicts coreference, substitution test result, and if coreferent, why you chose this representative."
 }}
 
 IMPORTANT:
