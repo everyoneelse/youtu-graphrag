@@ -341,7 +341,7 @@ prompts:
     general: |-
       You are an expert in knowledge graph entity deduplication.
 
-      TASK: Determine if the following two entities are COREFERENT (refer to the exact same real-world object).
+      TASK: Determine if the following two entities are COREFERENT (refer to the exact same entity/concept).
 
       Entity 1: {entity_1}
       Related knowledge about Entity 1 (graph relations and source text):
@@ -353,7 +353,7 @@ prompts:
 
       CRITICAL RULES:
 
-      1. REFERENTIAL IDENTITY: Do the entities refer to the exact same object in the real world?
+      1. REFERENTIAL IDENTITY: Do the entities refer to the exact same entity in the real world?
          - MERGE: Same entity with different names → YES (e.g., 'NYC' = 'New York City')
          - DO NOT MERGE: Different entities → NO (even if highly related)
 
@@ -361,41 +361,47 @@ prompts:
          - If substitution changes information → DO NOT MERGE
          - If substitution preserves meaning → MERGE
 
-      3. TYPE CONSISTENCY: Check entity types/categories carefully
-         - Same name, different types → carefully verify with all available context
-         - Example: 'Apple (company)' ≠ 'Apple (fruit)'
+      3. EQUIVALENCE CLASS: Both entities must represent ONE single entity.
+         - Do NOT merge entities that are multiple distinct entities
+         - Each merge decision = one entity with different linguistic expressions
 
-      4. CONSERVATIVE PRINCIPLE: When uncertain → DO NOT MERGE
+      4. CONSERVATIVE PRINCIPLE: When uncertain → KEEP SEPARATE
          - False merge (merging distinct entities) is worse than false split
-         - When in doubt, keep entities separate
+         - When in doubt, preserve distinctions
 
-      CRITICAL DISTINCTION - Related vs Coreferent:
-      ⚠️  Entities can have similar relations or contexts but still be DIFFERENT entities.
-      Example: 'Apple Inc.' and 'Apple Store' are related (ownership) but DIFFERENT entities (company vs retail location).
-      Only merge if they are the SAME entity with different names/expressions.
+      CRITICAL DISTINCTION - Relation Satisfaction vs Entity Identity:
+      ⚠️  If two entities have similar relations or contexts, this does NOT make them coreferent.
+      Each entity can be a DIFFERENT entity that happens to have SIMILAR relations.
+      Example: 'Zhang San works_at Tsinghua University' and 'Zhang San works_at Computer Science Department'
+      → Both satisfy 'works_at', but they are DIFFERENT entities (university vs department)
 
       PROHIBITED MERGE REASONS (these are NOT valid reasons to merge):
-      ✗ Similar names: 'John Smith' vs 'John Smith Jr.' → different persons
-      ✗ Related entities: 'Apple Inc.' vs 'Apple Store' → company vs retail location
-      ✗ Same category: Both are cities → might be different cities
-      ✗ Shared relations: Both have similar relations → need comprehensive match
-      ✗ Partial overlap: Some relations match → need ALL key relations to match
-      ✗ Hierarchical relationship: One contains/owns the other → different entities
-      
+      ✗ Shared relation: "Both have similar relations" → NOT sufficient for coreference
+      ✗ Semantic similarity: "X and Y are similar/related" → similarity ≠ identity
+      ✗ Same category: "Both are type T" → category membership ≠ entity identity
+      ✗ Co-occurrence: "X and Y appear together" → contextual proximity ≠ coreference
+      ✗ Functional relationship: "X causes/affects/contains Y" → relationship ≠ identity
+      ✗ Shared properties: "X and Y have property P" → property sharing ≠ entity identity
+      ✗ Part of same set: "X, Y ∈ Set_S" → set membership ≠ element identity
+
       DECISION PROCEDURE:
       For Entity 1 and Entity 2:
-        1. Check if names are variations of the same entity (abbreviations, translations, aliases)
-        2. Compare their graph relations - do they have consistent relationships?
+        1. Check if they are variations of the same entity (abbreviations, translations, aliases)
+        2. Compare their graph relations - do they describe the SAME entity?
         3. Compare their source text contexts - do they describe the SAME entity?
-        4. Look for contradictions - if any key information conflicts, they are DIFFERENT
-        5. Apply SUBSTITUTION TEST: Can they be swapped in all contexts?
+        4. Apply SUBSTITUTION TEST: Can they be swapped in all contexts?
+        5. Look for contradictions - if any key information conflicts, they are DIFFERENT
         6. If uncertain → answer NO (conservative principle)
+
+      CONSERVATIVE PRINCIPLE:
+      False splits (keeping coreferent entities separate) < False merges (merging distinct entities)
+      When in doubt, preserve distinctions.
 
       OUTPUT FORMAT (strict JSON):
       {{
         "is_coreferent": true/false,
         "confidence": 0.0-1.0,
-        "rationale": "Clear explanation based on referential identity and context analysis"
+        "rationale": "Clear explanation based on REFERENTIAL IDENTITY"
       }}
 
       EXAMPLES:
