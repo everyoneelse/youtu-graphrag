@@ -419,12 +419,16 @@ prompts:
       TASK: Determine if the following two entities refer to the SAME real-world object, and if so, which one should be the PRIMARY REPRESENTATIVE.
 
       Entity 1 (ID: {entity_1_id}): {entity_1_desc}
-      Related knowledge about Entity 1:
-      {context_1}
+      Graph relationships:
+      {graph_context_1}
+      Source text:
+      {chunk_context_1}
 
       Entity 2 (ID: {entity_2_id}): {entity_2_desc}
-      Related knowledge about Entity 2:
-      {context_2}
+      Graph relationships:
+      {graph_context_2}
+      Source text:
+      {chunk_context_2}
 
       CRITICAL RULES:
 
@@ -441,36 +445,62 @@ prompts:
          - Example: "Apple (company)" ≠ "Apple (fruit)"
 
       4. CONSERVATIVE PRINCIPLE:
-         - When uncertain about coreference → answer NO
+         - When in doubt, keep them separate
+         - Better to have duplicates than to lose information
          - When uncertain about representative → choose the one with MORE relationships
-         - False merge is worse than false split
 
-      PROHIBITED MERGE REASONS (NOT valid reasons to merge):
-      ✗ Similar names: "John Smith" vs "John Smith Jr." → different persons
-      ✗ Related entities: "Apple Inc." vs "Apple Store" → company vs retail location
-      ✗ Same category: Both are cities → might be different cities
-      ✗ Shared relations: Both have similar relations → need comprehensive match
-      ✗ Partial overlap: Some relations match → need ALL key relations to match
+      CRITICAL: ONLY merge if truly identical (not just similar or related):
+      
+      ✓ True identity: Different names/forms for the SAME object
+      
+      ✗ Do NOT merge if:
+         - Entities describe different concepts (even if related)
+         - Entities convey different information or specificity
+         - One entity is a type/part/aspect of the other
+         - Entities have hierarchical or categorical relationships
+      
+      CONTEXT USAGE GUIDANCE (MANDATORY):
+      
+      The provided context (relationships and source text) is additional information to help you determine coreference. Use it wisely:
+      
+      1. **Identify contradictions**: If the contexts reveal contradictory information about the two entities, they are DIFFERENT entities → answer NO
+      
+      2. **Find supporting evidence**: If the contexts show consistent and complementary information, it supports the coreference hypothesis
+      
+      3. **Assess information sufficiency**: If context is too limited to make a confident decision, apply CONSERVATIVE PRINCIPLE → answer NO
+      
+      4. **Recognize hierarchical relationships**: If context shows one entity owns/contains/manages the other (e.g., company vs subsidiary, organization vs department), they are DIFFERENT entities → answer NO
+      
+      IMPORTANT: Do NOT verify the context itself - trust it and USE it to make better coreference decisions.
       
       DECISION PROCEDURE:
-      For Entity 1 and Entity 2:
-        Step 1: Check if names are variations of the same entity (e.g., abbreviations, translations)
-        Step 2: Compare their relation patterns - do they have consistent relationships?
-        Step 3: Look for contradictions - if any key relations conflict, they are DIFFERENT
-        Step 4: Apply substitution test - can they be swapped in all contexts?
-        Step 5: If uncertain about coreference → answer NO (conservative principle)
-        Step 6 (if coreferent): Choose PRIMARY REPRESENTATIVE based on:
-          a) **Formality and Completeness**: Full name > Abbreviation, BUT domain conventions matter
-          b) **Domain Convention**: Medical/Academic prefer standard terms, Popular prefers common forms
-          c) **Information Richness**: Entity with MORE relationships (visible in context above)
-          d) **Naming Quality**: Official name > Colloquial, Standard spelling > Variant
-          e) **Cultural Context**: Consider primary language and widely recognized forms
+      For Entity 1 and Entity 2, follow these steps IN ORDER:
+        
+        PHASE 1: USE CONTEXT TO INFORM COREFERENCE DECISION
+          → Use the provided context (relationships and source text) to identify contradictions or supporting evidence
+          → If context reveals contradictions or hierarchical relationships → they are DIFFERENT
+          → If context is insufficient → apply conservative principle
+        
+        PHASE 2: COREFERENCE DETERMINATION
+          Step 1: Check if names are variations of the same entity (e.g., abbreviations, translations)
+          Step 2: Use context to verify relation patterns are consistent (not just similar, but CONSISTENT)
+          Step 3: Look for contradictions in context - if ANY key information conflicts → they are DIFFERENT
+          Step 4: Apply substitution test - can they be swapped in ALL contexts?
+          Step 5: If uncertain → answer NO (conservative principle)
+        
+        PHASE 3: REPRESENTATIVE SELECTION (only if coreferent)
+          Choose PRIMARY REPRESENTATIVE based on:
+            a) **Formality and Completeness**: Full name > Abbreviation, BUT domain conventions matter
+            b) **Domain Convention**: Medical/Academic prefer standard terms, Popular prefers common forms
+            c) **Information Richness**: Entity with MORE relationships (visible in context above)
+            d) **Naming Quality**: Official name > Colloquial, Standard spelling > Variant
+            e) **Cultural Context**: Consider primary language and widely recognized forms
 
       OUTPUT FORMAT (strict JSON):
       {{
         "is_coreferent": true/false,
         "preferred_representative": "{entity_1_id}" or "{entity_2_id}" or null,
-        "rationale": "First explain WHY they are same/different (using decision procedure), then IF same, explain WHY you chose this representative"
+        "rationale": "MUST include: (1) How you used the context to inform your decision, (2) Coreference decision reasoning, (3) If coreferent, representative selection reasoning"
       }}
 
       IMPORTANT:
@@ -478,35 +508,67 @@ prompts:
       - If "is_coreferent" is false, set "preferred_representative" to null
       - The "preferred_representative" must be exactly "{entity_1_id}" or "{entity_2_id}"
 
-      EXAMPLES:
+      EXAMPLES (demonstrating context usage):
       
-      Example 1 - SHOULD MERGE (abbreviation case):
-      Entity 1 (entity_100): "UN", relations: [founded→1945, member→United States, headquarters→New York]
-      Entity 2 (entity_150): "United Nations", relations: [established→1945, member→USA]
+      Example 1 - SHOULD MERGE (consistent information):
+      Entity 1 (entity_100): "UN"
+      Graph relationships:
+        • founded → 1945
+        • member → United States
+        • headquarters → New York
+      Source text:
+        (Not available)
+      
+      Entity 2 (entity_150): "United Nations"
+      Graph relationships:
+        • established → 1945
+        • member → USA
+      Source text:
+        (Not available)
+      
       → is_coreferent: true
       → preferred_representative: "entity_100"
-      → Rationale: "(1) Coreference: 'UN' is abbreviation of 'United Nations', consistent founding year (1945) and members, pass substitution test. (2) Representative: Choose entity_100 (UN) because it has more relationships (3 vs 2) and 'UN' is the widely recognized standard form in international relations context."
+      → Rationale: "(Context Usage) Graph relationships show consistent information: founding year 1945 matches, members align. No contradictions. (Coreference) 'UN' is standard abbreviation of 'United Nations'. (Representative) Choose entity_100: more relationships and widely recognized form."
       
-      Example 2 - SHOULD NOT MERGE (related but different):
-      Entity 1 (entity_200): "Apple Inc.", relations: [founded_by→Steve Jobs, produces→iPhone, type→公司]
-      Entity 2 (entity_250): "Apple Store", relations: [owned_by→Apple Inc., located_in→New York, type→零售店]
+      Example 2 - SHOULD NOT MERGE (hierarchical relationship):
+      Entity 1 (entity_200): "Apple Inc."
+      Graph relationships:
+        • founded_by → Steve Jobs
+        • type → 公司
+      Source text:
+        (Not available)
+      
+      Entity 2 (entity_250): "Apple Store"
+      Graph relationships:
+        • owned_by → Apple Inc.
+        • type → 零售店
+      Source text:
+        (Not available)
+      
       → is_coreferent: false
       → preferred_representative: null
-      → Rationale: "Different entities - Apple Inc. is a company, Apple Store is a retail location. The ownership relation (Apple Store owned_by Apple Inc.) indicates hierarchy, not identity. Type consistency fails (公司 vs 零售店). Substitution test fails - cannot replace 'Apple Inc.' with 'Apple Store' in contexts like 'founded by Steve Jobs'."
+      → Rationale: "(Context Usage) Graph relationships reveal hierarchical: 'owned_by→Apple Inc.' shows ownership, not identity. Different types (公司 vs 零售店). (Decision) Different entities with hierarchical relationship."
       
-      Example 3 - UNCERTAIN (should answer NO, conservative principle):
-      Entity 1 (entity_300): "张三", relations: [works_at→清华大学, age→45, position→教授]
-      Entity 2 (entity_350): "张三", relations: [studies_at→北京大学, age→22, status→学生]
+      Example 3 - SHOULD NOT MERGE (contradictions):
+      Entity 1 (entity_300): "张三"
+      Graph relationships:
+        • works_at → 清华大学
+        • age → 45
+        • position → 教授
+      Source text:
+        (Not available)
+      
+      Entity 2 (entity_350): "张三"
+      Graph relationships:
+        • studies_at → 北京大学
+        • age → 22
+        • status → 学生
+      Source text:
+        (Not available)
+      
       → is_coreferent: false
       → preferred_representative: null
-      → Rationale: "Same name but contradictory relations: age differs (45 vs 22), one is professor at Tsinghua, other is student at Peking University. Substitution test fails. These are likely different persons with the same name. Conservative principle applied: when uncertain, answer NO."
-      
-      Example 4 - SHOULD MERGE (formal vs colloquial):
-      Entity 1 (entity_400): "北京", relations: [population→21M]
-      Entity 2 (entity_450): "北京市", relations: [capital_of→中国, area→16410km², governor→..., founded→1045]
-      → is_coreferent: true
-      → preferred_representative: "entity_450"
-      → Rationale: "(1) Coreference: Both refer to Beijing, China's capital. '北京' is colloquial form, '北京市' is official administrative name. Consistent geography, no contradictions, pass substitution test in most contexts. (2) Representative: Choose entity_450 (北京市) because it's the official name with significantly more comprehensive relationships (4 vs 1), making it the authoritative representative."
+      → Rationale: "(Context Usage) Graph relationships show contradictions: age (45 vs 22), role (教授 vs 学生), institution differs. (Decision) Same name but different persons. Conservative principle applied."
 
 
   

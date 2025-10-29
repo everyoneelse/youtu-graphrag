@@ -156,8 +156,8 @@ class HeadDeduplicationLLMDrivenMixin:
         desc_2 = self._describe_node(node_id_2)
         
         # Get graph context (always included)
-        context_1 = self._collect_node_context(node_id_1, max_relations=10)
-        context_2 = self._collect_node_context(node_id_2, max_relations=10)
+        graph_context_1 = self._collect_node_context(node_id_1, max_relations=10)
+        graph_context_2 = self._collect_node_context(node_id_2, max_relations=10)
         
         # Check if hybrid context is enabled
         config = self.config.construction.semantic_dedup.head_dedup if hasattr(
@@ -168,14 +168,13 @@ class HeadDeduplicationLLMDrivenMixin:
         if config:
             use_hybrid_context = getattr(config, 'use_hybrid_context', False)
         
-        # Add chunk context if hybrid mode is enabled
+        # Collect chunk context if hybrid mode is enabled
         if use_hybrid_context:
             chunk_context_1 = self._collect_chunk_context(node_id_1)
             chunk_context_2 = self._collect_chunk_context(node_id_2)
-            
-            # Combine graph relations and chunk text
-            context_1 = f"{context_1}\n{chunk_context_1}"
-            context_2 = f"{context_2}\n{chunk_context_2}"
+        else:
+            chunk_context_1 = "  (Not available)"
+            chunk_context_2 = "  (Not available)"
         
         # Try to load from config first
         try:
@@ -184,24 +183,26 @@ class HeadDeduplicationLLMDrivenMixin:
                 "with_representative_selection",  # New template
                 entity_1_id=node_id_1,
                 entity_1_desc=desc_1,
-                context_1=context_1,
+                graph_context_1=graph_context_1,
+                chunk_context_1=chunk_context_1,
                 entity_2_id=node_id_2,
                 entity_2_desc=desc_2,
-                context_2=context_2
+                graph_context_2=graph_context_2,
+                chunk_context_2=chunk_context_2
             )
             return prompt_template
         except Exception as e:
             # Fallback to embedded template
             logger.warning(f"Failed to load prompt from config: {e}. Using embedded template.")
             return self._get_embedded_prompt_template_v2(
-                node_id_1, desc_1, context_1,
-                node_id_2, desc_2, context_2
+                node_id_1, desc_1, graph_context_1, chunk_context_1,
+                node_id_2, desc_2, graph_context_2, chunk_context_2
             )
     
     def _get_embedded_prompt_template_v2(
         self, 
-        entity_1_id: str, entity_1_desc: str, context_1: str,
-        entity_2_id: str, entity_2_desc: str, context_2: str
+        entity_1_id: str, entity_1_desc: str, graph_context_1: str, chunk_context_1: str,
+        entity_2_id: str, entity_2_desc: str, graph_context_2: str, chunk_context_2: str
     ) -> str:
         """
         Embedded prompt template with representative selection.
@@ -211,12 +212,16 @@ class HeadDeduplicationLLMDrivenMixin:
 TASK: Determine if the following two entities refer to the SAME real-world object, and if so, which one should be the PRIMARY REPRESENTATIVE.
 
 Entity 1 (ID: {entity_1_id}): {entity_1_desc}
-Related knowledge about Entity 1:
-{context_1}
+Graph relationships:
+{graph_context_1}
+Source text:
+{chunk_context_1}
 
 Entity 2 (ID: {entity_2_id}): {entity_2_desc}
-Related knowledge about Entity 2:
-{context_2}
+Graph relationships:
+{graph_context_2}
+Source text:
+{chunk_context_2}
 
 CRITICAL RULES:
 
