@@ -459,48 +459,50 @@ prompts:
          - One entity is a type/part/aspect of the other
          - Entities have hierarchical or categorical relationships
       
-      CONTEXT USAGE GUIDANCE (MANDATORY):
+      COREFERENCE DETERMINATION PROCEDURE (综合使用上下文和知识图谱):
       
-      The provided context (relationships and source text) is additional information to help you determine coreference. Use it wisely:
+      Use BOTH the source text context AND the graph relationships together to make your coreference decision. These are not separate steps - they should inform your reasoning throughout.
       
-      1. **Identify contradictions**: If the contexts reveal contradictory information about the two entities, they are DIFFERENT entities → answer NO
-      
-      2. **Find supporting evidence**: If the contexts show consistent and complementary information, it supports the coreference hypothesis
-      
-      3. **Assess information sufficiency**: If context is too limited to make a confident decision, apply CONSERVATIVE PRINCIPLE → answer NO
-      
-      4. **Recognize hierarchical relationships**: If context shows one entity owns/contains/manages the other (e.g., company vs subsidiary, organization vs department), they are DIFFERENT entities → answer NO
-      
-      IMPORTANT: Do NOT verify the context itself - trust it and USE it to make better coreference decisions.
-      
-      DECISION PROCEDURE:
-      For Entity 1 and Entity 2, follow these steps IN ORDER:
+      For Entity 1 and Entity 2, apply the following tests using ALL available evidence:
         
-        PHASE 1: USE CONTEXT TO INFORM COREFERENCE DECISION
-          → Use the provided context (relationships and source text) to identify contradictions or supporting evidence
-          → If context reveals contradictions or hierarchical relationships → they are DIFFERENT
-          → If context is insufficient → apply conservative principle
+        Step 1: **Name Variation Check** (using source text + graph context)
+          → Are the names different forms of the same entity? (e.g., abbreviations, translations, full/short forms)
+          → Check if the source text shows they refer to the same concept
+          → Examine if graph relationships support this interpretation
         
-        PHASE 2: COREFERENCE DETERMINATION
-          Step 1: Check if names are variations of the same entity (e.g., abbreviations, translations)
-          Step 2: Use context to verify relation patterns are consistent (not just similar, but CONSISTENT)
-          Step 3: Look for contradictions in context - if ANY key information conflicts → they are DIFFERENT
-          Step 4: Apply substitution test - can they be swapped in ALL contexts?
-          Step 5: If uncertain → answer NO (conservative principle)
+        Step 2: **Contradiction Detection** (using source text + graph context)
+          → Look for ANY contradictory information in EITHER source text OR graph relationships
+          → Hierarchical relationships (owns/contains/manages) indicate DIFFERENT entities
+          → Conflicting attributes (age, type, category) indicate DIFFERENT entities
+          → If contradictions found → they are DIFFERENT → answer NO
         
-        PHASE 3: REPRESENTATIVE SELECTION (only if coreferent)
-          Choose PRIMARY REPRESENTATIVE based on:
-            a) **Formality and Completeness**: Full name > Abbreviation, BUT domain conventions matter
-            b) **Domain Convention**: Medical/Academic prefer standard terms, Popular prefers common forms
-            c) **Information Richness**: Entity with MORE relationships (visible in context above)
-            d) **Naming Quality**: Official name > Colloquial, Standard spelling > Variant
-            e) **Cultural Context**: Consider primary language and widely recognized forms
+        Step 3: **Consistency Verification** (using source text + graph context)
+          → Do the graph relationships show CONSISTENT patterns? (not just similar, but CONSISTENT)
+          → Does the source text support the same real-world referent?
+          → Are all key relationships and attributes aligned or complementary?
+        
+        Step 4: **Substitution Test** (using source text + graph context)
+          → Can you replace one entity with the other in ALL contexts (both source text and graph) without changing meaning?
+          → If substitution changes information → they are DIFFERENT → answer NO
+        
+        Step 5: **Conservative Principle** (when evidence is insufficient)
+          → If the available context (text + graph) is too limited to make a confident decision → answer NO
+          → When uncertain → answer NO (false merge is worse than false split)
+        
+      REPRESENTATIVE SELECTION (only if entities are coreferent):
+        Choose PRIMARY REPRESENTATIVE based on:
+          a) **Formality and Completeness**: Full name > Abbreviation, BUT domain conventions matter
+          b) **Domain Convention**: Medical/Academic prefer standard terms, Popular prefers common forms
+          c) **Information Richness**: Entity with MORE relationships (visible in graph context above)
+          d) **Naming Quality**: Official name > Colloquial, Standard spelling > Variant
+          e) **Cultural Context**: Consider primary language and widely recognized forms
+          f) **Source Evidence**: Prefer entity with richer or more formal source text
 
       OUTPUT FORMAT (strict JSON):
       {{
         "is_coreferent": true/false,
         "preferred_representative": "{entity_1_id}" or "{entity_2_id}" or null,
-        "rationale": "MUST include: (1) How you used the context to inform your decision, (2) Coreference decision reasoning, (3) If coreferent, representative selection reasoning"
+        "rationale": "Provide a UNIFIED analysis that integrates source text and graph relationships throughout your reasoning. DO NOT separate into 'context usage' and 'coreference judgment' sections. Instead, explain: (1) How the combined evidence (text + graph) supports or contradicts coreference (mention specific evidence from BOTH sources), (2) Your substitution test result, (3) If coreferent, why you chose this representative (considering both text and graph evidence)."
       }}
 
       IMPORTANT:
@@ -508,9 +510,9 @@ prompts:
       - If "is_coreferent" is false, set "preferred_representative" to null
       - The "preferred_representative" must be exactly "{entity_1_id}" or "{entity_2_id}"
 
-      EXAMPLES (demonstrating context usage):
+      EXAMPLES (demonstrating integrated reasoning):
       
-      Example 1 - SHOULD MERGE (consistent information):
+      Example 1 - SHOULD MERGE (consistent evidence):
       Entity 1 (entity_100): "UN"
       Graph relationships:
         • founded → 1945
@@ -528,7 +530,7 @@ prompts:
       
       → is_coreferent: true
       → preferred_representative: "entity_100"
-      → Rationale: "(Context Usage) Graph relationships show consistent information: founding year 1945 matches, members align. No contradictions. (Coreference) 'UN' is standard abbreviation of 'United Nations'. (Representative) Choose entity_100: more relationships and widely recognized form."
+      → Rationale: "Names show 'UN' is the standard abbreviation of 'United Nations'. Graph evidence strongly supports this: both have founding/establishment year 1945, and members 'United States' and 'USA' are consistent. Entity_100 has more graph relationships (3 vs 2), indicating richer information. No contradictions in any evidence. Substitution test passes: can replace in all contexts. Choose entity_100 as representative due to more complete graph connections and widely recognized abbreviated form."
       
       Example 2 - SHOULD NOT MERGE (hierarchical relationship):
       Entity 1 (entity_200): "Apple Inc."
@@ -547,9 +549,9 @@ prompts:
       
       → is_coreferent: false
       → preferred_representative: null
-      → Rationale: "(Context Usage) Graph relationships reveal hierarchical: 'owned_by→Apple Inc.' shows ownership, not identity. Different types (公司 vs 零售店). (Decision) Different entities with hierarchical relationship."
+      → Rationale: "Graph evidence reveals a hierarchical ownership relationship: entity_250 is 'owned_by' entity_200, indicating they are distinct entities with a parent-subsidiary relationship. Type information confirms this: entity_200 is '公司' (company) while entity_250 is '零售店' (retail store). Substitution test fails: cannot replace 'Apple Inc.' with 'Apple Store' without changing meaning. These are different entities in a hierarchical structure."
       
-      Example 3 - SHOULD NOT MERGE (contradictions):
+      Example 3 - SHOULD NOT MERGE (contradictory evidence):
       Entity 1 (entity_300): "张三"
       Graph relationships:
         • works_at → 清华大学
@@ -568,7 +570,7 @@ prompts:
       
       → is_coreferent: false
       → preferred_representative: null
-      → Rationale: "(Context Usage) Graph relationships show contradictions: age (45 vs 22), role (教授 vs 学生), institution differs. (Decision) Same name but different persons. Conservative principle applied."
+      → Rationale: "Despite sharing the same name '张三', graph evidence shows multiple contradictions: age differs significantly (45 vs 22), professional status conflicts (教授 vs 学生), work/study institutions differ (清华大学 vs 北京大学), and relationship types are incompatible (works_at vs studies_at). These contradictions indicate they are different persons with the same name. Conservative principle applied: insufficient evidence to merge."
 
 
   

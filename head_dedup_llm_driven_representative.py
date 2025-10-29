@@ -231,41 +231,45 @@ CRITICAL RULES:
 
 2. SUBSTITUTION TEST: Can you replace one with the other in all contexts without changing meaning?
 
-3. PRIMARY REPRESENTATIVE SELECTION (if they are coreferent):
-   Choose the entity that should serve as the main reference based on:
+3. COREFERENCE DETERMINATION (综合使用上下文和知识图谱):
+   Use BOTH the source text AND the graph relationships together throughout your analysis:
    
-   a) **Formality and Completeness**:
-      - Full name > Abbreviation (e.g., "World Health Organization" > "WHO")
-      - BUT: Common abbreviations may be preferred (e.g., "AI" in tech context)
+   Step 1: **Name Variation Check** (using source text + graph context)
+     - Are names different forms of the same entity?
+     - Do source text and graph relationships support this?
    
-   b) **Domain Convention**:
-      - Medical: Prefer standard terminology
-      - Popular: Prefer commonly used form
-      - Academic: Prefer formal names
+   Step 2: **Contradiction Detection** (using source text + graph context)
+     - Look for contradictions in EITHER source text OR graph relationships
+     - Hierarchical relationships indicate DIFFERENT entities
    
-   c) **Information Richness** (visible in the graph):
-      - Entity with more relationships → Better representative
-      - Entity with more context → Better representative
+   Step 3: **Consistency Verification** (using source text + graph context)
+     - Do graph relationships show CONSISTENT patterns?
+     - Does source text support the same referent?
    
-   d) **Naming Quality**:
-      - Official name > Colloquial name
-      - Standard spelling > Variant spelling
+   Step 4: **Substitution Test** (using source text + graph context)
+     - Can you replace one with the other in ALL contexts?
+   
+   Step 5: **Conservative Principle**
+     - When uncertain → answer NO
 
-4. CONSERVATIVE PRINCIPLE:
-   - When uncertain about coreference → answer NO
-   - When uncertain about representative → choose the one with more graph connections
+4. REPRESENTATIVE SELECTION (only if coreferent):
+   a) **Formality and Completeness**: Full name > Abbreviation (but domain matters)
+   b) **Domain Convention**: Medical/Academic prefer standard terms
+   c) **Information Richness**: Entity with MORE relationships
+   d) **Naming Quality**: Official name > Colloquial
+   e) **Source Evidence**: Prefer entity with richer source text
 
 OUTPUT FORMAT (strict JSON):
 {{
   "is_coreferent": true/false,
   "preferred_representative": "{entity_1_id}" or "{entity_2_id}" or null,
-  "rationale": "Explain: (1) WHY they are the same/different, (2) If same, WHY you chose this representative"
+  "rationale": "Provide a UNIFIED analysis integrating source text and graph relationships. DO NOT separate into sections. Explain: (1) How combined evidence (text + graph) supports/contradicts coreference, (2) Substitution test result, (3) If coreferent, why you chose this representative."
 }}
 
 IMPORTANT:
 - Set "preferred_representative" ONLY if "is_coreferent" is true
 - The ID must be exactly "{entity_1_id}" or "{entity_2_id}"
-- Explain your representative choice clearly
+- Provide integrated reasoning, not separated sections
 """
     
     def _parse_coreference_response_v2(self, response: str) -> dict:
