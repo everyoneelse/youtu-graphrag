@@ -1,0 +1,89 @@
+# Example Configuration: Head Deduplication with Hybrid Context
+# 
+# This configuration demonstrates how to use the hybrid context feature
+# which includes both graph relations and source chunk text in the LLM prompt.
+
+llm:
+  default_llm:
+    api_key: "${LLM_API_KEY}"
+    base_url: "${LLM_BASE_URL}"
+    model: "gpt-4"
+    temperature: 0.0
+    max_tokens: 4096
+
+construction:
+  mode: no_agent
+  chunk_token_limit: 600
+  
+  semantic_dedup:
+    # Head node deduplication with HYBRID CONTEXT enabled
+    head_dedup:
+      enabled: true
+      enable_semantic: true
+      similarity_threshold: 0.85
+      use_llm_validation: true
+      max_candidates: 1000
+      candidate_similarity_threshold: 0.75
+      max_relations_context: 10
+      
+      # ===== HYBRID CONTEXT FEATURE =====
+      # When true, includes both graph relations AND source chunk text
+      # Pros: Better context for LLM, higher accuracy
+      # Cons: More tokens, slower processing, higher cost
+      use_hybrid_context: true  # <--- Set to true to enable
+      # ==================================
+      
+      # Optional: Export candidates for review
+      export_review: false
+      review_confidence_range: [0.70, 0.90]
+      review_output_dir: "output/review"
+      
+      # Optional: Save intermediate results
+      save_intermediate_results: true
+    
+    # Tail deduplication (optional)
+    tail_dedup:
+      enabled: true
+      # Tail dedup doesn't support hybrid context yet
+
+datasets:
+  demo:
+    corpus_path: data/demo/demo_corpus.json
+    qa_path: data/demo/demo.json
+    schema_path: schemas/demo.json
+    graph_output: output/graphs/demo_with_hybrid_context.json
+
+embeddings:
+  batch_size: 32
+  device: cpu
+  max_length: 512
+  model_name: all-MiniLM-L6-v2
+
+output:
+  base_dir: output
+  chunks_dir: output/chunks
+  graphs_dir: output/graphs
+  logs_dir: output/logs
+  save_chunk_details: true
+  save_intermediate_results: true
+
+performance:
+  batch_size: 16
+  max_workers: 32
+  memory_optimization: true
+  parallel_processing: true
+
+# Head dedup prompt will automatically include chunk text when use_hybrid_context=true
+# The prompt format will be:
+#
+# Entity 1: {entity_name}
+# Related knowledge about Entity 1:
+#   • relation1 → target1
+#   • relation2 → target2
+#   Source text: "original chunk text where entity appears..."
+#
+# Entity 2: {entity_name}
+# Related knowledge about Entity 2:
+#   • relation1 → target1
+#   • relation2 → target2
+#   Source text: "original chunk text where entity appears..."

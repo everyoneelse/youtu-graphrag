@@ -5385,6 +5385,37 @@ def _validate_candidates_with_llm_v2(
     logger.info(f"LLM validated {len(merge_mapping)} merges with representative selection")
     return merge_mapping, metadata
 
+def _collect_chunk_context(self, node_id: str, max_length: int = 500) -> str:
+    """
+    Collect chunk text context for a node.
+    
+    Args:
+        node_id: Node ID
+        max_length: Maximum length of chunk text to include (characters)
+        
+    Returns:
+        Formatted chunk context string
+    """
+    if node_id not in self.graph:
+        return "  (Node not found in graph)"
+    
+    node_data = self.graph.nodes[node_id]
+    properties = node_data.get("properties", {})
+    chunk_id = properties.get("chunk id") or properties.get("chunk_id")
+    
+    if not chunk_id:
+        return "  (No chunk information)"
+    
+    chunk_text = self.all_chunks.get(chunk_id)
+    if not chunk_text:
+        return f"  (Chunk {chunk_id} not found)"
+    
+    # Truncate if too long
+    if len(chunk_text) > max_length:
+        chunk_text = chunk_text[:max_length] + "..."
+    
+    return f"  Source text: \"{chunk_text}\""
+
 def _build_head_dedup_prompt_v2(self, node_id_1: str, node_id_2: str) -> str:
     """
     Build improved LLM prompt that asks for representative selection.
@@ -5399,9 +5430,27 @@ def _build_head_dedup_prompt_v2(self, node_id_1: str, node_id_2: str) -> str:
     desc_1 = self._describe_node(node_id_1)
     desc_2 = self._describe_node(node_id_2)
     
-    # Get graph context
+    # Get graph context (always included)
     context_1 = self._collect_node_context(node_id_1, max_relations=10)
     context_2 = self._collect_node_context(node_id_2, max_relations=10)
+    
+    # Check if hybrid context is enabled
+    config = self.config.construction.semantic_dedup.head_dedup if hasattr(
+        self.config.construction.semantic_dedup, 'head_dedup'
+    ) else None
+    
+    use_hybrid_context = False
+    if config:
+        use_hybrid_context = getattr(config, 'use_hybrid_context', False)
+    
+    # Add chunk context if hybrid mode is enabled
+    if use_hybrid_context:
+        chunk_context_1 = self._collect_chunk_context(node_id_1)
+        chunk_context_2 = self._collect_chunk_context(node_id_2)
+        
+        # Combine graph relations and chunk text
+        context_1 = f"{context_1}\n{chunk_context_1}"
+        context_2 = f"{context_2}\n{chunk_context_2}"
     
     # Try to load from config first
     try:
@@ -5476,6 +5525,155 @@ def _parse_coreference_response_v2(self, response: str) -> dict:
             "preferred_representative": None,
             "rationale": "Parse error"
         }
+
+def _revise_representative_with_frequency(
+    self,
+    merge_mapping: Dict[str, str],
+    metadata: Dict[str, dict]
+) -> Dict[str, str]:
+    """
+    Revise representative selection with frequency-based priority.
+    
+    Key improvement: If an entity appears in multiple pairs (high frequency),
+    it's likely a more standard/canonical name and should become the representative.
+    
+    Example:
+      Pairs: (A, B), (A, C), (A, D) all coreferent
+      → A is high-frequency, so A becomes representative
+      Result: B -> A, C -> A, D -> A
+    
+    Args:
+        merge_mapping: Initial {duplicate: canonical} from LLM
+        metadata: Metadata containing LLM's rationale
+        
+    Returns:
+        Revised merge_mapping with frequency-aware selection
+    """
+    from collections import defaultdict
+    
+    # Step 1: Count entity frequency (how many pairs each entity appears in)
+    entity_frequency = defaultdict(int)
+    for duplicate, canonical in merge_mapping.items():
+        entity_frequency[duplicate] += 1
+        entity_frequency[canonical] += 1
+    
+    # Step 2: Identify high-frequency entities
+    # Adaptive threshold: min(3, max_freq - 1)
+    if entity_frequency:
+        max_freq = max(entity_frequency.values())
+        HIGH_FREQ_THRESHOLD = max(2, min(3, max_freq - 1))
+    else:
+        HIGH_FREQ_THRESHOLD = 2
+    
+    high_freq_entities = {
+        entity for entity, freq in entity_frequency.items()
+        if freq >= HIGH_FREQ_THRESHOLD
+    }
+    
+    if high_freq_entities:
+        logger.info(
+            f"Identified {len(high_freq_entities)} high-frequency entities "
+            f"(threshold={HIGH_FREQ_THRESHOLD}): "
+            f"{sorted(high_freq_entities)[:5]}{'...' if len(high_freq_entities) > 5 else ''}"
+        )
+    
+    # Step 3: Build Union-Find with frequency priority
+    parent = {}
+    rank = {}
+    
+    def find(x):
+        if x not in parent:
+            parent[x] = x
+            rank[x] = 0
+        if parent[x] != x:
+            parent[x] = find(parent[x])
+        return parent[x]
+    
+    def union(entity1, entity2):
+        """Union with frequency priority."""
+        root1, root2 = find(entity1), find(entity2)
+        if root1 == root2:
+            return
+        
+        # Check if either is high-frequency
+        is_high_freq_1 = root1 in high_freq_entities
+        is_high_freq_2 = root2 in high_freq_entities
+        
+        if is_high_freq_1 and not is_high_freq_2:
+            # root1 is high-freq → make it representative
+            parent[root2] = root1
+            logger.debug(
+                f"Union: {root2} -> {root1} "
+                f"(high-freq priority, freq={entity_frequency[root1]})"
+            )
+        elif is_high_freq_2 and not is_high_freq_1:
+            # root2 is high-freq → make it representative
+            parent[root1] = root2
+            logger.debug(
+                f"Union: {root1} -> {root2} "
+                f"(high-freq priority, freq={entity_frequency[root2]})"
+            )
+        elif is_high_freq_1 and is_high_freq_2:
+            # Both high-freq → choose one with higher frequency
+            if entity_frequency[root1] > entity_frequency[root2]:
+                parent[root2] = root1
+                logger.debug(
+                    f"Union: {root2} -> {root1} "
+                    f"(higher freq: {entity_frequency[root1]} > {entity_frequency[root2]})"
+                )
+            elif entity_frequency[root1] < entity_frequency[root2]:
+                parent[root1] = root2
+                logger.debug(
+                    f"Union: {root1} -> {root2} "
+                    f"(higher freq: {entity_frequency[root2]} > {entity_frequency[root1]})"
+                )
+            else:
+                # Same frequency → use rank optimization
+                if rank[root1] < rank[root2]:
+                    parent[root1] = root2
+                elif rank[root1] > rank[root2]:
+                    parent[root2] = root1
+                else:
+                    parent[root2] = root1
+                    rank[root1] += 1
+        else:
+            # Neither is high-freq → use rank optimization (standard Union-Find)
+            if rank[root1] < rank[root2]:
+                parent[root1] = root2
+            elif rank[root1] > rank[root2]:
+                parent[root2] = root1
+            else:
+                parent[root2] = root1
+                rank[root1] += 1
+    
+    # Step 4: Apply all merge decisions with frequency-aware union
+    for duplicate, canonical in merge_mapping.items():
+        union(duplicate, canonical)
+    
+    # Step 5: Build final mapping
+    revised_mapping = {}
+    representative_changes = 0
+    
+    for duplicate, original_canonical in merge_mapping.items():
+        final_canonical = find(duplicate)
+        if duplicate != final_canonical:
+            revised_mapping[duplicate] = final_canonical
+            
+            # Log if representative changed
+            if final_canonical != original_canonical:
+                representative_changes += 1
+                logger.info(
+                    f"Representative revised: {duplicate} -> {original_canonical} "
+                    f"changed to {duplicate} -> {final_canonical} "
+                    f"(freq: {entity_frequency[final_canonical]})"
+                )
+    
+    if representative_changes > 0:
+        logger.info(
+            f"✓ Revised {representative_changes} representatives based on frequency"
+        )
+    
+    return revised_mapping
 
 def _merge_head_nodes_with_alias(
     self,
@@ -5786,6 +5984,12 @@ def deduplicate_heads_with_llm_v2(
                 )
                 
                 logger.info(f"✓ LLM identified {len(semantic_merge_mapping)} semantic matches")
+                
+                # Revise representatives with frequency priority
+                semantic_merge_mapping = self._revise_representative_with_frequency(
+                    semantic_merge_mapping,
+                    metadata
+                )
                 
                 # Apply merges
                 semantic_stats = self._merge_head_nodes_with_alias(
