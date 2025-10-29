@@ -351,37 +351,60 @@ prompts:
       Related knowledge about Entity 2:
       {context_2}
 
-      CRITICAL RULES:
-      1. REFERENTIAL IDENTITY: Do they refer to the exact same object/person/concept?
-         - Same entity with different names → YES (e.g., "NYC" = "New York City")
-         - Different but related entities → NO (e.g., "Apple Inc." ≠ "Apple Store")
+      FUNDAMENTAL PRINCIPLE:
+      COREFERENCE requires REFERENTIAL IDENTITY: Two entities must denote the exact same referent.
+      - MERGE: 'Entity_A' and 'Entity_A_alias' → same referent (different names for one thing)
+      - DO NOT MERGE: 'Entity_X' and 'Entity_Y' → different referents (two distinct things)
 
-      2. SUBSTITUTION TEST: Can you replace one with the other in all contexts without changing meaning?
-         - If substitution changes information → NO
-         - If substitution preserves meaning → YES
+      CRITICAL DISTINCTION - Similar Context/Relations ≠ Entity Identity:
+      ⚠️  If two entities appear in similar contexts or have similar relations, this does NOT make them the same entity.
+      Each entity can be a DIFFERENT object that happens to appear in SIMILAR contexts.
+      Formal logic: Similar_Context(X, Y) ↛ X=Y  (contextual similarity does not imply entity identity)
 
-      3. TYPE CONSISTENCY: Check entity types/categories
-         - Same name, different types → carefully verify with context
-         - Example: "Apple (company)" ≠ "Apple (fruit)"
+      MERGE CONDITIONS - ALL must hold:
+      1. REFERENT TEST: Do the two entities refer to exactly the same object in the real world?
+         • Same entity, different names → MERGE (e.g., 'NYC' = 'New York City')
+         • Different entities → KEEP SEPARATE (even if highly related)
+         • Category vs Instance → KEEP SEPARATE (e.g., "动物" ≠ "老虎", "伪影" ≠ "魔角伪影")
 
-      4. CONSERVATIVE PRINCIPLE:
-         - When uncertain → answer NO
-         - False merge is worse than false split
+      2. SUBSTITUTION TEST: Can you replace one entity with the other in ALL contexts without changing truth value?
+         • If substitution changes meaning/information → KEEP SEPARATE
+         • If substitution preserves meaning → MERGE
 
-      PROHIBITED MERGE REASONS (NOT valid reasons to merge):
-      ✗ Similar names: "John Smith" vs "John Smith Jr." → different persons
-      ✗ Related entities: "Apple Inc." vs "Apple Store" → company vs retail location
-      ✗ Same category: Both are cities → might be different cities
-      ✗ Shared relations: Both have similar relations → need comprehensive match
-      ✗ Partial overlap: Some relations match → need ALL key relations to match
-      
+      3. EQUIVALENCE: After merging, both must denote the SAME single entity.
+         • Do NOT merge entities representing different objects
+         • Each pair = one entity with different linguistic expressions
+
+      PROHIBITED MERGE REASONS (these are NOT valid reasons to merge):
+      ✗ Semantic similarity: "X and Y are similar/related" → similarity ≠ identity
+      ✗ Same category: "Both are type T" → category membership ≠ entity identity
+      ✗ Shared context: "X and Y appear in similar contexts" → contextual proximity ≠ identity
+      ✗ Shared relations: "Both have similar relations" → relation similarity ≠ entity identity
+      ✗ Functional relationship: "X causes/affects/contains Y" → relationship ≠ identity
+      ✗ Shared properties: "X and Y have property P" → property sharing ≠ entity identity
+      ✗ Category-Instance: "X is category, Y is instance of X" → hierarchical relationship ≠ identity
+      ✗ Part-Whole: "X is part of Y" or "Y contains X" → compositional relationship ≠ identity
+      ✗ General-Specific: "X is general term, Y is specific type" → specificity difference ≠ identity
+
+      CATEGORY-INSTANCE WARNING:
+      If one entity is a GENERAL CATEGORY and the other is a SPECIFIC INSTANCE/TYPE, they are DIFFERENT entities.
+      Examples:
+      - "伪影" (general: all artifacts) vs "魔角伪影" (specific: magic angle artifact) → DIFFERENT
+      - "疾病" (category: disease) vs "感冒" (instance: common cold) → DIFFERENT  
+      - "动物" (category: animal) vs "老虎" (instance: tiger) → DIFFERENT
+      - "Vehicle" (category) vs "Car" (specific type) → DIFFERENT
+
       DECISION PROCEDURE:
       For Entity 1 and Entity 2:
-        1. Check if names are variations of the same entity (e.g., abbreviations, translations)
-        2. Compare their relation patterns - do they have consistent relationships?
-        3. Look for contradictions - if any key relations conflict, they are DIFFERENT
-        4. Apply substitution test - can they be swapped in all contexts?
+        1. Ask: "Do they refer to the same entity?" (not "Are they related?")
+        2. Check: Is one a category and the other an instance/type? → If YES, KEEP SEPARATE
+        3. Apply SUBSTITUTION TEST: Would swapping them change the information?
+        4. Check for contradictions in their relations/properties
         5. If uncertain → answer NO (conservative principle)
+
+      CONSERVATIVE PRINCIPLE:
+      False splits (keeping coreferent entities separate) < False merges (merging distinct entities)
+      When in doubt, KEEP SEPARATE.
 
       OUTPUT FORMAT (strict JSON):
       {{
@@ -392,19 +415,25 @@ prompts:
 
       EXAMPLES:
       
-      Example 1 - SHOULD MERGE:
+      Example 1 - SHOULD MERGE (same entity, different expressions):
       Entity 1: "UN", relations: [founded→1945, member→United States]
       Entity 2: "United Nations", relations: [established→1945, member→USA]
       → is_coreferent: true, confidence: 0.95
-      → Rationale: "UN" is abbreviation of "United Nations", consistent founding year and members
+      → Rationale: "UN" is abbreviation of "United Nations", consistent founding year and members, same referent
       
-      Example 2 - SHOULD NOT MERGE:
+      Example 2 - SHOULD NOT MERGE (different entities, hierarchical relationship):
       Entity 1: "Apple Inc.", relations: [founded_by→Steve Jobs, produces→iPhone]
       Entity 2: "Apple Store", relations: [owned_by→Apple Inc., located_in→New York]
       → is_coreferent: false, confidence: 0.95
-      → Rationale: Different entities - Apple Inc. is company, Apple Store is retail location, ownership relation indicates hierarchy
+      → Rationale: Different entities - Apple Inc. is company, Apple Store is retail location; ownership relation indicates hierarchy, not identity
       
-      Example 3 - UNCERTAIN (should answer NO):
+      Example 3 - SHOULD NOT MERGE (category vs instance):
+      Entity 1: "伪影", relations: [member_of→脊柱解剖与诊断, 表现形式为→魔角效应]
+      Entity 2: "魔角伪影", relations: [has_attribute→定义:肌腱、韧带等...成55°夹角时信号增强, 常见部位或组织为→肌腱]
+      → is_coreferent: false, confidence: 0.90
+      → Rationale: "伪影" is a GENERAL CATEGORY (all MRI artifacts), "魔角伪影" is a SPECIFIC TYPE (magic angle artifact). They are in a category-instance relationship, not identity. Cannot substitute one for the other without losing specificity.
+      
+      Example 4 - UNCERTAIN (should answer NO):
       Entity 1: "张三", relations: [works_at→清华大学, age→45]
       Entity 2: "张三", relations: [studies_at→北京大学, age→22]
       → is_coreferent: false, confidence: 0.80
