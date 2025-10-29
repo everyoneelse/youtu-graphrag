@@ -28,8 +28,17 @@ from utils.logger import logger
 class TailDedupApplicator:
     """Apply tail deduplication results to a knowledge graph."""
     
-    def __init__(self, graph: nx.MultiDiGraph):
+    def __init__(self, graph: nx.MultiDiGraph, remove_self_loops: bool = False):
+        """
+        Initialize the applicator.
+        
+        Args:
+            graph: The knowledge graph to process
+            remove_self_loops: If True, remove self-loops (edges where head==tail after dedup).
+                             If False, keep self-loops (default).
+        """
         self.graph = graph
+        self.remove_self_loops = remove_self_loops
         # Mapping from node identifier string to its representative
         self.node_mapping: Dict[str, str] = {}
         # Statistics
@@ -40,6 +49,8 @@ class TailDedupApplicator:
             'communities_updated': 0,
             'community_members_deduplicated': 0,
             'keyword_filter_relations_updated': 0,
+            'self_loops_removed': 0,
+            'self_loops_kept': 0,
         }
     
     def _parse_node_identifier(self, node_str: str) -> Tuple[str, str, str]:
@@ -187,6 +198,7 @@ class TailDedupApplicator:
         
         edges_to_add = []
         edges_to_remove = []
+        edges_being_added = set()  # Track (u_rep, v_rep, relation) to avoid duplicates
         
         for u, v, key, data in self.graph.edges(keys=True, data=True):
             # Get representatives for BOTH head and tail nodes
@@ -197,17 +209,34 @@ class TailDedupApplicator:
             if u_rep != u or v_rep != v:
                 relation = data.get('relation', '')
                 
-                # Check if edge with representatives already exists
-                edge_exists = False
-                if self.graph.has_edge(u_rep, v_rep):
+                # Check if this would create a self-loop
+                if u_rep == v_rep:
+                    if self.remove_self_loops:
+                        # Remove the edge without adding a self-loop
+                        edges_to_remove.append((u, v, key))
+                        self.stats['self_loops_removed'] += 1
+                        self.stats['edges_updated'] += 1
+                        continue
+                    else:
+                        # Keep the self-loop, but still need to check for duplicates
+                        self.stats['self_loops_kept'] += 1
+                
+                # Check if edge with representatives already exists (in graph or being added)
+                edge_signature = (u_rep, v_rep, relation)
+                edge_exists = edge_signature in edges_being_added
+                
+                if not edge_exists and self.graph.has_edge(u_rep, v_rep):
                     for edge_key, edge_data in self.graph[u_rep][v_rep].items():
                         if edge_data.get('relation') == relation:
                             edge_exists = True
                             break
                 
+                # Only add if doesn't exist
                 if not edge_exists:
                     edges_to_add.append((u_rep, v_rep, data))
+                    edges_being_added.add(edge_signature)
                 
+                # Always remove the old edge
                 edges_to_remove.append((u, v, key))
                 self.stats['edges_updated'] += 1
         
@@ -219,6 +248,10 @@ class TailDedupApplicator:
             self.graph.add_edge(u, v, **data)
         
         logger.info(f"Updated {self.stats['edges_updated']} edges")
+        if self.stats['self_loops_kept'] > 0:
+            logger.info(f"Kept {self.stats['self_loops_kept']} self-loops")
+        if self.stats['self_loops_removed'] > 0:
+            logger.info(f"Removed {self.stats['self_loops_removed']} self-loops")
     
     def apply_to_communities(self) -> None:
         """
