@@ -255,7 +255,46 @@ Two conditions must BOTH be satisfied:
 
 ═══════════════════════════════════════════════════════════
 
-STEP 1: REFERENTIAL IDENTITY CHECK
+STEP 1: NAME SEMANTIC ANALYSIS (CRITICAL)
+
+Before checking contexts, analyze the NAMES themselves:
+
+Question: Do the names reveal a hierarchical or specialization relationship?
+
+CRITICAL PATTERNS TO DETECT:
+
+Pattern 1: Generic vs Specific
+  • "X" vs "[Modifier] + X" → HIERARCHICAL, KEEP SEPARATE
+  Examples:
+    - "伪影" vs "魔角伪影" ❌ (generic artifact vs specific type)
+    - "带宽" vs "读出带宽" ❌ (generic vs specific bandwidth)
+    - "癌症" vs "肺癌" ❌ (generic vs specific cancer)
+
+Pattern 2: Base Concept vs Specialized Term
+  • Entity 1 name is a SUBSTRING of Entity 2 name → Likely hierarchical
+  • Entity 2 = [Modifier] + Entity 1 → Entity 2 is a SUBTYPE of Entity 1
+  
+Pattern 3: Different Specificity Levels
+  • One name is more specific/detailed than the other
+  Examples:
+    - "提高带宽" vs "提高接收带宽" ❌ (one specifies which bandwidth)
+    - "成像" vs "T1加权成像" ❌ (one specifies imaging type)
+
+⚠️ CRITICAL RULE:
+If one entity name is clearly a SPECIALIZATION of the other:
+  → They are in HIERARCHICAL relationship
+  → OUTPUT: is_coreferent = false, STOP immediately
+  → Do NOT proceed to context analysis
+
+Why? Because:
+- Generic term ("伪影") refers to ALL types of artifacts
+- Specific term ("魔角伪影") refers to ONE type
+- They refer to DIFFERENT SCOPE of objects
+- Merging them loses critical categorical information
+
+═══════════════════════════════════════════════════════════
+
+STEP 2: REFERENTIAL IDENTITY CHECK (only if Step 1 passed)
 
 Question: Do Entity 1 and Entity 2 refer to the EXACT SAME real-world object?
 
@@ -265,17 +304,22 @@ Use evidence from:
 - Domain knowledge (what you know about this domain)
 
 Tests:
-✓ Same object with different names → Potentially yes (go to Step 2)
+✓ Same object with different names → Potentially yes (go to Step 3)
 ✗ Different objects (even if related) → No, KEEP SEPARATE
 ✗ Part-whole relationship → No, KEEP SEPARATE
 ✗ Hierarchical relationship → No, KEEP SEPARATE
 ✗ ANY contradicting evidence → No, KEEP SEPARATE
 
+⚠️ CONTEXT SIMILARITY IS NOT ENOUGH:
+- If two entities appear in similar contexts, it does NOT mean they are the same
+- "伪影" and "魔角伪影" might be discussed together, but they are NOT the same
+- Similar usage patterns do NOT override name semantic differences
+
 If referentially different → OUTPUT: is_coreferent = false, STOP
 
 ═══════════════════════════════════════════════════════════
 
-STEP 2: INFORMATION EQUIVALENCE CHECK (only if Step 1 = YES)
+STEP 3: INFORMATION EQUIVALENCE CHECK (only if Steps 1 & 2 = YES)
 
 Even if they refer to the same object, they might contain DIFFERENT INFORMATION about it.
 
@@ -341,6 +385,42 @@ Example 2 - Asymmetric (KEEP SEPARATE):
   
   Explanation: Entity A contains MORE SPECIFIC information (which bandwidth).
   They refer to the same operation, but A is more precise than B.
+
+Example 3 - Hierarchical Relationship (KEEP SEPARATE):
+  Entity A: "伪影" (artifact - generic)
+  Entity B: "魔角伪影" (magic angle artifact - specific type)
+  
+  NAME ANALYSIS:
+    "魔角伪影" = "魔角" + "伪影"
+    → Entity B is a SPECIALIZATION of Entity A
+    → HIERARCHICAL relationship detected
+  
+  SCOPE ANALYSIS:
+    Entity A: Refers to ALL types of MRI artifacts (流动伪影, 化学位移伪影, 魔角伪影, etc.)
+    Entity B: Refers to ONE specific type (magic angle artifact only)
+  
+  SUBSTITUTION TEST:
+    A→B: "MRI中的伪影包括多种类型" → "MRI中的魔角伪影包括多种类型"
+          Information loss? YES, loses generic scope ✗
+    B→A: "魔角伪影出现在55°角时" → "伪影出现在55°角时"
+          Information loss? YES, loses type specificity ✗
+  
+  Result: HIERARCHICAL → KEEP SEPARATE
+  
+  CRITICAL: Even if they appear in similar contexts or are discussed together,
+  they represent different LEVELS of abstraction and must remain separate.
+
+Example 4 - Another Hierarchical Case (KEEP SEPARATE):
+  Entity A: "癌症" (cancer - generic)
+  Entity B: "肺癌" (lung cancer - specific)
+  
+  These are NOT the same entity, even if:
+  ✗ They appear in the same medical text
+  ✗ They share many properties
+  ✗ They have similar treatments
+  
+  Why? Because "癌症" refers to ALL cancers, "肺癌" refers to ONE type.
+  This is a CLASS-INSTANCE or SUPERCLASS-SUBCLASS relationship.
 
 ═══════════════════════════════════════════════════════════
 
