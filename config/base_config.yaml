@@ -412,11 +412,11 @@ prompts:
 
       
 
-    # New: Improved prompt with representative selection (LLM-driven)
+    # Improved: Information Identity Principle (fundamental approach)
     with_representative_selection: |-
-      You are an expert in knowledge graph entity resolution.
+      You are an expert in knowledge graph entity deduplication.
 
-      TASK: Determine if the following two entities refer to the SAME real-world object, and if so, which one should be the PRIMARY REPRESENTATIVE.
+      TASK: Determine if two entities contain EXACTLY THE SAME INFORMATION.
 
       Entity 1 (ID: {entity_1_id}): {entity_1_desc}
       Graph relationships:
@@ -430,127 +430,181 @@ prompts:
       Source text:
       {chunk_context_2}
 
-      FUNDAMENTAL PRINCIPLE:
+      ═══════════════════════════════════════════════════════════
+
+      FUNDAMENTAL PRINCIPLE: Information Identity
+
+      Entities should be merged if and only if they contain EXACTLY THE SAME INFORMATION.
+
+      Two conditions must BOTH be satisfied:
+
+      1. REFERENTIAL IDENTITY (指称相同)
+         → They refer to the exact same real-world object
       
-      COREFERENCE requires REFERENTIAL IDENTITY: Two entities must denote the exact same real-world object.
-      - MERGE: Different names/forms for ONE object (e.g., "UN" = "United Nations")
-      - DO NOT MERGE: Two DIFFERENT objects (e.g., "Apple Inc." ≠ "Apple Store")
+      2. INFORMATION EQUIVALENCE (信息等价)
+         → Replacing one with the other is lossless in BOTH directions
 
       ═══════════════════════════════════════════════════════════
 
-      CRITICAL DISTINCTION - Similar Relations ≠ Same Entity:
+      STEP 1: REFERENTIAL IDENTITY CHECK
 
-      ⚠️  If two entities have similar graph relationships or appear in similar contexts, 
-          this does NOT automatically make them the same entity.
+      Question: Do Entity 1 and Entity 2 refer to the EXACT SAME real-world object?
 
-      Two entities can have similar patterns but be DIFFERENT entities.
+      Use evidence from:
+      - Source text contexts (how they are described and used)
+      - Graph relationships (their connections to other entities)
+      - Domain knowledge (what you know about this domain)
 
-      Example:
-      - Entity_1: "张三", works_at → 清华大学, age → 45, position → 教授
-      - Entity_2: "张三", works_at → 北京大学, age → 22, position → 学生
-      → Similar patterns (same name, both at universities), but DIFFERENT people!
+      Tests:
+      ✓ Same object with different names → Potentially yes (go to Step 2)
+      ✗ Different objects (even if related) → No, KEEP SEPARATE
+      ✗ Part-whole relationship → No, KEEP SEPARATE  
+      ✗ Hierarchical relationship → No, KEEP SEPARATE
+      ✗ ANY contradicting evidence → No, KEEP SEPARATE
 
-      Formal: SimilarPatterns(E1, E2) ↛ E1 = E2
-      (relation pattern similarity does not imply entity identity)
-
-      ═══════════════════════════════════════════════════════════
-
-      MERGE CONDITIONS - ALL must hold:
-
-      1. REFERENT TEST: Do the two entities refer to exactly the same real-world object?
-         Using BOTH source text AND graph relationships:
-         • Same object, different names → MERGE (e.g., "NYC" = "New York City")
-         • Different objects → KEEP SEPARATE (even if highly related)
-
-      2. SUBSTITUTION TEST: Can you replace one with the other in ALL contexts?
-         Using BOTH source text AND graph relationships:
-         • If substitution changes meaning/information → KEEP SEPARATE
-         • If substitution preserves meaning everywhere → MERGE
-
-      3. NO CONTRADICTIONS: The evidence from source text and graph must be consistent.
-         • If ANY contradiction in source text OR graph → KEEP SEPARATE
-         • Hierarchical relations (owns/contains/manages) → KEEP SEPARATE (different entities)
-         • Conflicting attributes (different age/type/location) → KEEP SEPARATE
-
-      4. EQUIVALENCE CLASS: After merging, both entities must denote the SAME single object.
-         • Do NOT merge if they represent different instances/aspects/parts
-         • Each group = one entity with different linguistic expressions
+      If referentially different → OUTPUT: is_coreferent = false, STOP
 
       ═══════════════════════════════════════════════════════════
 
-      PROHIBITED MERGE REASONS (NOT valid reasons to merge):
+      STEP 2: INFORMATION EQUIVALENCE CHECK (only if Step 1 = YES)
 
-      ✗ Similar names: "John Smith" vs "John Smith Jr." → different persons
-      ✗ Same category: "Both are universities" → category membership ≠ identity
-      ✗ Similar relations: "Both have relation R" → pattern similarity ≠ identity
-      ✗ Related entities: "Apple Inc." vs "Apple Store" → company ≠ subsidiary
-      ✗ Co-occurrence: "Appear in same context/community" → proximity ≠ coreference
-      ✗ Shared properties: "Both have property P" → property sharing ≠ identity
-      ✗ Same community: "Both in community C" → community membership ≠ identity
-      ✗ Partial match: "Some relations match" → partial overlap ≠ complete identity
+      Even if they refer to the same object, they might contain DIFFERENT INFORMATION about it.
+
+      Question: Do they contain the exact same information, or does one contain more specific/detailed information?
+
+      CRITICAL: Test substitution in BOTH directions
+
+      Test A - Entity 1 → Entity 2:
+        • Take Entity 1's source context
+        • Imagine replacing Entity 1's name/description with Entity 2's
+        • Ask: "Is there ANY information loss?"
+          - Precision loss? (specific term → vague term)
+          - Detail loss? (detailed description → simplified)
+          - Specificity loss? (unambiguous → ambiguous)
+          - Contextual information loss? (bound to specific scenario → generic)
+        • Verdict: LOSSLESS (yes) or HAS LOSS (no)
+
+      Test B - Entity 2 → Entity 1:
+        • Take Entity 2's source context  
+        • Imagine replacing Entity 2's name/description with Entity 1's
+        • Ask: "Is there ANY information loss?"
+        • Verdict: LOSSLESS (yes) or HAS LOSS (no)
+
+      Symmetry Evaluation:
+        IF both Test A = LOSSLESS AND Test B = LOSSLESS
+          → SYMMETRIC substitution
+          → Information is equivalent
+          → Should MERGE
+        
+        IF Test A = HAS LOSS OR Test B = HAS LOSS
+          → ASYMMETRIC substitution
+          → Different information content
+          → Should KEEP SEPARATE
 
       ═══════════════════════════════════════════════════════════
-      
-      DECISION PROCEDURE:
-      
-      Use BOTH source text AND graph relationships together throughout your analysis.
-      
-      For Entity 1 and Entity 2:
+
+      EXAMPLES:
+
+      Example 1 - Symmetric (MERGE):
+        Entity A: "United Nations"
+        Entity B: "UN"
         
-        1. Ask: "Do they refer to the SAME real-world object?" 
-           (not just "Are they similar?" or "Are they related?")
-           → Check both source text and graph evidence
+        Test A→B: "The United Nations voted" → "The UN voted"
+                  Information loss? No ✓
+        Test B→A: "The UN voted" → "The United Nations voted"
+                  Information loss? No ✓
         
-        2. Check for ANY contradictions:
-           → In source text OR graph relationships
-           → Hierarchical relationships → KEEP SEPARATE
-           → Conflicting attributes → KEEP SEPARATE
-           → If contradictions found → answer NO
+        Result: Symmetric → Same information → MERGE
+
+      Example 2 - Asymmetric (KEEP SEPARATE):
+        Entity A: "增加读出带宽" (increase readout bandwidth - specific)
+        Entity B: "加大带宽" (increase bandwidth - vague)
         
-        3. Apply SUBSTITUTION TEST in ALL contexts:
-           → Can you swap them in source text without changing meaning?
-           → Can you swap them in graph relationships without changing information?
-           → If substitution changes anything → answer NO
+        Test A→B: "通过增加读出带宽解决伪影"
+               → "通过加大带宽解决伪影"
+                  Information loss? Yes, "读出" specificity lost ✗
         
-        4. If uncertain → answer NO:
-           → Limited evidence → KEEP SEPARATE
-           → Cannot confidently confirm identity → KEEP SEPARATE
-      
+        Test B→A: "解决方法：加大带宽"
+               → "解决方法：增加读出带宽"
+                  Information loss? No ✓
+        
+        Result: Asymmetric → Different information → KEEP SEPARATE
+        
+        Explanation: Entity A contains MORE SPECIFIC information (which bandwidth).
+        They refer to the same operation, but A is more precise than B.
+
+      Example 3 - Contextual binding (KEEP SEPARATE):
+        Entity A: "提高带宽" 
+          Source text: "流动伪影可通过提高带宽来减轻"
+        Entity B: "提高带宽"
+          Source text: "化学位移伪影的解决方法：提高带宽"
+        
+        Test A→B: "流动伪影可通过[提高带宽(from B)]来减轻"
+                  Information loss? Yes, loses the context that this bandwidth 
+                  adjustment is specifically for flow artifacts ✗
+        
+        Test B→A: "化学位移伪影的解决方法：[提高带宽(from A)]"
+                  Information loss? Yes, loses the context that this bandwidth
+                  adjustment is specifically for chemical shift artifacts ✗
+        
+        Result: Both directions have contextual information loss → KEEP SEPARATE
+        
+        Explanation: Although both describe "提高带宽" operation, each entity 
+        contains CONTEXTUAL BINDING INFORMATION to a specific problem. Replacing
+        one with the other loses which problem it's bound to.
+
+      ═══════════════════════════════════════════════════════════
+
+      PROHIBITED MERGE REASONS:
+
+      These are NOT valid reasons to merge:
+      ✗ Similar names
+      ✗ Same category or type
+      ✗ Similar graph relationships
+      ✗ Same community membership
+      ✗ Related/associated entities
+      ✗ Co-occurrence in contexts
+      ✗ Partial information overlap
+
+      Only merge if information is COMPLETELY identical.
+
       ═══════════════════════════════════════════════════════════
 
       CONSERVATIVE PRINCIPLE:
-      
-      False splits (keeping coreferent entities separate) 
-      < 
-      False merges (merging distinct entities)
-      
-      When in doubt, preserve distinctions.
-      
+
+      When uncertain about information loss → KEEP SEPARATE
+
+      Rationale: Preserving information distinctions is more important than graph simplicity.
+      False negatives (missing a merge) are better than false positives (losing information).
+
       ═══════════════════════════════════════════════════════════
-        
-      REPRESENTATIVE SELECTION (only if entities are coreferent):
-      
-      Choose PRIMARY REPRESENTATIVE based on:
-        a) **Formality and Completeness**: Full name > Abbreviation (but domain conventions matter)
-        b) **Domain Convention**: Medical/Academic prefer standard terms, Popular prefers common forms
-        c) **Information Richness**: Entity with MORE graph relationships
-        d) **Naming Quality**: Official name > Colloquial, Standard spelling > Variant
-        e) **Cultural Context**: Consider primary language and widely recognized forms
-        f) **Source Evidence**: Prefer entity with richer or more formal source text
-      
+
+      REPRESENTATIVE SELECTION (only if merging):
+
+      If information is equivalent, choose the representative based on:
+      • Formality and completeness (more formal/complete preferred)
+      • Domain convention (standard terminology preferred)
+      • Information richness (more graph relationships preferred)
+      • Naming quality (official/standard preferred over colloquial)
+
       ═══════════════════════════════════════════════════════════
 
       OUTPUT FORMAT (strict JSON):
       {{
         "is_coreferent": true/false,
+        "substitution_lossless_1to2": true/false/null,
+        "substitution_lossless_2to1": true/false/null,
+        "information_identity": true/false,
         "preferred_representative": "{entity_1_id}" or "{entity_2_id}" or null,
-        "rationale": "Provide a UNIFIED analysis that integrates source text and graph relationships throughout your reasoning. DO NOT separate into 'context usage' and 'coreference judgment' sections. Instead, explain: (1) How the combined evidence (text + graph) supports or contradicts coreference (mention specific evidence from BOTH sources), (2) Your substitution test result, (3) If coreferent, why you chose this representative (considering both text and graph evidence)."
+        "rationale": "Provide UNIFIED analysis: (1) Referential identity - do they refer to the same object? Cite specific evidence from source text and graph. (2) Information equivalence - test BOTH substitution directions explicitly. State clearly if there is ANY information loss in either direction (precision, detail, specificity, context). (3) Decision and reasoning. (4) If merging, explain choice of representative."
       }}
 
-      IMPORTANT:
-      - Set "preferred_representative" ONLY if "is_coreferent" is true
-      - If "is_coreferent" is false, set "preferred_representative" to null
-      - The "preferred_representative" must be exactly "{entity_1_id}" or "{entity_2_id}"
+      CRITICAL REQUIREMENTS:
+      - Set substitution_lossless_* to null if is_coreferent = false
+      - Set information_identity = true ONLY if BOTH substitution tests are lossless
+      - Set preferred_representative ONLY if information_identity = true
+      - In rationale, EXPLICITLY describe what information (if any) would be lost in each substitution direction
+      - Do NOT merge if you detect ANY information asymmetry
 
       EXAMPLES (demonstrating how to apply the principles):
       
