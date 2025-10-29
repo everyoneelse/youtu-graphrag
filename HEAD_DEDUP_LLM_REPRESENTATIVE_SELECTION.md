@@ -25,9 +25,17 @@ CRITICAL RULES:
    - If substitution preserves meaning → YES
 
 3. CONSERVATIVE PRINCIPLE:
-   - When uncertain about coreference → answer NO
+   - When in doubt, keep them separate
+   - Better to have duplicates than to lose information
    - When uncertain about representative → choose the one with more graph connections
-   - False merge is worse than false split
+
+4. CRITICAL: ONLY merge if truly identical (not just similar or related):
+   - True identity: Different names/forms for the SAME object
+   - Do NOT merge if:
+     * Entities describe different concepts (even if related)
+     * Entities convey different information or specificity
+     * One entity is a type/part/aspect of the other
+     * Entities have hierarchical or categorical relationships
 
 ## CONTEXT USAGE GUIDANCE (MANDATORY)
 
