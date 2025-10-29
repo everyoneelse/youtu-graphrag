@@ -73,10 +73,14 @@ class HeadDeduplicationLLMDrivenMixin:
             # Parse LLM response
             parsed = self._parse_coreference_response_v2(response)
             is_coreferent = parsed.get("is_coreferent", False)
+            information_identity = parsed.get("information_identity", False)
             preferred_representative = parsed.get("preferred_representative")
             rationale = parsed.get("rationale", "")
+            substitution_lossless_1to2 = parsed.get("substitution_lossless_1to2")
+            substitution_lossless_2to1 = parsed.get("substitution_lossless_2to1")
             
-            if is_coreferent and preferred_representative:
+            # Only merge if information identity is true
+            if information_identity and preferred_representative:
                 node_id_1 = meta["node_id_1"]
                 node_id_2 = meta["node_id_2"]
                 
@@ -98,13 +102,25 @@ class HeadDeduplicationLLMDrivenMixin:
                     "rationale": rationale,
                     "confidence": 1.0,  # LLM made the decision
                     "embedding_similarity": meta.get("embedding_similarity", 0.0),
-                    "method": "llm_v2",
-                    "llm_chosen_representative": canonical
+                    "method": "llm_v2_information_identity",
+                    "llm_chosen_representative": canonical,
+                    "information_identity": True,
+                    "substitution_lossless_1to2": substitution_lossless_1to2,
+                    "substitution_lossless_2to1": substitution_lossless_2to1
                 }
                 
                 logger.debug(
                     f"LLM decided: {duplicate} is alias of {canonical} "
-                    f"(rationale: {rationale[:100]}...)"
+                    f"(information identity confirmed, rationale: {rationale[:100]}...)"
+                )
+            elif is_coreferent and not information_identity:
+                # Log cases where entities refer to same object but have different information
+                node_id_1 = meta["node_id_1"]
+                node_id_2 = meta["node_id_2"]
+                logger.info(
+                    f"Coreferent but not identical: {node_id_1} and {node_id_2} "
+                    f"refer to same object but contain different information. "
+                    f"Keeping separate to preserve distinctions."
                 )
         
         logger.info(f"LLM validated {len(merge_mapping)} merges with representative selection")
@@ -205,11 +221,11 @@ class HeadDeduplicationLLMDrivenMixin:
         entity_2_id: str, entity_2_desc: str, graph_context_2: str, chunk_context_2: str
     ) -> str:
         """
-        Embedded fallback prompt template (mirrors config prompt).
+        Embedded fallback prompt template based on Information Identity principle.
         """
-        return f"""You are an expert in knowledge graph entity resolution.
+        return f"""You are an expert in knowledge graph entity deduplication.
 
-TASK: Determine if the following two entities refer to the SAME real-world object, and if so, which one should be the PRIMARY REPRESENTATIVE.
+TASK: Determine if two entities contain EXACTLY THE SAME INFORMATION.
 
 Entity 1 (ID: {entity_1_id}): {entity_1_desc}
 Graph relationships:
@@ -223,89 +239,173 @@ Graph relationships:
 Source text:
 {chunk_context_2}
 
-FUNDAMENTAL PRINCIPLE:
+═══════════════════════════════════════════════════════════
 
-COREFERENCE requires REFERENTIAL IDENTITY: Two entities must denote the exact same real-world object.
-- MERGE: Different names/forms for ONE object (e.g., "UN" = "United Nations")
-- DO NOT MERGE: Two DIFFERENT objects (e.g., "Apple Inc." ≠ "Apple Store")
+FUNDAMENTAL PRINCIPLE: Information Identity
+
+Entities should be merged if and only if they contain EXACTLY THE SAME INFORMATION.
+
+Two conditions must BOTH be satisfied:
+
+1. REFERENTIAL IDENTITY (指称相同)
+   → They refer to the exact same real-world object
+
+2. INFORMATION EQUIVALENCE (信息等价)
+   → Replacing one with the other is lossless in BOTH directions
 
 ═══════════════════════════════════════════════════════════
 
-CRITICAL DISTINCTION - Similar Relations ≠ Same Entity:
+STEP 1: REFERENTIAL IDENTITY CHECK
 
-⚠️  If two entities have similar graph relationships or appear in similar contexts, 
-    this does NOT automatically make them the same entity.
+Question: Do Entity 1 and Entity 2 refer to the EXACT SAME real-world object?
 
-Two entities can have similar patterns but be DIFFERENT entities.
+Use evidence from:
+- Source text contexts (how they are described and used)
+- Graph relationships (their connections to other entities)
+- Domain knowledge (what you know about this domain)
+
+Tests:
+✓ Same object with different names → Potentially yes (go to Step 2)
+✗ Different objects (even if related) → No, KEEP SEPARATE
+✗ Part-whole relationship → No, KEEP SEPARATE
+✗ Hierarchical relationship → No, KEEP SEPARATE
+✗ ANY contradicting evidence → No, KEEP SEPARATE
+
+If referentially different → OUTPUT: is_coreferent = false, STOP
 
 ═══════════════════════════════════════════════════════════
 
-MERGE CONDITIONS - ALL must hold:
+STEP 2: INFORMATION EQUIVALENCE CHECK (only if Step 1 = YES)
 
-1. REFERENT TEST: Do the two entities refer to exactly the same real-world object?
-   • Same object, different names → MERGE
-   • Different objects → KEEP SEPARATE
+Even if they refer to the same object, they might contain DIFFERENT INFORMATION about it.
 
-2. SUBSTITUTION TEST: Can you replace one with the other in ALL contexts?
-   • If substitution changes meaning → KEEP SEPARATE
-   • If substitution preserves meaning → MERGE
+Question: Do they contain the exact same information, or does one contain more specific/detailed information?
 
-3. NO CONTRADICTIONS: The evidence must be consistent.
-   • Any contradiction → KEEP SEPARATE
-   • Hierarchical relations → KEEP SEPARATE
+CRITICAL: Test substitution in BOTH directions
 
-4. EQUIVALENCE CLASS: Both entities must denote the SAME single object.
+Test A - Entity 1 → Entity 2:
+  • Take Entity 1's source context
+  • Imagine replacing Entity 1's name/description with Entity 2's
+  • Ask: "Is there ANY information loss?"
+    - Precision loss? (specific term → vague term)
+    - Detail loss? (detailed description → simplified)
+    - Specificity loss? (unambiguous → ambiguous)
+    - Contextual information loss? (bound to specific scenario → generic)
+  • Verdict: LOSSLESS (yes) or HAS LOSS (no)
+
+Test B - Entity 2 → Entity 1:
+  • Take Entity 2's source context
+  • Imagine replacing Entity 2's name/description with Entity 1's
+  • Ask: "Is there ANY information loss?"
+  • Verdict: LOSSLESS (yes) or HAS LOSS (no)
+
+Symmetry Evaluation:
+  IF both Test A = LOSSLESS AND Test B = LOSSLESS
+    → SYMMETRIC substitution
+    → Information is equivalent
+    → Should MERGE
+  
+  IF Test A = HAS LOSS OR Test B = HAS LOSS
+    → ASYMMETRIC substitution
+    → Different information content
+    → Should KEEP SEPARATE
+
+═══════════════════════════════════════════════════════════
+
+EXAMPLES:
+
+Example 1 - Symmetric (MERGE):
+  Entity A: "United Nations"
+  Entity B: "UN"
+  
+  Test A→B: "The United Nations voted" → "The UN voted"
+            Information loss? No ✓
+  Test B→A: "The UN voted" → "The United Nations voted"
+            Information loss? No ✓
+  
+  Result: Symmetric → Same information → MERGE
+
+Example 2 - Asymmetric (KEEP SEPARATE):
+  Entity A: "增加读出带宽" (increase readout bandwidth - specific)
+  Entity B: "加大带宽" (increase bandwidth - vague)
+  
+  Test A→B: "通过增加读出带宽解决伪影"
+         → "通过加大带宽解决伪影"
+            Information loss? Yes, "读出" specificity lost ✗
+  
+  Test B→A: "解决方法：加大带宽"
+         → "解决方法：增加读出带宽"
+            Information loss? No ✓
+  
+  Result: Asymmetric → Different information → KEEP SEPARATE
+  
+  Explanation: Entity A contains MORE SPECIFIC information (which bandwidth).
+  They refer to the same operation, but A is more precise than B.
 
 ═══════════════════════════════════════════════════════════
 
 PROHIBITED MERGE REASONS:
-✗ Similar names  ✗ Same category  ✗ Similar relations  ✗ Related entities
-✗ Co-occurrence  ✗ Shared properties  ✗ Same community  ✗ Partial match
+
+These are NOT valid reasons to merge:
+✗ Similar names
+✗ Same category or type
+✗ Similar graph relationships
+✗ Same community membership
+✗ Related/associated entities
+✗ Co-occurrence in contexts
+✗ Partial information overlap
+
+Only merge if information is COMPLETELY identical.
 
 ═══════════════════════════════════════════════════════════
 
-DECISION PROCEDURE:
+CONSERVATIVE PRINCIPLE:
 
-Use BOTH source text AND graph relationships together.
+When uncertain about information loss → KEEP SEPARATE
 
-1. Ask: "Do they refer to the SAME real-world object?"
-2. Check for ANY contradictions
-3. Apply SUBSTITUTION TEST in ALL contexts
-4. If uncertain → answer NO
-
-CONSERVATIVE PRINCIPLE: When in doubt, preserve distinctions.
+Rationale: Preserving information distinctions is more important than graph simplicity.
+False negatives (missing a merge) are better than false positives (losing information).
 
 ═══════════════════════════════════════════════════════════
 
-REPRESENTATIVE SELECTION (only if coreferent):
-- Formality & completeness
-- Domain convention
-- Information richness (more graph relationships)
-- Naming quality
-- Source evidence
+REPRESENTATIVE SELECTION (only if merging):
+
+If information is equivalent, choose the representative based on:
+• Formality and completeness (more formal/complete preferred)
+• Domain convention (standard terminology preferred)
+• Information richness (more graph relationships preferred)
+• Naming quality (official/standard preferred over colloquial)
 
 ═══════════════════════════════════════════════════════════
 
 OUTPUT FORMAT (strict JSON):
 {{
   "is_coreferent": true/false,
+  "substitution_lossless_1to2": true/false/null,
+  "substitution_lossless_2to1": true/false/null,
+  "information_identity": true/false,
   "preferred_representative": "{entity_1_id}" or "{entity_2_id}" or null,
-  "rationale": "UNIFIED analysis integrating source text and graph relationships. DO NOT separate into sections. Explain how combined evidence supports/contradicts coreference, substitution test result, and if coreferent, why you chose this representative."
+  "rationale": "Provide UNIFIED analysis: (1) Referential identity - do they refer to the same object? Cite specific evidence from source text and graph. (2) Information equivalence - test BOTH substitution directions explicitly. State clearly if there is ANY information loss in either direction (precision, detail, specificity, context). (3) Decision and reasoning. (4) If merging, explain choice of representative."
 }}
 
-IMPORTANT:
-- Set "preferred_representative" ONLY if "is_coreferent" is true
-- The ID must be exactly "{entity_1_id}" or "{entity_2_id}"
-- Provide integrated reasoning, not separated sections
+CRITICAL REQUIREMENTS:
+- Set substitution_lossless_* to null if is_coreferent = false
+- Set information_identity = true ONLY if BOTH substitution tests are lossless
+- Set preferred_representative ONLY if information_identity = true
+- In rationale, EXPLICITLY describe what information (if any) would be lost in each substitution direction
+- Do NOT merge if you detect ANY information asymmetry
 """
     
     def _parse_coreference_response_v2(self, response: str) -> dict:
         """
-        Parse LLM response with representative selection.
+        Parse LLM response with information identity check.
         
         Expected format:
         {
           "is_coreferent": true/false,
+          "substitution_lossless_1to2": true/false/null,
+          "substitution_lossless_2to1": true/false/null,
+          "information_identity": true/false,
           "preferred_representative": "entity_XXX" or null,
           "rationale": "..."
         }
@@ -314,30 +414,45 @@ IMPORTANT:
             response: LLM JSON response
             
         Returns:
-            Parsed dict with is_coreferent, preferred_representative, rationale
+            Parsed dict with information identity evaluation
         """
         try:
             import json_repair
             parsed = json_repair.loads(response)
             
             is_coreferent = bool(parsed.get("is_coreferent", False))
+            substitution_lossless_1to2 = parsed.get("substitution_lossless_1to2")
+            substitution_lossless_2to1 = parsed.get("substitution_lossless_2to1")
+            information_identity = bool(parsed.get("information_identity", False))
             preferred_representative = parsed.get("preferred_representative")
             rationale = str(parsed.get("rationale", ""))
             
-            # Validate
-            if is_coreferent and not preferred_representative:
+            # Validate: only merge if information identity is true
+            if is_coreferent and not information_identity:
+                logger.info(
+                    f"Entities are coreferent but information is not identical. "
+                    f"Keeping separate to preserve information distinctions."
+                )
+                is_coreferent = False
+                preferred_representative = None
+            
+            # Validate: if merging, must have representative
+            if information_identity and not preferred_representative:
                 logger.warning(
-                    f"LLM said is_coreferent=true but didn't provide preferred_representative. "
+                    f"LLM said information_identity=true but didn't provide preferred_representative. "
                     f"Response: {response[:200]}"
                 )
-                # Don't mark as coreferent if no representative
+                information_identity = False
                 is_coreferent = False
             
-            if not is_coreferent:
+            if not information_identity:
                 preferred_representative = None
             
             return {
                 "is_coreferent": is_coreferent,
+                "substitution_lossless_1to2": substitution_lossless_1to2,
+                "substitution_lossless_2to1": substitution_lossless_2to1,
+                "information_identity": information_identity,
                 "preferred_representative": preferred_representative,
                 "rationale": rationale
             }
@@ -347,6 +462,9 @@ IMPORTANT:
             logger.debug(f"Response: {response[:500]}...")
             return {
                 "is_coreferent": False,
+                "substitution_lossless_1to2": None,
+                "substitution_lossless_2to1": None,
+                "information_identity": False,
                 "preferred_representative": None,
                 "rationale": "Parse error"
             }
