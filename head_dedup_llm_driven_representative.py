@@ -205,7 +205,7 @@ class HeadDeduplicationLLMDrivenMixin:
         entity_2_id: str, entity_2_desc: str, graph_context_2: str, chunk_context_2: str
     ) -> str:
         """
-        Embedded prompt template with representative selection.
+        Embedded fallback prompt template (mirrors config prompt).
         """
         return f"""You are an expert in knowledge graph entity resolution.
 
@@ -223,49 +223,80 @@ Graph relationships:
 Source text:
 {chunk_context_2}
 
-CRITICAL RULES:
+FUNDAMENTAL PRINCIPLE:
 
-1. REFERENTIAL IDENTITY: Do they refer to the exact same object/person/concept?
-   - Same entity with different names → YES (e.g., "NYC" = "New York City")
-   - Different but related entities → NO (e.g., "Apple Inc." ≠ "Apple Store")
+COREFERENCE requires REFERENTIAL IDENTITY: Two entities must denote the exact same real-world object.
+- MERGE: Different names/forms for ONE object (e.g., "UN" = "United Nations")
+- DO NOT MERGE: Two DIFFERENT objects (e.g., "Apple Inc." ≠ "Apple Store")
 
-2. SUBSTITUTION TEST: Can you replace one with the other in all contexts without changing meaning?
+═══════════════════════════════════════════════════════════
 
-3. PRIMARY REPRESENTATIVE SELECTION (if they are coreferent):
-   Choose the entity that should serve as the main reference based on:
-   
-   a) **Formality and Completeness**:
-      - Full name > Abbreviation (e.g., "World Health Organization" > "WHO")
-      - BUT: Common abbreviations may be preferred (e.g., "AI" in tech context)
-   
-   b) **Domain Convention**:
-      - Medical: Prefer standard terminology
-      - Popular: Prefer commonly used form
-      - Academic: Prefer formal names
-   
-   c) **Information Richness** (visible in the graph):
-      - Entity with more relationships → Better representative
-      - Entity with more context → Better representative
-   
-   d) **Naming Quality**:
-      - Official name > Colloquial name
-      - Standard spelling > Variant spelling
+CRITICAL DISTINCTION - Similar Relations ≠ Same Entity:
 
-4. CONSERVATIVE PRINCIPLE:
-   - When uncertain about coreference → answer NO
-   - When uncertain about representative → choose the one with more graph connections
+⚠️  If two entities have similar graph relationships or appear in similar contexts, 
+    this does NOT automatically make them the same entity.
+
+Two entities can have similar patterns but be DIFFERENT entities.
+
+═══════════════════════════════════════════════════════════
+
+MERGE CONDITIONS - ALL must hold:
+
+1. REFERENT TEST: Do the two entities refer to exactly the same real-world object?
+   • Same object, different names → MERGE
+   • Different objects → KEEP SEPARATE
+
+2. SUBSTITUTION TEST: Can you replace one with the other in ALL contexts?
+   • If substitution changes meaning → KEEP SEPARATE
+   • If substitution preserves meaning → MERGE
+
+3. NO CONTRADICTIONS: The evidence must be consistent.
+   • Any contradiction → KEEP SEPARATE
+   • Hierarchical relations → KEEP SEPARATE
+
+4. EQUIVALENCE CLASS: Both entities must denote the SAME single object.
+
+═══════════════════════════════════════════════════════════
+
+PROHIBITED MERGE REASONS:
+✗ Similar names  ✗ Same category  ✗ Similar relations  ✗ Related entities
+✗ Co-occurrence  ✗ Shared properties  ✗ Same community  ✗ Partial match
+
+═══════════════════════════════════════════════════════════
+
+DECISION PROCEDURE:
+
+Use BOTH source text AND graph relationships together.
+
+1. Ask: "Do they refer to the SAME real-world object?"
+2. Check for ANY contradictions
+3. Apply SUBSTITUTION TEST in ALL contexts
+4. If uncertain → answer NO
+
+CONSERVATIVE PRINCIPLE: When in doubt, preserve distinctions.
+
+═══════════════════════════════════════════════════════════
+
+REPRESENTATIVE SELECTION (only if coreferent):
+- Formality & completeness
+- Domain convention
+- Information richness (more graph relationships)
+- Naming quality
+- Source evidence
+
+═══════════════════════════════════════════════════════════
 
 OUTPUT FORMAT (strict JSON):
 {{
   "is_coreferent": true/false,
   "preferred_representative": "{entity_1_id}" or "{entity_2_id}" or null,
-  "rationale": "Explain: (1) WHY they are the same/different, (2) If same, WHY you chose this representative"
+  "rationale": "UNIFIED analysis integrating source text and graph relationships. DO NOT separate into sections. Explain how combined evidence supports/contradicts coreference, substitution test result, and if coreferent, why you chose this representative."
 }}
 
 IMPORTANT:
 - Set "preferred_representative" ONLY if "is_coreferent" is true
 - The ID must be exactly "{entity_1_id}" or "{entity_2_id}"
-- Explain your representative choice clearly
+- Provide integrated reasoning, not separated sections
 """
     
     def _parse_coreference_response_v2(self, response: str) -> dict:
