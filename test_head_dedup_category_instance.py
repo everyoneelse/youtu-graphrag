@@ -44,8 +44,8 @@ def check_prompt_contains_key_principles(prompt):
         "SUBSTITUTION TEST": "Test for bidirectional information preservation",
         "PROHIBITED MERGE REASONS": "Extended list of invalid merge reasons",
         "CONSERVATIVE PRINCIPLE": "When in doubt, keep separate",
-        "伪影": "Contains the specific example mentioned by user",
-        "魔角伪影": "Contains the specific example mentioned by user",
+        "Pattern: Category_X": "Contains generic pattern, not specific cases",
+        "ALWAYS DIFFERENT": "Clear rule for category-instance relationship",
     }
     
     results = {}
@@ -113,7 +113,7 @@ def check_decision_procedure(prompt):
 
 
 def check_examples(prompt):
-    """Check if the prompt includes the category-instance example"""
+    """Check if the prompt includes generic category-instance examples (not user-specific)"""
     
     # Check for example section
     if "EXAMPLES" not in prompt:
@@ -124,10 +124,11 @@ def check_examples(prompt):
     examples_section = prompt[start:]
     
     checks = {
-        "User's specific case (伪影 vs 魔角伪影)": "伪影" in examples_section and "魔角伪影" in examples_section,
+        "Generic cross-domain examples": ("Vehicle" in examples_section or "Animal" in examples_section or "Disease" in examples_section),
         "Category vs instance example": "category vs instance" in examples_section.lower() or "CATEGORY" in examples_section,
         "Should NOT merge rationale": "is_coreferent: false" in examples_section or "should not merge" in examples_section.lower(),
-        "Explanation of specificity difference": "specificity" in examples_section.lower() or "GENERAL" in examples_section,
+        "Explanation of specificity": "SPECIFIC TYPE" in examples_section or "specific" in examples_section.lower(),
+        "No user-specific hardcoding": not ("伪影" in examples_section and "魔角伪影" in examples_section),
     }
     
     results = {}
@@ -194,10 +195,12 @@ def main():
             print("✅ ALL CHECKS PASSED!")
             print("\nThe head_dedup prompt now incorporates:")
             print("  • Semantic dedup principles (referential identity)")
-            print("  • Category-instance relationship warnings")
+            print("  • Generic category-instance pattern (NOT case-specific)")
+            print("  • Cross-domain examples (Vehicle, Animal, Disease, Food)")
             print("  • Extended prohibited merge reasons (9 items)")
-            print("  • User's specific example (伪影 vs 魔角伪影)")
-            print("\nReady for testing on actual data!")
+            print("  • No hardcoded user cases - uses principle-based reasoning")
+            print("\n✅ Follows user rule: No case-by-case modifications!")
+            print("Ready for testing on actual data!")
         else:
             print("⚠️  SOME CHECKS FAILED")
             print("\nReview the results above and ensure all key elements are present.")

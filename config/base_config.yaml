@@ -388,11 +388,12 @@ prompts:
 
       CATEGORY-INSTANCE WARNING:
       If one entity is a GENERAL CATEGORY and the other is a SPECIFIC INSTANCE/TYPE, they are DIFFERENT entities.
+      Pattern: Category_X vs Instance_of_X → ALWAYS DIFFERENT
       Examples:
-      - "伪影" (general: all artifacts) vs "魔角伪影" (specific: magic angle artifact) → DIFFERENT
-      - "疾病" (category: disease) vs "感冒" (instance: common cold) → DIFFERENT  
-      - "动物" (category: animal) vs "老虎" (instance: tiger) → DIFFERENT
+      - "Animal" (category) vs "Tiger" (specific species) → DIFFERENT
+      - "Disease" (category) vs "Influenza" (specific disease) → DIFFERENT
       - "Vehicle" (category) vs "Car" (specific type) → DIFFERENT
+      - "Food" (category) vs "Apple" (specific food) → DIFFERENT
 
       DECISION PROCEDURE:
       For Entity 1 and Entity 2:
@@ -428,10 +429,10 @@ prompts:
       → Rationale: Different entities - Apple Inc. is company, Apple Store is retail location; ownership relation indicates hierarchy, not identity
       
       Example 3 - SHOULD NOT MERGE (category vs instance):
-      Entity 1: "伪影", relations: [member_of→脊柱解剖与诊断, 表现形式为→魔角效应]
-      Entity 2: "魔角伪影", relations: [has_attribute→定义:肌腱、韧带等...成55°夹角时信号增强, 常见部位或组织为→肌腱]
+      Entity 1: "Vehicle", relations: [has_type→Car, has_type→Truck, used_for→Transportation]
+      Entity 2: "Car", relations: [is_type_of→Vehicle, has_feature→Four wheels, example→Toyota]
       → is_coreferent: false, confidence: 0.90
-      → Rationale: "伪影" is a GENERAL CATEGORY (all MRI artifacts), "魔角伪影" is a SPECIFIC TYPE (magic angle artifact). They are in a category-instance relationship, not identity. Cannot substitute one for the other without losing specificity.
+      → Rationale: "Vehicle" is a GENERAL CATEGORY (all transportation devices), "Car" is a SPECIFIC TYPE (one kind of vehicle). They are in a category-instance relationship, not identity. Substitution test fails: replacing "Vehicle" with "Car" would incorrectly narrow the scope to exclude trucks, buses, etc. Conservative principle: KEEP SEPARATE.
       
       Example 4 - UNCERTAIN (should answer NO):
       Entity 1: "张三", relations: [works_at→清华大学, age→45]
