@@ -25,7 +25,8 @@ DEFAULT_SEMANTIC_DEDUP_PROMPT = (
     "All listed triples share the same head entity and relation.\n\n"
     "Head entity: {head}\n"
     "Relation: {relation}\n\n"
-    "Head contexts:\n{head_context}\n\n"
+    "Head entity related knowledge (graph relations):\n{head_graph_context}\n\n"
+    "Head entity contexts (source text):\n{head_context}\n\n"
     "Candidate tails:\n"
     "{candidates}\n\n"
     "TASK: Identify which tails are COREFERENT (refer to the exact same entity/concept).\n\n"
@@ -1775,13 +1776,36 @@ class KTBuilder:
             description = entry.get("description") or "[NO DESCRIPTION]"
             context_lines = entry.get("context_summaries") or ["- (no context available)"]
             context_block = "\n        ".join(context_lines)
-            candidate_blocks.append(
-                f"[{idx}] Tail: {description}\n    Contexts:\n        {context_block}"
-            )
+            
+            # Get tail node ID and collect graph relations for tail
+            tail_node_id = entry.get("node_id")
+            if tail_node_id and tail_node_id in self.graph:
+                tail_graph_context = self._collect_node_context(tail_node_id, max_relations=5)
+                candidate_blocks.append(
+                    f"[{idx}] Tail: {description}\n"
+                    f"    Related knowledge (graph relations):\n{tail_graph_context}\n"
+                    f"    Source text contexts:\n        {context_block}"
+                )
+            else:
+                candidate_blocks.append(
+                    f"[{idx}] Tail: {description}\n"
+                    f"    Related knowledge (graph relations): (No relations found)\n"
+                    f"    Source text contexts:\n        {context_block}"
+                )
 
         candidates_text = "\n".join(candidate_blocks) if candidate_blocks else "[No candidates]"
         relation_text = relation or "[UNKNOWN]"
         head_context_text = "\n".join(head_context_lines) if head_context_lines else "- (no context available)"
+        
+        # Collect head node graph context
+        # Extract head node ID from head_text if available
+        head_node_id = None
+        if hasattr(self, '_current_head_node_id'):
+            head_node_id = self._current_head_node_id
+        
+        head_graph_context = "(No graph relations available)"
+        if head_node_id and head_node_id in self.graph:
+            head_graph_context = self._collect_node_context(head_node_id, max_relations=10)
 
         # Auto-detect prompt type based on relation
         config = self._get_semantic_dedup_config()
@@ -1798,6 +1822,7 @@ class KTBuilder:
         prompt_kwargs = {
             "head": head_text or "[UNKNOWN_HEAD]",
             "relation": relation_text,
+            "head_graph_context": head_graph_context,
             "head_context": head_context_text,
             "candidates": candidates_text,
         }
