@@ -398,7 +398,24 @@ class KTBuilder:
         
         self.config = config
         self.dataset_name = dataset_name
-        self.schema = self.load_schema(schema_path or config.get_dataset_config(dataset_name).schema_path)
+
+        dataset_config = None
+        if dataset_name:
+            try:
+                dataset_config = config.get_dataset_config(dataset_name)
+            except ValueError:
+                dataset_config = None
+
+        resolved_schema_path = schema_path
+        if not resolved_schema_path and dataset_config:
+            resolved_schema_path = dataset_config.schema_path
+        if not resolved_schema_path:
+            resolved_schema_path = os.path.join("schemas", f"{dataset_name}.json")
+
+        os.makedirs(os.path.dirname(resolved_schema_path), exist_ok=True)
+
+        self.schema_path = resolved_schema_path
+        self.schema = self.load_schema(self.schema_path)
         self.graph = nx.MultiDiGraph()
         self.node_counter = 0
         self.datasets_no_chunk = config.construction.datasets_no_chunk
@@ -459,7 +476,7 @@ class KTBuilder:
 
     def load_schema(self, schema_path) -> Dict[str, Any]:
         try:
-            with open(schema_path) as f:
+            with open(schema_path, encoding="utf-8") as f:
                 schema = json.load(f)
                 return schema
         except FileNotFoundError:
@@ -812,20 +829,19 @@ class KTBuilder:
             new_schema_types: Dictionary containing 'nodes', 'relations', and 'attributes' lists
         """
         try:
-            schema_paths = {
-                "hotpot": "schemas/hotpot.json",
-                "2wiki": "schemas/2wiki.json", 
-                "musique": "schemas/musique.json",
-                "novel": "schemas/novels_chs.json",
-                "graphrag-bench": "schemas/graphrag-bench.json"
-            }
-            
-            schema_path = schema_paths.get(self.dataset_name)
+            schema_path = getattr(self, "schema_path", None)
             if not schema_path:
                 return
-                
-            with open(schema_path, 'r', encoding='utf-8') as f:
-                current_schema = json.load(f)
+
+            if os.path.exists(schema_path):
+                with open(schema_path, 'r', encoding='utf-8') as f:
+                    current_schema = json.load(f)
+            else:
+                current_schema = {
+                    "Nodes": [],
+                    "Relations": [],
+                    "Attributes": []
+                }
             
             updated = False
             
@@ -851,7 +867,7 @@ class KTBuilder:
             if updated:
                 with open(schema_path, 'w', encoding='utf-8') as f:
                     json.dump(current_schema, f, ensure_ascii=False, indent=2)
-                
+
                 # Update the in-memory schema
                 self.schema = current_schema
                 
