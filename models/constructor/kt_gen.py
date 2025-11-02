@@ -4995,6 +4995,26 @@ class KTBuilder:
                     "method": "llm"
                 }
         
+        # Add existing "别名包括" relationships from the graph to merge_mapping
+        logger.info("Scanning graph for existing '别名包括' relationships...")
+        alias_count = 0
+        for node_id in self.graph.nodes():
+            if node_id not in merge_mapping:  # Only add if not already in merge_mapping
+                for _, target_id, edge_data in self.graph.out_edges(node_id, data=True):
+                    relation = edge_data.get("relation", "")
+                    if relation == "别名包括":
+                        # node_id is an alias of target_id
+                        merge_mapping[node_id] = target_id
+                        metadata[node_id] = {
+                            "rationale": "Pre-existing alias relationship in graph",
+                            "confidence": 1.0,
+                            "embedding_similarity": 0.0,
+                            "method": "existing_alias"
+                        }
+                        alias_count += 1
+                        break  # Only use the first "别名包括" relationship
+        
+        logger.info(f"Added {alias_count} existing alias relationships to merge_mapping")
         return merge_mapping, metadata
     
     def _build_head_dedup_prompt(self, node_id_1: str, node_id_2: str) -> str:
