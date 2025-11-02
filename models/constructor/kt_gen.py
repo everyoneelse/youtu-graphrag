@@ -4996,28 +4996,49 @@ class KTBuilder:
                 }
         
         # Add existing "别名包括" relationships from the graph to merge_mapping
-        logger.info("Scanning graph for existing '别名包括' relationships...")
+        # Support both directions:
+        # 1. Forward: alias --[别名包括]--> main_entity (alias is source)
+        # 2. Reverse: main_entity --[别名包括]--> alias (alias is target)
+        logger.info("Scanning graph for existing '别名包括' relationships (both directions)...")
         alias_count = 0
         skipped_count = 0
         conflict_count = 0
+        forward_count = 0
+        reverse_count = 0
         
         for node_id in self.graph.nodes():
-            # Collect all "别名包括" relationships for this node
-            alias_edges = [
+            # 1. Check forward direction: node_id --[别名包括]--> target
+            #    Meaning: node_id is an alias of target
+            forward_edges = [
                 (target_id, edge_data) 
                 for _, target_id, edge_data in self.graph.out_edges(node_id, data=True)
                 if edge_data.get("relation", "") == "别名包括"
             ]
             
-            if len(alias_edges) == 0:
+            # 2. Check reverse direction: source --[别名包括]--> node_id
+            #    Meaning: node_id is an alias of source (source contains alias node_id)
+            reverse_edges = [
+                (source_id, edge_data)
+                for source_id, _, edge_data in self.graph.in_edges(node_id, data=True)
+                if edge_data.get("relation", "") == "别名包括"
+            ]
+            
+            # Combine both directions (all indicate node_id is an alias)
+            all_alias_relations = []
+            for target_id, _ in forward_edges:
+                all_alias_relations.append(("forward", target_id))
+            for source_id, _ in reverse_edges:
+                all_alias_relations.append(("reverse", source_id))
+            
+            if len(all_alias_relations) == 0:
                 continue
             
-            # Check for conflicts: one node with multiple "别名包括" edges
-            if len(alias_edges) > 1:
-                target_ids = [t for t, _ in alias_edges]
+            # Check for conflicts: multiple different canonical entities
+            unique_canonicals = set(canonical_id for _, canonical_id in all_alias_relations)
+            if len(unique_canonicals) > 1:
                 logger.warning(
-                    f"Node {node_id} has multiple '别名包括' relationships: {target_ids}. "
-                    f"This is unusual and may indicate data quality issues. Using first one."
+                    f"Node {node_id} has conflicting '别名包括' relationships pointing to different entities: {unique_canonicals}. "
+                    f"This may indicate data quality issues. Using first one."
                 )
                 conflict_count += 1
             
@@ -5025,27 +5046,33 @@ class KTBuilder:
             if node_id in merge_mapping:
                 # This node already has a merge decision from LLM
                 skipped_count += 1
-                target_id = alias_edges[0][0]
+                direction, canonical_id = all_alias_relations[0]
                 logger.debug(
-                    f"Skipping existing alias {node_id} -> {target_id} "
+                    f"Skipping existing alias {node_id} -> {canonical_id} ({direction}) "
                     f"because LLM already decided {node_id} -> {merge_mapping[node_id]}"
                 )
             else:
                 # Add the first alias relationship
-                target_id = alias_edges[0][0]
-                merge_mapping[node_id] = target_id
+                direction, canonical_id = all_alias_relations[0]
+                merge_mapping[node_id] = canonical_id
                 metadata[node_id] = {
-                    "rationale": "Pre-existing alias relationship in graph",
+                    "rationale": f"Pre-existing alias relationship in graph ({direction})",
                     "confidence": 1.0,
                     "embedding_similarity": 0.0,
-                    "method": "existing_alias"
+                    "method": "existing_alias",
+                    "direction": direction
                 }
                 alias_count += 1
+                if direction == "forward":
+                    forward_count += 1
+                else:
+                    reverse_count += 1
         
         logger.info(
-            f"Added {alias_count} existing alias relationships to merge_mapping. "
+            f"Added {alias_count} existing alias relationships to merge_mapping "
+            f"(forward: {forward_count}, reverse: {reverse_count}). "
             f"Skipped {skipped_count} (LLM override). "
-            f"Found {conflict_count} nodes with multiple alias edges."
+            f"Found {conflict_count} nodes with conflicting alias edges."
         )
         return merge_mapping, metadata
     
