@@ -379,10 +379,14 @@ class HeadDeduplicationMixin:
                 }
         
         # 4. 将图中已存在的"别名包括"关系添加到merge_mapping
+        # 策略：LLM优先，但冲突时以图中的canonical为准
+        # - 一般情况：尊重LLM判断
+        # - 复杂冲突：当图说 A --[别名包括]--> B，但：
+        #   * LLM说 B → C
+        #   * LLM说 A → D (D ≠ C)
+        #   解决方案：使用A（图中的canonical）作为最终主实体，将B、C、D都合并到A
         # 统一语义：A --[别名包括]--> B 表示 "B是A的别名"
-        # 因此：canonical_id = A（主实体），duplicate_id = B（别名）
-        # 结果：merge_mapping[B] = A
-        logger.info("扫描图中已存在的'别名包括'关系（LLM优先并解决冲突）...")
+        logger.info("扫描图中已存在的'别名包括'关系（冲突时图中canonical优先）...")
         alias_count = 0
         skipped_count = 0
         transitive_count = 0
@@ -427,32 +431,46 @@ class HeadDeduplicationMixin:
                     elif merge_mapping[canonical_id] != existing_canonical:
                         # 复杂冲突：canonical_id 也有不同的决定
                         # A --[别名包括]--> B，但 B→C 且 A→D (D≠C)
-                        # 解决方案：使用C（B的LLM目标）作为最终canonical，将A、D都合并到C
+                        # 解决方案：使用A（图中的canonical）作为最终主实体，将B、C、D都合并到A
                         canonical_target = merge_mapping[canonical_id]  # D
                         
                         logger.info(
                             f"解决复杂冲突：{canonical_id} --[别名包括]--> {duplicate_id}，"
                             f"其中 {duplicate_id} → {existing_canonical}（LLM）且 {canonical_id} → {canonical_target}（LLM）。"
-                            f"使用 {existing_canonical} 作为最终主实体（来自 {duplicate_id} 的LLM判断）。"
+                            f"使用 {canonical_id} 作为最终主实体（图中的canonical优先）。"
                         )
                         
-                        # 覆盖 A→C（使用B的LLM目标）
-                        merge_mapping[canonical_id] = existing_canonical
-                        metadata[canonical_id] = {
-                            "rationale": f"复杂冲突已解决：使用 {existing_canonical}（来自 {duplicate_id} 的LLM判断）",
+                        # 覆盖 B→A（使用图中的canonical）
+                        merge_mapping[duplicate_id] = canonical_id
+                        metadata[duplicate_id] = {
+                            "rationale": f"复杂冲突已解决：{duplicate_id} 是图中主实体 {canonical_id} 的别名",
                             "confidence": 0.95,
-                            "method": "existing_alias_complex_resolved"
+                            "method": "existing_alias_graph_canonical_override"
                         }
                         
-                        # 级联：D→C
-                        if canonical_target != existing_canonical and canonical_target in self.graph.nodes():
-                            merge_mapping[canonical_target] = existing_canonical
-                            metadata[canonical_target] = {
-                                "rationale": f"级联到 {existing_canonical}（复杂冲突解决）",
+                        # 级联：C→A
+                        if existing_canonical != canonical_id and existing_canonical in self.graph.nodes():
+                            merge_mapping[existing_canonical] = canonical_id
+                            metadata[existing_canonical] = {
+                                "rationale": f"级联到图中主实体 {canonical_id}",
                                 "confidence": 0.9,
-                                "method": "alias_complex_cascade"
+                                "method": "alias_graph_canonical_cascade"
                             }
-                            logger.info(f"级联：{canonical_target} → {existing_canonical}")
+                            logger.info(f"级联：{existing_canonical} → {canonical_id}")
+                        
+                        # 清除A的决定（A是最终主实体，不应该合并到其他地方）
+                        if canonical_target != canonical_id:
+                            # 级联：D→A
+                            if canonical_target in self.graph.nodes():
+                                merge_mapping[canonical_target] = canonical_id
+                                metadata[canonical_target] = {
+                                    "rationale": f"级联到图中主实体 {canonical_id}",
+                                    "confidence": 0.9,
+                                    "method": "alias_graph_canonical_cascade"
+                                }
+                                logger.info(f"级联：{canonical_target} → {canonical_id}")
+                            # 清除A的决定
+                            del merge_mapping[canonical_id]
                         
                         complex_resolved_count += 1
             else:

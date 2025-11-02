@@ -4996,14 +4996,14 @@ class KTBuilder:
                 }
         
         # Add existing "别名包括" relationships from the graph to merge_mapping
-        # Strategy: LLM priority, but resolve complex conflicts
+        # Strategy: LLM priority, but resolve complex conflicts with graph canonical
         # - Normal case: respect LLM decisions, don't override
         # - Complex conflict: when graph says A --[别名包括]--> B, but:
         #   * LLM says B → C
         #   * LLM says A → D (D ≠ C)
-        #   Solution: Use C (B's LLM target) as final canonical, merge A and D to C
+        #   Solution: Use A (graph canonical) as final canonical, merge B, C, D to A
         # Unified semantic: A --[别名包括]--> B means "B is an alias of A"
-        logger.info("Scanning graph for existing '别名包括' relationships (LLM priority with conflict resolution)...")
+        logger.info("Scanning graph for existing '别名包括' relationships (graph canonical priority in conflicts)...")
         alias_count = 0
         skipped_count = 0
         transitive_count = 0
@@ -5042,32 +5042,46 @@ class KTBuilder:
                         
                     elif merge_mapping[canonical_id] != existing_canonical:
                         # Complex conflict: A → D, B → C, but B is alias of A
-                        # Solution: Use C (B's LLM target) as final canonical
+                        # Solution: Use A (graph canonical) as final canonical
                         canonical_target = merge_mapping[canonical_id]  # D
                         
                         logger.info(
                             f"Resolving complex conflict: {canonical_id} --[别名包括]--> {duplicate_id}, "
                             f"where {duplicate_id} → {existing_canonical} (LLM) and {canonical_id} → {canonical_target} (LLM). "
-                            f"Using {existing_canonical} as final canonical (from {duplicate_id}'s LLM decision)."
+                            f"Using {canonical_id} as final canonical (graph canonical has priority)."
                         )
                         
-                        # Override: A → C (use B's LLM target)
-                        merge_mapping[canonical_id] = existing_canonical
-                        metadata[canonical_id] = {
-                            "rationale": f"Complex conflict resolved: using {existing_canonical} from {duplicate_id}'s LLM decision",
+                        # Override: B → A (use graph canonical)
+                        merge_mapping[duplicate_id] = canonical_id
+                        metadata[duplicate_id] = {
+                            "rationale": f"Complex conflict resolved: {duplicate_id} is alias of graph canonical {canonical_id}",
                             "confidence": 0.95,
-                            "method": "existing_alias_complex_resolved"
+                            "method": "existing_alias_graph_canonical_override"
                         }
                         
-                        # Cascade: D → C
-                        if canonical_target != existing_canonical and canonical_target in self.graph.nodes():
-                            merge_mapping[canonical_target] = existing_canonical
-                            metadata[canonical_target] = {
-                                "rationale": f"Cascade to {existing_canonical} (complex conflict resolution)",
+                        # Cascade: C → A
+                        if existing_canonical != canonical_id and existing_canonical in self.graph.nodes():
+                            merge_mapping[existing_canonical] = canonical_id
+                            metadata[existing_canonical] = {
+                                "rationale": f"Cascade to graph canonical {canonical_id}",
                                 "confidence": 0.9,
-                                "method": "alias_complex_cascade"
+                                "method": "alias_graph_canonical_cascade"
                             }
-                            logger.info(f"Cascade: {canonical_target} → {existing_canonical}")
+                            logger.info(f"Cascade: {existing_canonical} → {canonical_id}")
+                        
+                        # Clear A's decision (A is final canonical, should not merge elsewhere)
+                        if canonical_target != canonical_id:
+                            # Cascade: D → A
+                            if canonical_target in self.graph.nodes():
+                                merge_mapping[canonical_target] = canonical_id
+                                metadata[canonical_target] = {
+                                    "rationale": f"Cascade to graph canonical {canonical_id}",
+                                    "confidence": 0.9,
+                                    "method": "alias_graph_canonical_cascade"
+                                }
+                                logger.info(f"Cascade: {canonical_target} → {canonical_id}")
+                            # Clear A's decision
+                            del merge_mapping[canonical_id]
                         
                         complex_resolved_count += 1
             else:
