@@ -427,36 +427,49 @@ class HeadDeduplicationMixin:
                     elif merge_mapping[canonical_id] != existing_canonical:
                         # 复杂冲突：canonical_id 也有不同的决定
                         # A --[别名包括]--> B，但 B→C 且 A→D (D≠C)
-                        # 解决方案：强制传递 - A和B应该合并到同一实体
+                        # 解决方案：A是图中的主实体，将B、C、D都合并到A
                         canonical_target = merge_mapping[canonical_id]  # D
                         
-                        # 强制传递（覆盖A的决定）
-                        # 理由：图说B是A的别名，如果B→C，那么A也应该→C
                         logger.info(
-                            f"通过传递覆盖解决复杂冲突："
+                            f"解决复杂冲突：{canonical_id} 是图中的主实体。"
                             f"{canonical_id} --[别名包括]--> {duplicate_id}，"
                             f"其中 {duplicate_id} → {existing_canonical} 且 {canonical_id} → {canonical_target}。"
-                            f"覆盖为 {canonical_id} → {existing_canonical} 以遵守别名关系。"
+                            f"将所有实体（{duplicate_id}, {existing_canonical}, {canonical_target}）合并到 {canonical_id}。"
                         )
-                        merge_mapping[canonical_id] = existing_canonical
-                        metadata[canonical_id]["rationale"] = (
-                            f"覆盖：{duplicate_id} 是 {canonical_id} 的别名，"
-                            f"且 {duplicate_id} → {existing_canonical}，"
-                            f"因此 {canonical_id} 也应该 → {existing_canonical}"
-                        )
-                        metadata[canonical_id]["method"] = "existing_alias_conflict_resolved"
-                        transitive_count += 1
                         
-                        # 如果需要，也将canonical_target级联合并
-                        if canonical_target in self.graph.nodes() and canonical_target != existing_canonical:
-                            if canonical_target not in merge_mapping or merge_mapping[canonical_target] == canonical_target:
-                                merge_mapping[canonical_target] = existing_canonical
-                                metadata[canonical_target] = {
-                                    "rationale": f"从 {canonical_id} 级联合并",
-                                    "confidence": 0.8,
-                                    "method": "alias_cascade"
-                                }
-                                logger.info(f"级联合并：{canonical_target} → {existing_canonical}")
+                        # 覆盖 B→A（B应该合并到主实体A，而不是C）
+                        merge_mapping[duplicate_id] = canonical_id
+                        metadata[duplicate_id] = {
+                            "rationale": f"{duplicate_id} 是主实体 {canonical_id} 的别名",
+                            "confidence": 1.0,
+                            "method": "existing_alias_canonical_override"
+                        }
+                        
+                        # 覆盖 C→A（C应该合并到A）
+                        if existing_canonical in self.graph.nodes() and existing_canonical != canonical_id:
+                            merge_mapping[existing_canonical] = canonical_id
+                            metadata[existing_canonical] = {
+                                "rationale": f"合并到主实体 {canonical_id}（通过别名 {duplicate_id}）",
+                                "confidence": 0.9,
+                                "method": "alias_canonical_cascade"
+                            }
+                            logger.info(f"级联：{existing_canonical} → {canonical_id}")
+                        
+                        # 覆盖 D→A（D也应该合并到A）
+                        if canonical_target in self.graph.nodes() and canonical_target != canonical_id:
+                            merge_mapping[canonical_target] = canonical_id
+                            metadata[canonical_target] = {
+                                "rationale": f"覆盖到主实体 {canonical_id}",
+                                "confidence": 0.9,
+                                "method": "alias_canonical_cascade"
+                            }
+                            logger.info(f"级联：{canonical_target} → {canonical_id}")
+                        
+                        # 清除A的之前决定（A是最终的主实体）
+                        if canonical_id in merge_mapping:
+                            del merge_mapping[canonical_id]
+                        
+                        transitive_count += 1
             else:
                 # duplicate_id 还没有决定，使用图中的关系
                 merge_mapping[duplicate_id] = canonical_id
