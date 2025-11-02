@@ -5030,15 +5030,31 @@ class KTBuilder:
                     # Conflict: B → C (LLM), but graph says B is alias of A
                     # Check if A also has a decision
                     if canonical_id not in merge_mapping:
-                        # Simple transitive: A should also → C
-                        merge_mapping[canonical_id] = existing_canonical
-                        metadata[canonical_id] = {
-                            "rationale": f"Transitive: {duplicate_id} is alias of {canonical_id}, and {duplicate_id} → {existing_canonical}",
+                        # Use graph canonical: A is the final canonical, override B and cascade C
+                        logger.info(
+                            f"Graph canonical override: {canonical_id} is canonical, "
+                            f"overriding {duplicate_id} → {existing_canonical} to {duplicate_id} → {canonical_id}"
+                        )
+                        
+                        # Override B → A
+                        merge_mapping[duplicate_id] = canonical_id
+                        metadata[duplicate_id] = {
+                            "rationale": f"{duplicate_id} is alias of graph canonical {canonical_id}",
                             "confidence": 1.0,
-                            "method": "existing_alias_transitive"
+                            "method": "existing_alias_graph_canonical_override"
                         }
+                        
+                        # Cascade C → A
+                        if existing_canonical != canonical_id and existing_canonical in self.graph.nodes():
+                            merge_mapping[existing_canonical] = canonical_id
+                            metadata[existing_canonical] = {
+                                "rationale": f"Cascade to graph canonical {canonical_id}",
+                                "confidence": 0.9,
+                                "method": "alias_graph_canonical_cascade"
+                            }
+                            logger.info(f"Cascade: {existing_canonical} → {canonical_id}")
+                        
                         transitive_count += 1
-                        logger.info(f"Transitive: {canonical_id} → {existing_canonical} (via {duplicate_id})")
                         
                     elif merge_mapping[canonical_id] != existing_canonical:
                         # Complex conflict: A → D, B → C, but B is alias of A

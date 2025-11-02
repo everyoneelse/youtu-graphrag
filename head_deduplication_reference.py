@@ -413,21 +413,35 @@ class HeadDeduplicationMixin:
                     )
                 else:
                     # 冲突：duplicate_id 是 canonical_id 的别名，但LLM说 duplicate_id -> existing_canonical
-                    # 解决方案：传递合并 - canonical_id 也应该合并到 existing_canonical
-                    # 逻辑：如果B是A的别名，而B合并到C，那么A也应该合并到C
+                    # 解决方案：使用图中的canonical - A是最终主实体，覆盖B并级联C
                     if canonical_id not in merge_mapping:
-                        merge_mapping[canonical_id] = existing_canonical
-                        metadata[canonical_id] = {
-                            "rationale": f"传递合并：{duplicate_id} 是 {canonical_id} 的别名，且 {duplicate_id} 合并到 {existing_canonical}",
+                        # 使用图中的canonical：A是最终主实体，覆盖B并级联C
+                        logger.info(
+                            f"图中canonical覆盖：{canonical_id} 是主实体，"
+                            f"覆盖 {duplicate_id} → {existing_canonical} 为 {duplicate_id} → {canonical_id}"
+                        )
+                        
+                        # 覆盖 B → A
+                        merge_mapping[duplicate_id] = canonical_id
+                        metadata[duplicate_id] = {
+                            "rationale": f"{duplicate_id} 是图中主实体 {canonical_id} 的别名",
                             "confidence": 1.0,
                             "embedding_similarity": 0.0,
-                            "method": "existing_alias_transitive"
+                            "method": "existing_alias_graph_canonical_override"
                         }
+                        
+                        # 级联 C → A
+                        if existing_canonical != canonical_id and existing_canonical in self.graph.nodes():
+                            merge_mapping[existing_canonical] = canonical_id
+                            metadata[existing_canonical] = {
+                                "rationale": f"级联到图中主实体 {canonical_id}",
+                                "confidence": 0.9,
+                                "embedding_similarity": 0.0,
+                                "method": "alias_graph_canonical_cascade"
+                            }
+                            logger.info(f"级联：{existing_canonical} → {canonical_id}")
+                        
                         transitive_count += 1
-                        logger.info(
-                            f"传递合并：{canonical_id} → {existing_canonical} "
-                            f"（因为 {duplicate_id} 是 {canonical_id} 的别名且 {duplicate_id} → {existing_canonical}）"
-                        )
                     elif merge_mapping[canonical_id] != existing_canonical:
                         # 复杂冲突：canonical_id 也有不同的决定
                         # A --[别名包括]--> B，但 B→C 且 A→D (D≠C)
