@@ -5003,7 +5003,7 @@ class KTBuilder:
         alias_count = 0
         skipped_count = 0
         transitive_count = 0
-        complex_conflict_count = 0
+        cascade_count = 0
         
         for source_id, target_id, edge_data in self.graph.edges(data=True):
             if edge_data.get("relation", "") != "别名包括":
@@ -5043,14 +5043,37 @@ class KTBuilder:
                         )
                     elif merge_mapping[canonical_id] != existing_canonical:
                         # Complex conflict: canonical_id also has a different decision
-                        complex_conflict_count += 1
-                        logger.warning(
-                            f"Complex conflict detected: "
+                        # A --[别名包括]--> B, but B→C and A→D (D≠C)
+                        # Solution: Three-way merge - A, B should merge to same entity
+                        canonical_target = merge_mapping[canonical_id]  # D
+                        
+                        # Option 1: Force transitive (override A's decision)
+                        # Rationale: Graph says B is alias of A, so if B→C, then A→C too
+                        logger.info(
+                            f"Resolving complex conflict via transitive override: "
                             f"{canonical_id} --[别名包括]--> {duplicate_id}, "
-                            f"but {duplicate_id} → {existing_canonical} (LLM) "
-                            f"and {canonical_id} → {merge_mapping[canonical_id]} (existing). "
-                            f"Keeping existing decisions to avoid cycles."
+                            f"where {duplicate_id} → {existing_canonical} and {canonical_id} → {canonical_target}. "
+                            f"Overriding {canonical_id} → {existing_canonical} to respect alias relationship."
                         )
+                        merge_mapping[canonical_id] = existing_canonical
+                        metadata[canonical_id]["rationale"] = (
+                            f"Override: {duplicate_id} is alias of {canonical_id}, "
+                            f"and {duplicate_id} → {existing_canonical}, "
+                            f"so {canonical_id} should also → {existing_canonical}"
+                        )
+                        metadata[canonical_id]["method"] = "existing_alias_conflict_resolved"
+                        transitive_count += 1
+                        
+                        # Also propagate to canonical_target if needed
+                        if canonical_target in self.graph.nodes() and canonical_target != existing_canonical:
+                            if canonical_target not in merge_mapping or merge_mapping[canonical_target] == canonical_target:
+                                merge_mapping[canonical_target] = existing_canonical
+                                metadata[canonical_target] = {
+                                    "rationale": f"Cascade merge from {canonical_id}",
+                                    "confidence": 0.8,
+                                    "method": "alias_cascade"
+                                }
+                                logger.info(f"Cascade merge: {canonical_target} → {existing_canonical}")
             else:
                 # duplicate_id doesn't have a decision yet, use the graph relationship
                 merge_mapping[duplicate_id] = canonical_id
@@ -5065,8 +5088,7 @@ class KTBuilder:
         logger.info(
             f"Added {alias_count} existing alias relationships to merge_mapping. "
             f"Skipped {skipped_count} (already correct). "
-            f"Added {transitive_count} transitive merges. "
-            f"Found {complex_conflict_count} complex conflicts."
+            f"Resolved {transitive_count} conflicts via transitive merge."
         )
         return merge_mapping, metadata
     

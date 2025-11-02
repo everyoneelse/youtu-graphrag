@@ -386,7 +386,7 @@ class HeadDeduplicationMixin:
         alias_count = 0
         skipped_count = 0
         transitive_count = 0
-        complex_conflict_count = 0
+        cascade_count = 0
         
         for source_id, target_id, edge_data in self.graph.edges(data=True):
             if edge_data.get("relation", "") != "别名包括":
@@ -426,14 +426,37 @@ class HeadDeduplicationMixin:
                         )
                     elif merge_mapping[canonical_id] != existing_canonical:
                         # 复杂冲突：canonical_id 也有不同的决定
-                        complex_conflict_count += 1
-                        logger.warning(
-                            f"发现复杂冲突："
+                        # A --[别名包括]--> B，但 B→C 且 A→D (D≠C)
+                        # 解决方案：强制传递 - A和B应该合并到同一实体
+                        canonical_target = merge_mapping[canonical_id]  # D
+                        
+                        # 强制传递（覆盖A的决定）
+                        # 理由：图说B是A的别名，如果B→C，那么A也应该→C
+                        logger.info(
+                            f"通过传递覆盖解决复杂冲突："
                             f"{canonical_id} --[别名包括]--> {duplicate_id}，"
-                            f"但 {duplicate_id} → {existing_canonical}（LLM），"
-                            f"且 {canonical_id} → {merge_mapping[canonical_id]}（已有）。"
-                            f"保持现有决定以避免循环。"
+                            f"其中 {duplicate_id} → {existing_canonical} 且 {canonical_id} → {canonical_target}。"
+                            f"覆盖为 {canonical_id} → {existing_canonical} 以遵守别名关系。"
                         )
+                        merge_mapping[canonical_id] = existing_canonical
+                        metadata[canonical_id]["rationale"] = (
+                            f"覆盖：{duplicate_id} 是 {canonical_id} 的别名，"
+                            f"且 {duplicate_id} → {existing_canonical}，"
+                            f"因此 {canonical_id} 也应该 → {existing_canonical}"
+                        )
+                        metadata[canonical_id]["method"] = "existing_alias_conflict_resolved"
+                        transitive_count += 1
+                        
+                        # 如果需要，也将canonical_target级联合并
+                        if canonical_target in self.graph.nodes() and canonical_target != existing_canonical:
+                            if canonical_target not in merge_mapping or merge_mapping[canonical_target] == canonical_target:
+                                merge_mapping[canonical_target] = existing_canonical
+                                metadata[canonical_target] = {
+                                    "rationale": f"从 {canonical_id} 级联合并",
+                                    "confidence": 0.8,
+                                    "method": "alias_cascade"
+                                }
+                                logger.info(f"级联合并：{canonical_target} → {existing_canonical}")
             else:
                 # duplicate_id 还没有决定，使用图中的关系
                 merge_mapping[duplicate_id] = canonical_id
@@ -448,8 +471,7 @@ class HeadDeduplicationMixin:
         logger.info(
             f"从图中添加了 {alias_count} 个已存在的别名关系到merge_mapping。"
             f"跳过了 {skipped_count} 个（已正确）。"
-            f"添加了 {transitive_count} 个传递合并。"
-            f"发现 {complex_conflict_count} 个复杂冲突。"
+            f"通过传递合并解决了 {transitive_count} 个冲突。"
         )
         logger.info(f"LLM validated {len(merge_mapping)} merges (including existing aliases)")
         return merge_mapping, metadata
