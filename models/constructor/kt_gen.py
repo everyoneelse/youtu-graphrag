@@ -4996,14 +4996,15 @@ class KTBuilder:
                 }
         
         # Add existing "别名包括" relationships from the graph to merge_mapping
+        # Strategy: LLM decisions have priority
+        # - Only add graph relationships when LLM hasn't made a decision
+        # - Never override or modify LLM's decisions
         # Unified semantic: A --[别名包括]--> B means "B is an alias of A"
         # Therefore: canonical_id = A (main entity), duplicate_id = B (alias)
-        # Result: merge_mapping[B] = A
-        logger.info("Scanning graph for existing '别名包括' relationships...")
+        # Result: merge_mapping[B] = A (only if B not already in merge_mapping)
+        logger.info("Scanning graph for existing '别名包括' relationships (LLM priority)...")
         alias_count = 0
-        skipped_count = 0
-        transitive_count = 0
-        cascade_count = 0
+        llm_override_count = 0
         
         for source_id, target_id, edge_data in self.graph.edges(data=True):
             if edge_data.get("relation", "") != "别名包括":
@@ -5014,81 +5015,42 @@ class KTBuilder:
             canonical_id = source_id  # Main entity
             duplicate_id = target_id  # Alias
             
+            # Check if LLM already has a decision for duplicate_id
             if duplicate_id in merge_mapping:
-                # duplicate_id already has a merge decision
-                existing_canonical = merge_mapping[duplicate_id]
-                
-                if existing_canonical == canonical_id:
-                    # Already correct, skip
-                    skipped_count += 1
-                    logger.debug(
-                        f"Skipping {duplicate_id} -> {canonical_id}: already correct in merge_mapping"
-                    )
-                else:
-                    # Conflict: duplicate_id is alias of canonical_id, but LLM says duplicate_id -> existing_canonical
-                    # Solution: Transitive merge - canonical_id should also merge to existing_canonical
-                    # Logic: If B is alias of A, and B merges to C, then A should also merge to C
-                    if canonical_id not in merge_mapping:
-                        merge_mapping[canonical_id] = existing_canonical
-                        metadata[canonical_id] = {
-                            "rationale": f"Transitive merge: {duplicate_id} is alias of {canonical_id}, and {duplicate_id} merges to {existing_canonical}",
-                            "confidence": 1.0,
-                            "embedding_similarity": 0.0,
-                            "method": "existing_alias_transitive"
-                        }
-                        transitive_count += 1
-                        logger.info(
-                            f"Transitive merge: {canonical_id} → {existing_canonical} "
-                            f"(because {duplicate_id} is alias of {canonical_id} and {duplicate_id} → {existing_canonical})"
-                        )
-                    elif merge_mapping[canonical_id] != existing_canonical:
-                        # Complex conflict: canonical_id also has a different decision
-                        # A --[别名包括]--> B, but B→C and A→D (D≠C)
-                        # Solution: Three-way merge - A, B should merge to same entity
-                        canonical_target = merge_mapping[canonical_id]  # D
-                        
-                        # Option 1: Force transitive (override A's decision)
-                        # Rationale: Graph says B is alias of A, so if B→C, then A→C too
-                        logger.info(
-                            f"Resolving complex conflict via transitive override: "
-                            f"{canonical_id} --[别名包括]--> {duplicate_id}, "
-                            f"where {duplicate_id} → {existing_canonical} and {canonical_id} → {canonical_target}. "
-                            f"Overriding {canonical_id} → {existing_canonical} to respect alias relationship."
-                        )
-                        merge_mapping[canonical_id] = existing_canonical
-                        metadata[canonical_id]["rationale"] = (
-                            f"Override: {duplicate_id} is alias of {canonical_id}, "
-                            f"and {duplicate_id} → {existing_canonical}, "
-                            f"so {canonical_id} should also → {existing_canonical}"
-                        )
-                        metadata[canonical_id]["method"] = "existing_alias_conflict_resolved"
-                        transitive_count += 1
-                        
-                        # Also propagate to canonical_target if needed
-                        if canonical_target in self.graph.nodes() and canonical_target != existing_canonical:
-                            if canonical_target not in merge_mapping or merge_mapping[canonical_target] == canonical_target:
-                                merge_mapping[canonical_target] = existing_canonical
-                                metadata[canonical_target] = {
-                                    "rationale": f"Cascade merge from {canonical_id}",
-                                    "confidence": 0.8,
-                                    "method": "alias_cascade"
-                                }
-                                logger.info(f"Cascade merge: {canonical_target} → {existing_canonical}")
+                # LLM already decided, respect LLM's decision
+                llm_override_count += 1
+                logger.debug(
+                    f"LLM decision takes priority: {duplicate_id} → {merge_mapping[duplicate_id]} "
+                    f"(graph suggests {duplicate_id} → {canonical_id}, ignored)"
+                )
             else:
-                # duplicate_id doesn't have a decision yet, use the graph relationship
-                merge_mapping[duplicate_id] = canonical_id
-                metadata[duplicate_id] = {
-                    "rationale": "Pre-existing alias relationship in graph",
-                    "confidence": 1.0,
-                    "embedding_similarity": 0.0,
-                    "method": "existing_alias"
-                }
+                # LLM hasn't decided, use graph relationship
+                # But also check if canonical_id has a decision
+                if canonical_id in merge_mapping:
+                    # canonical_id will be merged elsewhere, so duplicate_id should follow
+                    final_canonical = merge_mapping[canonical_id]
+                    merge_mapping[duplicate_id] = final_canonical
+                    metadata[duplicate_id] = {
+                        "rationale": f"Alias relationship: {duplicate_id} is alias of {canonical_id}, and {canonical_id} → {final_canonical}",
+                        "confidence": 1.0,
+                        "embedding_similarity": 0.0,
+                        "method": "existing_alias_transitive"
+                    }
+                    logger.debug(f"Transitive from graph: {duplicate_id} → {final_canonical} (via {canonical_id})")
+                else:
+                    # Simple case: use graph relationship directly
+                    merge_mapping[duplicate_id] = canonical_id
+                    metadata[duplicate_id] = {
+                        "rationale": "Pre-existing alias relationship in graph",
+                        "confidence": 1.0,
+                        "embedding_similarity": 0.0,
+                        "method": "existing_alias"
+                    }
                 alias_count += 1
         
         logger.info(
-            f"Added {alias_count} existing alias relationships to merge_mapping. "
-            f"Skipped {skipped_count} (already correct). "
-            f"Resolved {transitive_count} conflicts via transitive merge."
+            f"Added {alias_count} alias relationships from graph to merge_mapping. "
+            f"Respected {llm_override_count} LLM decisions (graph relationships ignored)."
         )
         return merge_mapping, metadata
     
