@@ -381,23 +381,55 @@ class HeadDeduplicationMixin:
         # 4. 将图中已存在的"别名包括"关系添加到merge_mapping
         logger.info("扫描图中已存在的'别名包括'关系...")
         alias_count = 0
-        for node_id in self.graph.nodes():
-            if node_id not in merge_mapping:  # 只添加尚未在merge_mapping中的节点
-                for _, target_id, edge_data in self.graph.out_edges(node_id, data=True):
-                    relation = edge_data.get("relation", "")
-                    if relation == "别名包括":
-                        # node_id 是 target_id 的别名
-                        merge_mapping[node_id] = target_id
-                        metadata[node_id] = {
-                            "rationale": "图中已存在的别名关系",
-                            "confidence": 1.0,
-                            "embedding_similarity": 0.0,
-                            "method": "existing_alias"
-                        }
-                        alias_count += 1
-                        break  # 只使用第一个"别名包括"关系
+        skipped_count = 0
+        conflict_count = 0
         
-        logger.info(f"从图中添加了 {alias_count} 个已存在的别名关系到merge_mapping")
+        for node_id in self.graph.nodes():
+            # 收集该节点所有的"别名包括"关系
+            alias_edges = [
+                (target_id, edge_data) 
+                for _, target_id, edge_data in self.graph.out_edges(node_id, data=True)
+                if edge_data.get("relation", "") == "别名包括"
+            ]
+            
+            if len(alias_edges) == 0:
+                continue
+            
+            # 检测冲突：一个节点有多条"别名包括"边
+            if len(alias_edges) > 1:
+                target_ids = [t for t, _ in alias_edges]
+                logger.warning(
+                    f"节点 {node_id} 有多个'别名包括'关系: {target_ids}。"
+                    f"这不常见，可能表示数据质量问题。将使用第一个关系。"
+                )
+                conflict_count += 1
+            
+            # 处理别名关系
+            if node_id in merge_mapping:
+                # 该节点已经有LLM的合并决定
+                skipped_count += 1
+                target_id = alias_edges[0][0]
+                logger.debug(
+                    f"跳过已存在的别名 {node_id} -> {target_id}，"
+                    f"因为LLM已决定 {node_id} -> {merge_mapping[node_id]}"
+                )
+            else:
+                # 添加第一个别名关系
+                target_id = alias_edges[0][0]
+                merge_mapping[node_id] = target_id
+                metadata[node_id] = {
+                    "rationale": "图中已存在的别名关系",
+                    "confidence": 1.0,
+                    "embedding_similarity": 0.0,
+                    "method": "existing_alias"
+                }
+                alias_count += 1
+        
+        logger.info(
+            f"从图中添加了 {alias_count} 个已存在的别名关系到merge_mapping。"
+            f"跳过了 {skipped_count} 个（LLM覆盖）。"
+            f"发现 {conflict_count} 个节点有多条别名边。"
+        )
         logger.info(f"LLM validated {len(merge_mapping)} merges (including existing aliases)")
         return merge_mapping, metadata
     

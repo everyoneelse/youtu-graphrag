@@ -4998,23 +4998,55 @@ class KTBuilder:
         # Add existing "别名包括" relationships from the graph to merge_mapping
         logger.info("Scanning graph for existing '别名包括' relationships...")
         alias_count = 0
-        for node_id in self.graph.nodes():
-            if node_id not in merge_mapping:  # Only add if not already in merge_mapping
-                for _, target_id, edge_data in self.graph.out_edges(node_id, data=True):
-                    relation = edge_data.get("relation", "")
-                    if relation == "别名包括":
-                        # node_id is an alias of target_id
-                        merge_mapping[node_id] = target_id
-                        metadata[node_id] = {
-                            "rationale": "Pre-existing alias relationship in graph",
-                            "confidence": 1.0,
-                            "embedding_similarity": 0.0,
-                            "method": "existing_alias"
-                        }
-                        alias_count += 1
-                        break  # Only use the first "别名包括" relationship
+        skipped_count = 0
+        conflict_count = 0
         
-        logger.info(f"Added {alias_count} existing alias relationships to merge_mapping")
+        for node_id in self.graph.nodes():
+            # Collect all "别名包括" relationships for this node
+            alias_edges = [
+                (target_id, edge_data) 
+                for _, target_id, edge_data in self.graph.out_edges(node_id, data=True)
+                if edge_data.get("relation", "") == "别名包括"
+            ]
+            
+            if len(alias_edges) == 0:
+                continue
+            
+            # Check for conflicts: one node with multiple "别名包括" edges
+            if len(alias_edges) > 1:
+                target_ids = [t for t, _ in alias_edges]
+                logger.warning(
+                    f"Node {node_id} has multiple '别名包括' relationships: {target_ids}. "
+                    f"This is unusual and may indicate data quality issues. Using first one."
+                )
+                conflict_count += 1
+            
+            # Process the alias relationship
+            if node_id in merge_mapping:
+                # This node already has a merge decision from LLM
+                skipped_count += 1
+                target_id = alias_edges[0][0]
+                logger.debug(
+                    f"Skipping existing alias {node_id} -> {target_id} "
+                    f"because LLM already decided {node_id} -> {merge_mapping[node_id]}"
+                )
+            else:
+                # Add the first alias relationship
+                target_id = alias_edges[0][0]
+                merge_mapping[node_id] = target_id
+                metadata[node_id] = {
+                    "rationale": "Pre-existing alias relationship in graph",
+                    "confidence": 1.0,
+                    "embedding_similarity": 0.0,
+                    "method": "existing_alias"
+                }
+                alias_count += 1
+        
+        logger.info(
+            f"Added {alias_count} existing alias relationships to merge_mapping. "
+            f"Skipped {skipped_count} (LLM override). "
+            f"Found {conflict_count} nodes with multiple alias edges."
+        )
         return merge_mapping, metadata
     
     def _build_head_dedup_prompt(self, node_id_1: str, node_id_2: str) -> str:
