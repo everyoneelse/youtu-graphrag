@@ -4996,83 +4996,77 @@ class KTBuilder:
                 }
         
         # Add existing "别名包括" relationships from the graph to merge_mapping
-        # Support both directions:
-        # 1. Forward: alias --[别名包括]--> main_entity (alias is source)
-        # 2. Reverse: main_entity --[别名包括]--> alias (alias is target)
-        logger.info("Scanning graph for existing '别名包括' relationships (both directions)...")
+        # Unified semantic: A --[别名包括]--> B means "B is an alias of A"
+        # Therefore: canonical_id = A (main entity), duplicate_id = B (alias)
+        # Result: merge_mapping[B] = A
+        logger.info("Scanning graph for existing '别名包括' relationships...")
         alias_count = 0
         skipped_count = 0
-        conflict_count = 0
-        forward_count = 0
-        reverse_count = 0
+        transitive_count = 0
+        complex_conflict_count = 0
         
-        for node_id in self.graph.nodes():
-            # 1. Check forward direction: node_id --[别名包括]--> target
-            #    Meaning: node_id is an alias of target
-            forward_edges = [
-                (target_id, edge_data) 
-                for _, target_id, edge_data in self.graph.out_edges(node_id, data=True)
-                if edge_data.get("relation", "") == "别名包括"
-            ]
-            
-            # 2. Check reverse direction: source --[别名包括]--> node_id
-            #    Meaning: node_id is an alias of source (source contains alias node_id)
-            reverse_edges = [
-                (source_id, edge_data)
-                for source_id, _, edge_data in self.graph.in_edges(node_id, data=True)
-                if edge_data.get("relation", "") == "别名包括"
-            ]
-            
-            # Combine both directions (all indicate node_id is an alias)
-            all_alias_relations = []
-            for target_id, _ in forward_edges:
-                all_alias_relations.append(("forward", target_id))
-            for source_id, _ in reverse_edges:
-                all_alias_relations.append(("reverse", source_id))
-            
-            if len(all_alias_relations) == 0:
+        for source_id, target_id, edge_data in self.graph.edges(data=True):
+            if edge_data.get("relation", "") != "别名包括":
                 continue
             
-            # Check for conflicts: multiple different canonical entities
-            unique_canonicals = set(canonical_id for _, canonical_id in all_alias_relations)
-            if len(unique_canonicals) > 1:
-                logger.warning(
-                    f"Node {node_id} has conflicting '别名包括' relationships pointing to different entities: {unique_canonicals}. "
-                    f"This may indicate data quality issues. Using first one."
-                )
-                conflict_count += 1
+            # Unified semantic: source_id --[别名包括]--> target_id
+            # Means: "target_id is an alias of source_id"
+            canonical_id = source_id  # Main entity
+            duplicate_id = target_id  # Alias
             
-            # Process the alias relationship
-            if node_id in merge_mapping:
-                # This node already has a merge decision from LLM
-                skipped_count += 1
-                direction, canonical_id = all_alias_relations[0]
-                logger.debug(
-                    f"Skipping existing alias {node_id} -> {canonical_id} ({direction}) "
-                    f"because LLM already decided {node_id} -> {merge_mapping[node_id]}"
-                )
+            if duplicate_id in merge_mapping:
+                # duplicate_id already has a merge decision
+                existing_canonical = merge_mapping[duplicate_id]
+                
+                if existing_canonical == canonical_id:
+                    # Already correct, skip
+                    skipped_count += 1
+                    logger.debug(
+                        f"Skipping {duplicate_id} -> {canonical_id}: already correct in merge_mapping"
+                    )
+                else:
+                    # Conflict: duplicate_id is alias of canonical_id, but LLM says duplicate_id -> existing_canonical
+                    # Solution: Transitive merge - canonical_id should also merge to existing_canonical
+                    # Logic: If B is alias of A, and B merges to C, then A should also merge to C
+                    if canonical_id not in merge_mapping:
+                        merge_mapping[canonical_id] = existing_canonical
+                        metadata[canonical_id] = {
+                            "rationale": f"Transitive merge: {duplicate_id} is alias of {canonical_id}, and {duplicate_id} merges to {existing_canonical}",
+                            "confidence": 1.0,
+                            "embedding_similarity": 0.0,
+                            "method": "existing_alias_transitive"
+                        }
+                        transitive_count += 1
+                        logger.info(
+                            f"Transitive merge: {canonical_id} → {existing_canonical} "
+                            f"(because {duplicate_id} is alias of {canonical_id} and {duplicate_id} → {existing_canonical})"
+                        )
+                    elif merge_mapping[canonical_id] != existing_canonical:
+                        # Complex conflict: canonical_id also has a different decision
+                        complex_conflict_count += 1
+                        logger.warning(
+                            f"Complex conflict detected: "
+                            f"{canonical_id} --[别名包括]--> {duplicate_id}, "
+                            f"but {duplicate_id} → {existing_canonical} (LLM) "
+                            f"and {canonical_id} → {merge_mapping[canonical_id]} (existing). "
+                            f"Keeping existing decisions to avoid cycles."
+                        )
             else:
-                # Add the first alias relationship
-                direction, canonical_id = all_alias_relations[0]
-                merge_mapping[node_id] = canonical_id
-                metadata[node_id] = {
-                    "rationale": f"Pre-existing alias relationship in graph ({direction})",
+                # duplicate_id doesn't have a decision yet, use the graph relationship
+                merge_mapping[duplicate_id] = canonical_id
+                metadata[duplicate_id] = {
+                    "rationale": "Pre-existing alias relationship in graph",
                     "confidence": 1.0,
                     "embedding_similarity": 0.0,
-                    "method": "existing_alias",
-                    "direction": direction
+                    "method": "existing_alias"
                 }
                 alias_count += 1
-                if direction == "forward":
-                    forward_count += 1
-                else:
-                    reverse_count += 1
         
         logger.info(
-            f"Added {alias_count} existing alias relationships to merge_mapping "
-            f"(forward: {forward_count}, reverse: {reverse_count}). "
-            f"Skipped {skipped_count} (LLM override). "
-            f"Found {conflict_count} nodes with conflicting aliases."
+            f"Added {alias_count} existing alias relationships to merge_mapping. "
+            f"Skipped {skipped_count} (already correct). "
+            f"Added {transitive_count} transitive merges. "
+            f"Found {complex_conflict_count} complex conflicts."
         )
         return merge_mapping, metadata
     

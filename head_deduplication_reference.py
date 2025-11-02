@@ -379,45 +379,65 @@ class HeadDeduplicationMixin:
                 }
         
         # 4. 将图中已存在的"别名包括"关系添加到merge_mapping
+        # 统一语义：A --[别名包括]--> B 表示 "B是A的别名"
+        # 因此：canonical_id = A（主实体），duplicate_id = B（别名）
+        # 结果：merge_mapping[B] = A
         logger.info("扫描图中已存在的'别名包括'关系...")
         alias_count = 0
         skipped_count = 0
-        conflict_count = 0
+        transitive_count = 0
+        complex_conflict_count = 0
         
-        for node_id in self.graph.nodes():
-            # 收集该节点所有的"别名包括"关系
-            alias_edges = [
-                (target_id, edge_data) 
-                for _, target_id, edge_data in self.graph.out_edges(node_id, data=True)
-                if edge_data.get("relation", "") == "别名包括"
-            ]
-            
-            if len(alias_edges) == 0:
+        for source_id, target_id, edge_data in self.graph.edges(data=True):
+            if edge_data.get("relation", "") != "别名包括":
                 continue
             
-            # 检测冲突：一个节点有多条"别名包括"边
-            if len(alias_edges) > 1:
-                target_ids = [t for t, _ in alias_edges]
-                logger.warning(
-                    f"节点 {node_id} 有多个'别名包括'关系: {target_ids}。"
-                    f"这不常见，可能表示数据质量问题。将使用第一个关系。"
-                )
-                conflict_count += 1
+            # 统一语义：source_id --[别名包括]--> target_id
+            # 表示："target_id 是 source_id 的别名"
+            canonical_id = source_id  # 主实体
+            duplicate_id = target_id  # 别名
             
-            # 处理别名关系
-            if node_id in merge_mapping:
-                # 该节点已经有LLM的合并决定
-                skipped_count += 1
-                target_id = alias_edges[0][0]
-                logger.debug(
-                    f"跳过已存在的别名 {node_id} -> {target_id}，"
-                    f"因为LLM已决定 {node_id} -> {merge_mapping[node_id]}"
-                )
+            if duplicate_id in merge_mapping:
+                # duplicate_id 已经有合并决定
+                existing_canonical = merge_mapping[duplicate_id]
+                
+                if existing_canonical == canonical_id:
+                    # 已经正确，跳过
+                    skipped_count += 1
+                    logger.debug(
+                        f"跳过 {duplicate_id} -> {canonical_id}：merge_mapping中已正确"
+                    )
+                else:
+                    # 冲突：duplicate_id 是 canonical_id 的别名，但LLM说 duplicate_id -> existing_canonical
+                    # 解决方案：传递合并 - canonical_id 也应该合并到 existing_canonical
+                    # 逻辑：如果B是A的别名，而B合并到C，那么A也应该合并到C
+                    if canonical_id not in merge_mapping:
+                        merge_mapping[canonical_id] = existing_canonical
+                        metadata[canonical_id] = {
+                            "rationale": f"传递合并：{duplicate_id} 是 {canonical_id} 的别名，且 {duplicate_id} 合并到 {existing_canonical}",
+                            "confidence": 1.0,
+                            "embedding_similarity": 0.0,
+                            "method": "existing_alias_transitive"
+                        }
+                        transitive_count += 1
+                        logger.info(
+                            f"传递合并：{canonical_id} → {existing_canonical} "
+                            f"（因为 {duplicate_id} 是 {canonical_id} 的别名且 {duplicate_id} → {existing_canonical}）"
+                        )
+                    elif merge_mapping[canonical_id] != existing_canonical:
+                        # 复杂冲突：canonical_id 也有不同的决定
+                        complex_conflict_count += 1
+                        logger.warning(
+                            f"发现复杂冲突："
+                            f"{canonical_id} --[别名包括]--> {duplicate_id}，"
+                            f"但 {duplicate_id} → {existing_canonical}（LLM），"
+                            f"且 {canonical_id} → {merge_mapping[canonical_id]}（已有）。"
+                            f"保持现有决定以避免循环。"
+                        )
             else:
-                # 添加第一个别名关系
-                target_id = alias_edges[0][0]
-                merge_mapping[node_id] = target_id
-                metadata[node_id] = {
+                # duplicate_id 还没有决定，使用图中的关系
+                merge_mapping[duplicate_id] = canonical_id
+                metadata[duplicate_id] = {
                     "rationale": "图中已存在的别名关系",
                     "confidence": 1.0,
                     "embedding_similarity": 0.0,
@@ -427,8 +447,9 @@ class HeadDeduplicationMixin:
         
         logger.info(
             f"从图中添加了 {alias_count} 个已存在的别名关系到merge_mapping。"
-            f"跳过了 {skipped_count} 个（LLM覆盖）。"
-            f"发现 {conflict_count} 个节点有多条别名边。"
+            f"跳过了 {skipped_count} 个（已正确）。"
+            f"添加了 {transitive_count} 个传递合并。"
+            f"发现 {complex_conflict_count} 个复杂冲突。"
         )
         logger.info(f"LLM validated {len(merge_mapping)} merges (including existing aliases)")
         return merge_mapping, metadata
