@@ -5072,7 +5072,7 @@ class KTBuilder:
             f"Added {alias_count} existing alias relationships to merge_mapping "
             f"(forward: {forward_count}, reverse: {reverse_count}). "
             f"Skipped {skipped_count} (LLM override). "
-            f"Found {conflict_count} nodes with conflicting alias edges."
+            f"Found {conflict_count} nodes with conflicting aliases."
         )
         return merge_mapping, metadata
     
