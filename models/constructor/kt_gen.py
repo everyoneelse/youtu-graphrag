@@ -5715,12 +5715,80 @@ def _revise_representative_with_frequency(
     rank = {}
     
     def find(x):
+        """Find root with path compression."""
         if x not in parent:
             parent[x] = x
             rank[x] = 0
         if parent[x] != x:
             parent[x] = find(parent[x])
         return parent[x]
+    
+    def find_with_path(x):
+        """Find root and return the path from x to root.
+        
+        Returns:
+            tuple: (root, path) where path is list of nodes from x to root
+        """
+        if x not in parent:
+            parent[x] = x
+            rank[x] = 0
+            return x, [x]
+        
+        path = [x]
+        visited = {x}
+        current = x
+        
+        # Traverse to root, detecting cycles
+        while parent[current] != current:
+            next_node = parent[current]
+            
+            # Cycle detection
+            if next_node in visited:
+                cycle_start = path.index(next_node)
+                cycle = path[cycle_start:] + [next_node]
+                logger.error(
+                    f"CYCLE DETECTED: {' -> '.join(cycle)}\n"
+                    f"Full path: {' -> '.join(path)} -> {next_node}"
+                )
+                raise ValueError(f"Cycle detected in DSU: {' -> '.join(cycle)}")
+            
+            visited.add(next_node)
+            path.append(next_node)
+            current = next_node
+        
+        return current, path
+    
+    def get_path_to_root(x):
+        """Get the path from entity x to its root without modifying structure.
+        
+        Returns:
+            list: Path from x to root (including both x and root)
+        """
+        if x not in parent:
+            return [x]
+        
+        path = [x]
+        visited = {x}
+        current = x
+        max_depth = len(parent) + 1  # Safety limit
+        
+        while parent.get(current) != current and len(path) < max_depth:
+            next_node = parent[current]
+            
+            # Cycle detection
+            if next_node in visited:
+                cycle_start = path.index(next_node)
+                cycle = path[cycle_start:] + [next_node]
+                logger.warning(
+                    f"Cycle in path from {x}: {' -> '.join(cycle)}"
+                )
+                return path + [next_node]  # Return path including cycle point
+            
+            visited.add(next_node)
+            path.append(next_node)
+            current = next_node
+        
+        return path
     
     def union(entity1, entity2):
         """Union with frequency priority."""
