@@ -267,6 +267,7 @@ prompts:
       Head contexts:
       {head_context}
 
+      {chunks}
       Candidate tails:
       {candidates}
 
@@ -297,6 +298,7 @@ prompts:
       Head contexts:
       {head_context}
 
+      {chunks}
       Candidate attribute values:
       {candidates}
 
