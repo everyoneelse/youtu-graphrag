@@ -1,0 +1,154 @@
+# Multi-Signal Head Entity Deduplication Configuration
+# 
+# This configuration enables comprehensive entity deduplication using multiple
+# signals beyond just name semantic similarity.
+#
+# Recommended for: Medical, technical, and domain-specific knowledge graphs
+# where entities may have aliases that are semantically dissimilar.
+
+construction:
+  semantic_dedup:
+    # Enable semantic deduplication overall
+    enabled: true
+    
+    # Head entity deduplication settings
+    head_dedup:
+      enabled: true
+      
+      # ===================================================================
+      # Multi-Signal Configuration
+      # ===================================================================
+      multi_signal:
+        # Enable multi-signal approach (vs single-signal semantic only)
+        enabled: true
+        
+        # Individual signal switches
+        signals:
+          # Signal 1: Name semantic similarity (original)
+          semantic:
+            enabled: true
+            threshold: 0.75  # Cosine similarity threshold for embeddings
+            max_candidates: 2000  # Limit candidate pairs to avoid explosion
+            
+          # Signal 2: Subgraph structure similarity (NEW)
+          # Captures entities with similar relation patterns
+          subgraph:
+            enabled: true
+            threshold: 0.60  # Structure fingerprint similarity threshold
+            depth: 1  # Subgraph extraction depth (1=immediate neighbors, 2=2-hop)
+            # Use case: "Gibbs Artifact" and "Truncation Artifact" may have
+            # different neighbors but similar structural patterns
+            
+          # Signal 3: Explicit alias relations (NEW)
+          # Directly uses alias edges in the graph as strong signals
+          alias:
+            enabled: true
+            # No threshold needed - explicit relations have confidence 1.0
+            # Use case: If graph has "A --[别名包括]--> B", strong evidence to merge
+            
+          # Signal 4: Attribute overlap (NEW)
+          # Compares node properties (definition, description, type, etc.)
+          attribute:
+            enabled: true
+            min_overlap: 0.60  # Jaccard similarity for attribute sets
+            # Use case: Two entities with identical definitions but different names
+        
+        # ===================================================================
+        # Signal Fusion Weights
+        # ===================================================================
+        # How much each signal contributes to the final fusion score
+        # Total should sum to 1.0 (will be normalized if not)
+        fusion_weights:
+          semantic: 0.30    # Name similarity (reduced from sole reliance)
+          subgraph: 0.25    # Structure patterns
+          alias: 0.35       # Explicit alias relations (HIGHEST - most reliable)
+          attribute: 0.10   # Property overlap
+        
+        # Fusion score boosting rules
+        boost_rules:
+          # If explicit alias signal exists with high confidence, boost fusion score
+          alias_boost:
+            enabled: true
+            min_alias_confidence: 0.9
+            boost_to_score: 0.95  # Boost fusion score to at least this value
+        
+        # ===================================================================
+        # LLM Validation
+        # ===================================================================
+        llm_validation:
+          enabled: true
+          
+          # Only send pairs to LLM if fusion score >= this threshold
+          # Reduces LLM calls while ensuring high-confidence pairs are validated
+          min_fusion_score: 0.70
+          
+          # Provide multi-signal context to LLM
+          # LLM will see all signal evidence and can make informed decision
+          provide_signal_context: true
+          provide_subgraph_context: true
+          max_subgraph_edges: 5  # How many edges to show per entity
+          
+          # LLM decision threshold
+          # Only merge if LLM returns confidence >= this value
+          min_llm_confidence: 0.7
+      
+      # ===================================================================
+      # Merge Strategy
+      # ===================================================================
+      # How to handle identified duplicates
+      merge_strategy: "alias"  # Options: "alias" (preserve nodes) or "delete" (remove duplicates)
+      
+      # If using "alias" strategy, name of the alias relationship
+      alias_relation_name: "alias_of"
+      
+      # Representative selection strategy (when choosing which entity to keep as main)
+      representative_selection:
+        # Priority order (first criterion that distinguishes wins):
+        # 1. follow_alias_direction: If alias edge exists, follow its direction
+        # 2. prefer_higher_degree: Entity with more relationships
+        # 3. prefer_longer_name: Longer name often more formal/complete
+        # 4. prefer_more_evidence: Entity with more chunk_ids (source evidence)
+        # 5. prefer_earlier_id: Entity created earlier (lower ID)
+        follow_alias_direction: true
+        prefer_higher_degree: true
+        prefer_longer_name: true
+        prefer_more_evidence: true
+        prefer_earlier_id: true
+
+# ===================================================================
+# Use Case Examples
+# ===================================================================
+#
+# Example 1: Medical imaging terms with different focus
+#   Entity A: "吉布斯伪影" (Gibbs artifact)
+#     - Subgraph: {定义, 表现形式, 发生机制}
+#   Entity B: "截断伪影" (Truncation artifact)
+#     - Subgraph: {解决方案}
+#   
+#   Traditional (semantic only): similarity=0.45 → NOT merged ✗
+#   Multi-signal:
+#     - Semantic: 0.45
+#     - Subgraph: 0.40 (some common neighbors)
+#     - Alias: 1.0 (explicit "别名包括" edge) ← KEY!
+#     - Attribute: 0.70 (both type="MRI伪影")
+#     → Fusion: 0.95 → MERGED ✓
+#
+# Example 2: Bilingual entity pairs
+#   Entity A: "Gibbs Artifact"
+#   Entity B: "吉布斯伪影"
+#   
+#   Semantic: 0.35 (cross-lingual, low)
+#   Subgraph: 0.85 (nearly identical neighbors)
+#   Alias: 0.0 (no explicit edge)
+#   Attribute: 0.90 (same definition)
+#   → Fusion: 0.62 → LLM validation → MERGED ✓
+#
+# Example 3: Similar but distinct concepts
+#   Entity A: "流动伪影" (Flow artifact)
+#   Entity B: "运动伪影" (Motion artifact)
+#   
+#   Semantic: 0.82 (high similarity)
+#   Subgraph: 0.75 (similar patterns)
+#   Alias: 0.0 (no edge)
+#   Attribute: 0.30 (different definitions)
+#   → Fusion: 0.55 → LLM sees different definitions → NOT merged ✓
