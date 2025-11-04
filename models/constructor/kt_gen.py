@@ -26,6 +26,7 @@ DEFAULT_SEMANTIC_DEDUP_PROMPT = (
     "Head entity: {head}\n"
     "Relation: {relation}\n\n"
     "Head contexts:\n{head_context}\n\n"
+    "{chunks}"
     "Candidate tails:\n"
     "{candidates}\n\n"
     "TASK: Identify which tails are COREFERENT (refer to the exact same entity/concept).\n\n"
@@ -99,6 +100,7 @@ DEFAULT_ATTRIBUTE_DEDUP_PROMPT = (
     "Head entity: {head}\n"
     "Relation: {relation}\n\n"
     "Head contexts:\n{head_context}\n\n"
+    "{chunks}"
     "Candidate attribute values:\n"
     "{candidates}\n\n"
     "TASK: Identify which attribute values are EQUIVALENT (express the exact same property-value pair).\n\n"
@@ -1770,13 +1772,50 @@ class KTBuilder:
         head_context_lines: list,
         batch_entries: list,
     ) -> str:
+        # Step 1: Collect all unique chunks from all entities
+        chunk_id_to_text = {}  # chunk_id -> chunk_text
+        chunk_id_to_ref = {}   # chunk_id -> chunk_ref_number
+        
+        for entry in batch_entries:
+            chunk_ids = entry.get("context_chunk_ids", [])
+            for chunk_id in chunk_ids:
+                if chunk_id and chunk_id not in chunk_id_to_text:
+                    chunk_text = self.all_chunks.get(chunk_id)
+                    if chunk_text:
+                        # Truncate chunk text to avoid overly long contexts
+                        snippet = " ".join(str(chunk_text).split())
+                        if len(snippet) > 200:
+                            snippet = snippet[:200].rstrip() + "…"
+                        chunk_id_to_text[chunk_id] = snippet
+                        chunk_id_to_ref[chunk_id] = len(chunk_id_to_ref) + 1
+        
+        # Step 2: Build unified chunks section (if any chunks exist)
+        chunks_section = ""
+        if chunk_id_to_text:
+            chunk_lines = []
+            for chunk_id, chunk_text in chunk_id_to_text.items():
+                chunk_ref = chunk_id_to_ref[chunk_id]
+                chunk_lines.append(f"[C{chunk_ref}] {chunk_text}")
+            chunks_section = "Shared Context Chunks:\n" + "\n".join(chunk_lines) + "\n\n"
+        
+        # Step 3: Build candidate blocks with chunk references instead of full content
         candidate_blocks = []
         for idx, entry in enumerate(batch_entries, start=1):
             description = entry.get("description") or "[NO DESCRIPTION]"
-            context_lines = entry.get("context_summaries") or ["- (no context available)"]
-            context_block = "\n        ".join(context_lines)
+            chunk_ids = entry.get("context_chunk_ids", [])
+            
+            if chunk_ids and chunk_id_to_ref:
+                # Reference chunks by their numbers
+                chunk_refs = [f"C{chunk_id_to_ref[cid]}" for cid in chunk_ids if cid in chunk_id_to_ref]
+                if chunk_refs:
+                    context_info = f"Context: {', '.join(chunk_refs)}"
+                else:
+                    context_info = "Context: (no context available)"
+            else:
+                context_info = "Context: (no context available)"
+            
             candidate_blocks.append(
-                f"[{idx}] Tail: {description}\n    Contexts:\n        {context_block}"
+                f"[{idx}] Tail: {description}\n    {context_info}"
             )
 
         candidates_text = "\n".join(candidate_blocks) if candidate_blocks else "[No candidates]"
@@ -1799,6 +1838,7 @@ class KTBuilder:
             "head": head_text or "[UNKNOWN_HEAD]",
             "relation": relation_text,
             "head_context": head_context_text,
+            "chunks": chunks_section,  # Add chunks section
             "candidates": candidates_text,
         }
 
