@@ -210,6 +210,23 @@ curl -v http://localhost:8000
 ### 📖 完整使用指南
 详细的安装、配置和使用说明请参考：[**🚀 完整指南**](FULLGUIDE.md)
 
+### 🌐 Neo4j 知识图谱可视化
+
+Youtu-GraphRAG 支持将生成的知识图谱导入到 Neo4j 进行可视化和交互式查询：
+
+```bash
+# 快速启动 Neo4j 可视化环境
+./start_neo4j_visualization.sh
+
+# 手动导入知识图谱
+python3 neo4j_importer.py --input output/graphs/demo_new.json --output demo_neo4j.cypher
+
+# 访问 Neo4j Browser: http://localhost:7474
+# 用户名: neo4j, 密码: graphrag123
+```
+
+详细的 Neo4j 可视化指南请参考：[**🌐 Neo4j 可视化指南**](NEO4J_GUIDE.md)
+
 ## ⭐ **立即体验Youtu-GraphRAG，开启智能问答的新篇章！** 🚀
 
 ## 🤝 参与贡献
