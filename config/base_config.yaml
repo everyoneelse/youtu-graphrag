@@ -258,23 +258,91 @@ prompts:
       : [\"owns\"],\n      \"attributes\": [\"skill_level\"]\n  }}\n}}\n"
   semantic_dedup:
     general: |-
-      You are a knowledge graph curation assistant. All listed triples share the same head entity and relation.
-      Your task is to group candidate tail descriptions that are semantically equivalent.
+      You are a knowledge graph curation assistant performing entity deduplication.
+      All listed triples share the same head entity and relation.
 
       Head entity: {head}
       Relation: {relation}
-
-      Head contexts:
-      {head_context}
 
       Candidate tails:
       {candidates}
 
       Instructions:
-      1. Use the provided contexts when comparing meanings. Group tails that refer to the same real-world entity or express the same fact.
-      2. Keep tails separate when their meanings differ or when the contexts describe different situations.
-      3. Choose the most informative mention in each group as the representative index.
-      4. Every input index must appear in exactly one group.
+      
+      TASK: Identify which tails are COREFERENT (refer to the exact same entity/concept).
+      
+      FUNDAMENTAL PRINCIPLE:
+      COREFERENCE requires REFERENTIAL IDENTITY: Two expressions must denote the exact same referent.
+      - MERGE: 'Entity_A' and 'Entity_A_alias' → same referent (different names for one thing)
+      - DO NOT MERGE: 'Entity_X' and 'Entity_Y' → different referents (two distinct things)
+      
+      CRITICAL DISTINCTION - Relation Satisfaction vs Entity Identity:
+      ⚠️  If multiple tails all satisfy relation R with head H, this does NOT make them coreferent.
+      Each tail can be a DIFFERENT entity that happens to satisfy the SAME relation.
+      Formal logic: (H,R,X) ∧ (H,R,Y) ↛ X=Y  (relation satisfaction does not imply entity identity)
+      
+      MERGE CONDITIONS - ALL must hold:
+      1. REFERENT TEST: Do the two tails refer to exactly the same entity in the real world?
+        • Same entity, different names → MERGE (e.g., 'NYC' = 'New York City')
+        • Different entities → KEEP SEPARATE (even if highly related)
+      
+      2. SUBSTITUTION TEST (CRITICAL): Can you replace one tail with the other in ALL contexts without losing or changing information?
+        • If substitution LOSES any detail/nuance → KEEP SEPARATE (they are complementary, not redundant)
+        • If substitution CHANGES any specific information → KEEP SEPARATE (they convey different facts)
+        • If substitution PRESERVES all information exactly → MERGE (they are truly equivalent)
+        
+        Key insight: COMPLEMENTARY ≠ REDUNDANT
+        • Complementary: A describes aspect X, B describes aspect Y → Both are valuable, KEEP SEPARATE
+        • Redundant: A and B both describe aspect X in the same way → MERGE
+        
+        ⚠️ CRITICAL: Focus on SPECIFIC DETAILS, not just high-level semantic similarity
+        Even if two tails are semantically related or describe similar concepts, keep them separate if they contain ANY different specific details.
+      
+      3. INFORMATION CONTENT TEST: Do the two tails provide the same information?
+        • Different information (even if related) → KEEP SEPARATE
+        • Same information, different wording → MERGE
+      
+      PROHIBITED MERGE REASONS (these are NOT valid reasons to merge):
+      ✗ Shared relation: "Both satisfy R with H" → NOT sufficient for coreference
+      ✗ Semantic similarity: "X and Y are similar/related" → similarity ≠ identity
+      ✗ Same category: "Both are type T" → category membership ≠ entity identity
+      ✗ Same general phenomenon: "Both describe phenomenon P" → complementary details ≠ identical description
+      ✗ Overlapping semantics: "Both mention aspect A" → if they differ in any other aspect, keep separate
+      ✗ High-level equivalence: "Both convey the same general idea" → different specific details matter
+      ✗ Co-occurrence: "X and Y appear together" → contextual proximity ≠ coreference
+      ✗ Functional relationship: "X causes/affects/contains Y" → relationship ≠ identity
+      
+      MULTI-VALUED RELATIONS:
+      Many relations map one head to MULTIPLE distinct tail entities. Each tail is a separate instance.
+      Pattern: If H has relation R to {{T1, T2, ..., Tn}}, each Ti is typically a DIFFERENT entity.
+      Only merge Ti and Tj if they express the SAME information, not just because both satisfy R.
+      
+      DECISION PROCEDURE:
+      For each pair of tails (Ti, Tj):
+        1. REFERENT TEST: Do they refer to the same entity? (not just related entities)
+        2. DETAIL COMPARISON: List all specific details in Ti and all specific details in Tj
+           • If Ti contains details not in Tj → They provide complementary information
+           • If Tj contains details not in Ti → They provide complementary information
+           • Only if both contain exactly the same details → Proceed to step 3
+        3. SUBSTITUTION TEST: If I replace Ti with Tj everywhere, will I lose ANY detail?
+           → If YES (lose any detail) → KEEP SEPARATE
+           → If NO (truly identical) → MERGE
+        4. Final check: Are they just different wordings of identical information, or do they add complementary details?
+           → Complementary details → KEEP SEPARATE
+           → Identical information, different wording → MERGE
+        5. If uncertain → KEEP SEPARATE (conservative principle)
+      
+      CONSERVATIVE PRINCIPLE:
+      Preserving valuable information > Eliminating redundancy
+      False splits (keeping equivalent expressions separate) cause minor inefficiency
+      False merges (combining distinct information) cause information loss
+      When in doubt, preserve distinctions.
+
+      OUTPUT FORMAT:
+        - Each group represents tails that express IDENTICAL information
+        - If tails provide complementary/different information, create SEPARATE groups
+        - Every input index must appear in exactly one group
+        - Provide clear rationale in Chinese explaining your decision
 
       Respond with strict JSON using this schema:
       {{
@@ -282,7 +350,7 @@ prompts:
           {{
             "members": [1, 3],
             "representative": 3,
-            "rationale": "Why the members belong together."
+            "rationale": "说明为什么这些尾实体表达相同的信息（而不仅仅是相关或相似）"
           }}
         ]
       }}
