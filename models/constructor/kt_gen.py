@@ -199,11 +199,22 @@ DEFAULT_SEMANTIC_DEDUP_VALIDATION_PROMPT = (
     "3. If rationale mentions other groups/items, verify the relationship\n"
     "4. Use your understanding of semantics and coreference\n"
     "5. Consider the INTENT behind the rationale\n\n"
+    "SCOPE LIMITATIONS (IMPORTANT):\n"
+    "- Focus ONLY on internal consistency between rationale and group membership.\n"
+    "- Do NOT fact-check domain details or penalize rationales for including extra specifics (e.g., numeric angles)\n"
+    "  unless they directly change MERGE vs SEPARATE decisions.\n"
+    "- Ignore whether a number or exact term appears in the candidate text if it does not affect grouping.\n\n"
     "IMPORTANT:\n"
     "- Do NOT limit yourself to predefined patterns - find ANY inconsistency\n"
     "- Use common sense and logical reasoning\n"
     "- Consider context from the original candidates\n"
     "- Focus on SEMANTIC consistency between rationale and members\n\n"
+    "MERGE RESOLUTION RULES:\n"
+    "- If a rationale asserts equivalence (e.g., '与组1/组2一致/可合并', 'same as group X'),\n"
+    "  produce ONE merged group containing ALL referenced items and the current group's members.\n"
+    "- Apply transitivity: if A says merge with B and B says merge with C, merge A, B, C together.\n"
+    "- When merging, drop redundant groups and keep the earliest referenced group's representative,\n"
+    "  unless another member is clearly more informative.\n\n"
     "OUTPUT FORMAT:\n"
     "Respond with strict JSON:\n"
     "{{\n"
@@ -224,6 +235,13 @@ DEFAULT_SEMANTIC_DEDUP_VALIDATION_PROMPT = (
     "    }}\n"
     "  ]\n"
     "}}\n\n"
+    "POST-CORRECTION REQUIREMENTS:\n"
+    "- The 'corrected_groups' MUST represent the FULL corrected grouping after applying all fixes.\n"
+    "- Include EVERY input index in EXACTLY ONE group (no omissions, no duplicates).\n"
+    "- Do NOT return only the changed groups; return the COMPLETE updated set.\n"
+    "- When merging groups due to rationale (e.g., 'should merge with group 1/2'),\n"
+    "  prefer keeping the earlier referenced group as the representative unless another member\n"
+    "  is clearly more informative.\n\n"
     "If NO inconsistencies found:\n"
     "{{\n"
     "  \"has_inconsistencies\": false,\n"
@@ -1210,49 +1228,123 @@ class KTBuilder:
         # Apply corrections
         logger.info("LLM semantic dedup validation found %d inconsistencies, applying corrections", len(inconsistencies))
         
-        corrected_groups = []
+        # --- Parse corrected groups and normalize ---
+        # Build a mapping of original assignments (candidate index -> group idx)
+        original_assignment: dict[int, int] = {}
+        for g_idx, g in enumerate(groups):
+            for m in g.get('members', []) or []:
+                if isinstance(m, int) and 0 <= m < len(original_candidates):
+                    original_assignment[m] = g_idx
+
+        parsed_corrected_groups: list[dict] = []
+        seen_in_corrected: set[int] = set()
+
         for group_info in corrected_groups_raw:
             if not isinstance(group_info, dict):
                 continue
-            
+
             members_raw = group_info.get("members")
             if not isinstance(members_raw, list):
                 continue
-            
-            # Convert 1-based to 0-based
-            corrected_members = []
+
+            # Convert 1-based to 0-based and deduplicate while preserving order
+            corrected_members: list[int] = []
+            local_seen: set[int] = set()
             for member in members_raw:
                 try:
-                    member_idx = int(member) - 1  # Convert to 0-based
+                    member_idx = int(member) - 1
                 except (TypeError, ValueError):
                     continue
-                if 0 <= member_idx < len(original_candidates):
+                if 0 <= member_idx < len(original_candidates) and member_idx not in local_seen:
                     corrected_members.append(member_idx)
-            
-            if corrected_members:
-                representative_raw = group_info.get("representative", corrected_members[0] + 1)
-                try:
-                    representative = int(representative_raw) - 1 if isinstance(representative_raw, (int, str)) else corrected_members[0]
-                except:
-                    representative = corrected_members[0]
-                
-                corrected_groups.append({
-                    "members": corrected_members,
-                    "representative": representative,
-                    "rationale": group_info.get("rationale", "Corrected by validation"),
-                    "validation_corrected": True
+                    local_seen.add(member_idx)
+
+            if not corrected_members:
+                continue
+
+            representative_raw = group_info.get("representative", corrected_members[0] + 1)
+            try:
+                representative = int(representative_raw) - 1 if isinstance(representative_raw, (int, str)) else corrected_members[0]
+            except Exception:
+                representative = corrected_members[0]
+
+            # Ensure representative is a member
+            if representative not in corrected_members:
+                representative = corrected_members[0]
+
+            parsed_corrected_groups.append({
+                "members": corrected_members,
+                "representative": representative,
+                "rationale": group_info.get("rationale", "Corrected by validation"),
+                "validation_corrected": True,
+            })
+            seen_in_corrected.update(corrected_members)
+
+        # If LLM returned only partial corrections, preserve unaffected original groups
+        if len(seen_in_corrected) != len(original_candidates):
+            # Add the remaining members from their original groups
+            for g in groups:
+                original_members = [m for m in (g.get('members') or []) if isinstance(m, int)]
+                # Filter to only those not already covered by corrections
+                remaining_members = [m for m in original_members if m not in seen_in_corrected]
+                if not remaining_members:
+                    continue
+
+                rep = g.get('representative')
+                if rep not in remaining_members:
+                    rep = remaining_members[0] if remaining_members else None
+
+                parsed_corrected_groups.append({
+                    "members": remaining_members,
+                    "representative": rep if rep is not None else (remaining_members[0] if remaining_members else None),
+                    "rationale": g.get('rationale', ''),
+                    "validation_corrected": False,
                 })
-        
+                seen_in_corrected.update(remaining_members)
+
+        # Final safety: ensure every candidate appears in exactly one group
+        all_indices = set(range(len(original_candidates)))
+        assigned_once: set[int] = set()
+        normalized_groups: list[dict] = []
+        for cg in parsed_corrected_groups:
+            unique_members = []
+            for m in cg.get('members', []):
+                if isinstance(m, int) and 0 <= m < len(original_candidates) and m not in assigned_once:
+                    unique_members.append(m)
+                    assigned_once.add(m)
+            if not unique_members:
+                continue
+            rep = cg.get('representative')
+            if rep not in unique_members:
+                rep = unique_members[0]
+            normalized_groups.append({
+                "members": unique_members,
+                "representative": rep,
+                "rationale": cg.get('rationale', ''),
+                "validation_corrected": cg.get('validation_corrected', False),
+            })
+
+        # Add singletons for any completely unassigned indices
+        unassigned = list(all_indices - assigned_once)
+        if unassigned:
+            for idx in sorted(unassigned):
+                normalized_groups.append({
+                    "members": [idx],
+                    "representative": idx,
+                    "rationale": "Singleton (not affected by corrections)",
+                    "validation_corrected": False,
+                })
+
         validation_report['corrected'] = True
-        validation_report['corrected_group_count'] = len(corrected_groups)
+        validation_report['corrected_group_count'] = len(normalized_groups)
         validation_report['inconsistencies_fixed'] = inconsistencies
-        
+
         logger.info(
             "LLM semantic dedup validation corrections applied: %d groups → %d groups, fixed %d inconsistencies",
-            len(groups), len(corrected_groups), len(inconsistencies)
+            len(groups), len(normalized_groups), len(inconsistencies)
         )
-        
-        return corrected_groups, validation_report
+
+        return normalized_groups, validation_report
     
     def _llm_validate_clustering(self, clusters: list, cluster_details: list, 
                                  descriptions: list, head_text: str = None, relation: str = None,
