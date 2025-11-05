@@ -169,85 +169,62 @@ DEFAULT_ATTRIBUTE_DEDUP_PROMPT = (
 )
 
 # Validation prompt for checking semantic deduplication consistency
-# Design principle: Use general consistency rules, NOT case-by-case patterns
+# Design principle: Trust LLM's understanding, give principles not patterns
 DEFAULT_SEMANTIC_DEDUP_VALIDATION_PROMPT = (
-    "You are a quality control assistant reviewing semantic deduplication results for consistency.\n\n"
-    "CONTEXT:\n"
-    "Head entity: {head}\n"
-    "Relation: {relation}\n\n"
-    "ORIGINAL CANDIDATES:\n"
-    "{candidates}\n\n"
-    "DEDUPLICATION RESULTS TO VALIDATE:\n"
+    "You are validating semantic deduplication results.\n\n"
+    "INPUT:\n"
     "{dedup_results}\n\n"
-    "CORE TASK:\n"
-    "Check if each group's 'rationale' is LOGICALLY CONSISTENT with its 'members' array.\n\n"
-    "CONSISTENCY PRINCIPLE:\n"
-    "A group is CONSISTENT when:\n"
-    "  ✅ The rationale accurately describes WHY the members are grouped together\n"
-    "  ✅ If rationale says items are \"coreferent/equivalent/same\", they ARE in the same group\n"
-    "  ✅ If rationale says items are \"distinct/different\", they ARE in different groups\n"
-    "  ✅ The members array matches what the rationale claims\n\n"
-    "A group is INCONSISTENT when:\n"
-    "  ❌ Rationale and members contradict each other\n"
-    "  ❌ Rationale says \"same as group X\" but members don't include group X's items\n"
-    "  ❌ Rationale claims equivalence to other items not in the group\n"
-    "  ❌ Rationale says \"should be merged\" but items are in separate groups\n"
-    "  ❌ ANY logical mismatch between what rationale says and what members show\n\n"
-    "VALIDATION APPROACH:\n"
-    "1. Read each group's rationale carefully\n"
-    "2. Check if the members array matches the rationale's claim\n"
-    "3. If rationale mentions other groups/items, verify the relationship\n"
-    "4. Use your understanding of semantics and coreference\n"
-    "5. Consider the INTENT behind the rationale\n\n"
+    "TASK:\n"
+    "Check if each group's rationale is consistent with its members array.\n\n"
+    "CONSISTENCY RULE:\n"
+    "A group is CONSISTENT when the rationale's intended action matches the actual grouping.\n\n"
+    "Examples:\n"
+    "  ✅ Rationale expresses intent to merge with another group\n"
+    "     → Members array includes that group's items\n"
+    "  \n"
+    "  ✅ Rationale expresses intent to keep this group independent\n"
+    "     → Members array contains only this group's items\n"
+    "  \n"
+    "  ❌ Rationale expresses intent to merge\n"
+    "     → But members array shows items are still separate\n"
+    "  \n"
+    "  ❌ Rationale expresses intent to stay independent\n"
+    "     → But members array includes items from other groups\n\n"
+    "HOW TO VALIDATE:\n"
+    "1. Read the rationale and understand what action it intends (merge or stay separate)\n"
+    "2. Look at the members array and see what actually happened\n"
+    "3. If intent ≠ reality, report inconsistency\n\n"
     "IMPORTANT:\n"
-    "- Do NOT limit yourself to predefined patterns - find ANY inconsistency\n"
-    "- Use common sense and logical reasoning\n"
-    "- Consider context from the original candidates\n"
-    "- Focus on SEMANTIC consistency between rationale and members\n\n"
+    "- Use your language understanding to determine the rationale's intent\n"
+    "- Don't look for specific keywords - understand the meaning\n"
+    "- Focus only on structural consistency (intent vs actual grouping)\n"
+    "- Ignore content accuracy issues (whether rationale correctly describes original text)\n\n"
     "OUTPUT FORMAT:\n"
-    "Respond with strict JSON:\n"
+    "Return strict JSON:\n"
     "{{\n"
     "  \"has_inconsistencies\": true/false,\n"
     "  \"inconsistencies\": [\n"
     "    {{\n"
-    "      \"group_ids\": [list of affected group IDs],\n"
-    "      \"issue_type\": \"brief_category_name\",\n"
-    "      \"description\": \"Clear explanation of what's inconsistent\",\n"
-    "      \"suggested_fix\": \"How to fix it (e.g., 'merge group X into group Y')\"\n"
+    "      \"group_ids\": [IDs of affected groups],\n"
+    "      \"description\": \"Clear explanation of the inconsistency\",\n"
+    "      \"suggested_fix\": \"How to fix it\"\n"
     "    }}\n"
     "  ],\n"
     "  \"corrected_groups\": [\n"
-    "    {{\n"
-    "      \"members\": [member indices],\n"
-    "      \"representative\": index,\n"
-    "      \"rationale\": \"Updated rationale for the corrected group\"\n"
-    "    }}\n"
+    "    {{\"members\": [...], \"representative\": N, \"rationale\": \"...\"}}\n"
     "  ]\n"
     "}}\n\n"
-    "If NO inconsistencies found:\n"
+    "IMPORTANT about corrected_groups:\n"
+    "1. Must contain ALL groups (both corrected and unchanged)\n"
+    "2. Do not omit groups that were already consistent\n"
+    "3. Member indices must be valid (0 to N-1 where N is the number of candidates)\n"
+    "4. All original items must be present exactly once across all groups\n"
+    "5. Do not invent new indices or skip existing ones\n\n"
+    "If all groups are consistent, return:\n"
     "{{\n"
     "  \"has_inconsistencies\": false,\n"
     "  \"inconsistencies\": [],\n"
     "  \"corrected_groups\": null\n"
-    "}}\n\n"
-    "EXAMPLE (for reference only - find ANY type of inconsistency):\n\n"
-    "Input groups:\n"
-    "- Group 0: {{members: [0, 1], representative: 0, rationale: \"These two refer to the same entity\"}}\n"
-    "- Group 1: {{members: [2], representative: 2, rationale: \"This is the same entity as items 0 and 1\"}}\n\n"
-    "Analysis: Group 1's rationale claims it's the same entity as items 0 and 1, but it's in a separate group.\n"
-    "This is inconsistent - if they're the same entity, they should be in one group.\n\n"
-    "Output:\n"
-    "{{\n"
-    "  \"has_inconsistencies\": true,\n"
-    "  \"inconsistencies\": [{{\n"
-    "    \"group_ids\": [1, 0],\n"
-    "    \"issue_type\": \"rationale_claims_coreference_but_separate\",\n"
-    "    \"description\": \"Group 1 claims to be the same entity as Group 0 members but is in a separate group\",\n"
-    "    \"suggested_fix\": \"merge group 1 into group 0\"\n"
-    "  }}],\n"
-    "  \"corrected_groups\": [\n"
-    "    {{\"members\": [0, 1, 2], \"representative\": 0, \"rationale\": \"These three expressions refer to the same entity\"}}\n"
-    "  ]\n"
     "}}\n"
 )
 
@@ -1242,6 +1219,31 @@ class KTBuilder:
                     "rationale": group_info.get("rationale", "Corrected by validation"),
                     "validation_corrected": True
                 })
+        
+        # Verify we got all items covered (and no extra items)
+        all_items = set(range(len(original_candidates)))
+        covered_items = set()
+        for group in corrected_groups:
+            covered_items.update(group['members'])
+        
+        missing_items = all_items - covered_items
+        extra_items = covered_items - all_items
+        
+        if missing_items or extra_items:
+            error_parts = []
+            if missing_items:
+                error_parts.append(f"missing items {sorted(missing_items)}")
+            if extra_items:
+                error_parts.append(f"invalid items {sorted(extra_items)} (out of range)")
+            error_msg = ", ".join(error_parts)
+            
+            logger.warning(
+                "LLM validation output has data integrity issues: %s. Keeping original groups to avoid data loss.",
+                error_msg
+            )
+            validation_report['corrected'] = False
+            validation_report['error'] = f"Data integrity issues in corrected_groups: {error_msg}"
+            return groups, validation_report
         
         validation_report['corrected'] = True
         validation_report['corrected_group_count'] = len(corrected_groups)
