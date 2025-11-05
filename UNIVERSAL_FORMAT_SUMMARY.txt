@@ -1,0 +1,161 @@
+================================================================================
+通用训练数据格式 - 核心解答
+================================================================================
+
+【您的问题】
+"这个是不是太局限了，我需要的是与我目前在进行的semantic dedup prompt
+对应的通用的任务"
+
+【您说得对！】
+✅ 之前的示例确实太局限（只针对"魔角效应"）
+✅ 您需要通用格式，能处理任何case
+
+【通用数据格式】
+{
+  "head_entity": "任意实体",      // 不局限于特定实体
+  "relation": "任意关系",          // 不局限于特定关系
+  "tail_descriptions": [...],     // 任意数量的tails
+  "gold_groups": [...]            // 标注
+}
+
+【核心价值】
+✅ 不局限于特定领域（医学/技术/地理/商业都可以）
+✅ 不局限于特定关系（has_attribute/located_in/author_of等）
+✅ 不局限于特定实体（任何head entity都可以）
+✅ 直接对应当前semantic dedup流程
+
+【多领域示例】
+示例1: 技术 - Python版本
+  head: "Python"
+  relation: "has_version"
+  tails: ["Python 3.9", "Python 3.9.0", "Python 3.10"]
+
+示例2: 地理 - 城市别名
+  head: "中国"
+  relation: "has_city"
+  tails: ["北京", "北京市", "Beijing", "上海"]
+
+示例3: 医学 - 属性描述
+  head: "魔角效应"
+  relation: "has_attribute"
+  tails: ["定义1", "定义2", "关键角度", ...]
+
+示例4: 商业 - 公司名称
+  head: "科技行业"
+  relation: "has_company"
+  tails: ["Apple Inc.", "Apple", "苹果公司", ...]
+
+【为什么通用格式更好】
+❌ 特定格式:
+  - 只能处理特定case
+  - 过拟合单一领域
+  - 难以扩展
+  - 泛化能力差
+
+✅ 通用格式:
+  - 处理任何case
+  - 学习通用去重规则
+  - 易于扩展
+  - 泛化能力强
+
+【已创建工具】
+✅ create_universal_training_data.py
+   - 创建多领域训练数据
+   - 从去重结果批量提取
+   - 支持6种不同领域示例
+
+✅ UNIVERSAL_TRAINING_FORMAT.md
+   - 详细格式说明
+   - 多领域示例
+   - 使用流程
+   - 最佳实践
+
+【使用流程】
+Step 1: 创建多样化训练集
+  python scripts/create_universal_training_data.py \
+      --create-diverse-examples \
+      --output data/universal.json
+
+Step 2: 添加您的医学数据
+  python scripts/convert_real_data_to_dspy.py \
+      --input your_data.json \
+      --interactive
+
+Step 3: 合并训练
+  # 混合: 60%医学数据 + 40%多领域数据
+  python scripts/train_dspy_modules.py \
+      --train-data data/combined.json \
+      --train-all
+
+【训练集建议】
+推荐组合:
+  - 您的医学数据: 18-30个样本 (60%)
+  - 多领域数据: 12-20个样本 (40%)
+  - 总计: 30-50个样本
+
+领域分布:
+  - 医学: 60% (您的核心)
+  - 技术: 15%
+  - 地理: 10%
+  - 商业: 10%
+  - 其他: 5%
+
+复杂度分布:
+  - 简单: 30%
+  - 中等: 50%
+  - 困难: 20%
+
+【核心优势】
+训练后的模型可以:
+  ✅ 处理任何head entity
+  ✅ 处理任何relation类型
+  ✅ 在您的医学数据上表现更好
+  ✅ 具有更好的泛化能力
+  ✅ 不会过拟合特定case
+
+【快速开始】
+# 1. 查看通用格式
+python scripts/create_universal_training_data.py --show-format
+
+# 2. 创建多样化示例（6个不同领域）
+python scripts/create_universal_training_data.py \
+    --create-diverse-examples \
+    --output data/diverse.json
+
+# 3. 查看生成的示例
+cat data/diverse.json
+
+# 4. 训练模型
+python scripts/train_dspy_modules.py \
+    --train-data data/diverse.json \
+    --train-all
+
+【文件清单】
+✅ scripts/create_universal_training_data.py  - 通用数据生成
+✅ UNIVERSAL_TRAINING_FORMAT.md              - 详细格式文档
+✅ UNIVERSAL_FORMAT_SUMMARY.txt              - 本文档
+
+【关键洞察】
+您的观察非常准确！
+
+单一case示例的问题:
+  - 模型会学习"魔角效应"的特定模式
+  - 无法泛化到其他医学概念
+  - 无法处理不同类型的关系
+
+通用格式的优势:
+  - 模型学习通用的去重规则
+  - 可以处理任何head-relation-tail组合
+  - 在各种场景下都表现良好
+  - 特别是在您的医学数据上
+
+【下一步】
+1. ✅ 运行: python scripts/create_universal_training_data.py --create-diverse-examples
+2. ✅ 查看生成的6个多领域示例
+3. ✅ 添加您的医学数据（10-20个）
+4. ✅ 合并训练（通用+医学混合）
+5. ✅ 在实际数据上测试效果
+
+================================================================================
+通用格式 = 更好的泛化 + 更强的实用性！
+================================================================================
