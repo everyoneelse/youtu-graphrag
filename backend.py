@@ -833,6 +833,7 @@ def prepare_reasoning_flow_visualization(reasoning_steps: List[Dict]) -> Dict:
 async def get_datasets():
     """Get list of available datasets"""
     datasets = []
+    dataset_names = set()
     
     # Check uploaded datasets
     upload_dir = "data/uploaded"
@@ -849,6 +850,7 @@ async def get_datasets():
                         "type": "uploaded",
                         "status": status
                     })
+                    dataset_names.add(item)
     
     # Add demo dataset
     demo_corpus = "data/demo/demo_corpus.json"
@@ -860,6 +862,24 @@ async def get_datasets():
             "type": "demo", 
             "status": status
         })
+        dataset_names.add("demo")
+    
+    # Scan output/graphs directory for manually copied graph files
+    graphs_dir = "output/graphs"
+    if os.path.exists(graphs_dir):
+        for filename in os.listdir(graphs_dir):
+            if filename.endswith("_new.json"):
+                # Extract dataset name from filename (remove _new.json suffix)
+                dataset_name = filename[:-9]  # Remove "_new.json"
+                
+                # Only add if not already in the list
+                if dataset_name not in dataset_names:
+                    datasets.append({
+                        "name": dataset_name,
+                        "type": "custom",  # Mark as custom/manually added
+                        "status": "ready"  # Graph file exists
+                    })
+                    dataset_names.add(dataset_name)
     
     return {"datasets": datasets}
 
