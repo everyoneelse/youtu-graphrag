@@ -23,6 +23,39 @@ import numpy as np
 DEFAULT_SEMANTIC_DEDUP_PROMPT = (
     "You are a knowledge graph curation assistant performing entity deduplication.\n"
     "All listed triples share the same head entity and relation.\n\n"
+    "🚨 TASK: For each candidate, determine its REPRESENTATIVE\n"
+    "\n"
+    "CORE CONCEPT:\n"
+    "- If candidates refer to the SAME entity → they share the same representative\n"
+    "- If a candidate is unique → it represents itself\n"
+    "- Representative = the most informative/authoritative candidate in each equivalence group\n"
+    "\n"
+    "WORKFLOW:\n"
+    "Step 1: Survey ALL candidates to identify equivalence groups\n"
+    "Step 2: For each group, choose the best candidate as representative\n"
+    "Step 3: Assign each candidate to its representative\n"
+    "\n"
+    "Example with candidates [1], [2], [3], [4], [5], [6]:\n"
+    "\n"
+    "Analysis:\n"
+    "  - [1], [3], [4] refer to the same entity (equivalence group A)\n"
+    "  - [2], [5] refer to the same entity (equivalence group B)\n"
+    "  - [6] is unique (equivalence group C)\n"
+    "\n"
+    "Choose representatives:\n"
+    "  - Group A: [1] is most informative → representative = 1\n"
+    "  - Group B: [2] is most complete → representative = 2\n"
+    "  - Group C: [6] represents itself → representative = 6\n"
+    "\n"
+    "Output assignments:\n"
+    "  - candidate 1 → representative 1 (itself)\n"
+    "  - candidate 2 → representative 2 (itself)\n"
+    "  - candidate 3 → representative 1 (same as [1])\n"
+    "  - candidate 4 → representative 1 (same as [1])\n"
+    "  - candidate 5 → representative 2 (same as [2])\n"
+    "  - candidate 6 → representative 6 (itself, unique)\n\n"
+    "{previous_representatives}\n\n"
+    "═══════════════════════════════════════════════════════════════════════════════\n\n"
     "Head entity: {head}\n"
     "Relation: {relation}\n\n"
     "Head contexts:\n{head_context}\n\n"
@@ -68,34 +101,78 @@ DEFAULT_SEMANTIC_DEDUP_PROMPT = (
     "False splits (keeping coreferent entities separate) < False merges (merging distinct entities)\n"
     "When in doubt, preserve distinctions.\n\n"
     "OUTPUT REQUIREMENTS:\n"
-    "1. Every input index must appear in exactly one group\n"
-    "2. Each group represents ONE entity with its various expressions\n"
-    "3. Choose the most informative expression as representative\n"
-    "4. Provide clear rationale based on REFERENTIAL IDENTITY\n"
-    "5. **CRITICAL CONSISTENCY**: Ensure your 'members' array MATCHES your 'rationale':\n"
-    "   - If rationale says \"X and Y refer to the same entity\" or \"should be merged\",\n"
-    "     then X and Y MUST be in the SAME group's members array\n"
-    "   - If rationale says \"distinct entities\" or \"should be kept separate\",\n"
-    "     then they MUST be in DIFFERENT groups\n"
-    "   - Do NOT put items in separate groups if your rationale says they are coreferent!\n"
-    "   - Do NOT reference merging with other groups if members are already separate\n"
-    "6. **RATIONALE WRITING GUIDELINES**:\n"
-    "   - Each rationale should INDEPENDENTLY explain why its members are coreferent\n"
-    "   - Use candidate numbers (e.g., \"[1] and [2]\") to refer to specific items\n"
-    "   - DO NOT reference other groups (e.g., avoid \"same as group 1\" or \"与组1一致\")\n"
-    "   - If comparing with non-members, explain why they are DIFFERENT entities\n"
-    "   - Focus on describing the IDENTITY of this group's entity, not relationships to other groups\n\n"
+    "1. For EACH candidate, assign exactly ONE representative\n"
+    "2. Representatives must be chosen from the candidate list\n"
+    "3. If a candidate represents itself, its representative = itself\n"
+    "4. Candidates referring to the SAME entity must have the SAME representative\n"
+    "5. Choose the most informative/authoritative candidate as representative for each group\n\n"
+    "ASSIGNMENT RULES:\n"
+    "✅ CORRECT assignments:\n"
+    "   - Candidate [1] is authoritative → {\"candidate\": 1, \"representative\": 1}\n"
+    "   - Candidate [3] same as [1] → {\"candidate\": 3, \"representative\": 1}\n"
+    "   - Candidate [5] same as [1] → {\"candidate\": 5, \"representative\": 1}\n"
+    "   Result: [1], [3], [5] all map to representative 1 ✓\n\n"
+    "❌ FORBIDDEN patterns:\n"
+    "   - Representative not in candidate list\n"
+    "   - Circular assignments (1→3, 3→5, 5→1)\n"
+    "   - Inconsistent assignments ([3]→1, [5]→2, but [3] and [5] are same entity)\n\n"
+    "CONSERVATIVE PRINCIPLE:\n"
+    "When uncertain whether two candidates refer to the same entity:\n"
+    "→ Assign them DIFFERENT representatives (let each represent itself)\n"
+    "→ False split is better than false merge\n\n"
     "Respond with strict JSON using this schema:\n"
     "{{\n"
-    "  \"groups\": [\n"
-    "    {{\"members\": [1, 3], \"representative\": 3, \"rationale\": \"Why these expressions are coreferent (same referent).\"}}\n"
+    "  \"assignments\": [\n"
+    "    {{\"candidate\": 1, \"representative\": 1, \"rationale\": \"Authoritative definition\"}},\n"
+    "    {{\"candidate\": 2, \"representative\": 2, \"rationale\": \"Unique definition\"}},\n"
+    "    {{\"candidate\": 3, \"representative\": 1, \"rationale\": \"Same as [1], both refer to...\"}},\n"
+    "    {{\"candidate\": 4, \"representative\": 2, \"rationale\": \"Same as [2], both refer to...\"}}\n"
     "  ]\n"
-    "}}\n"
+    "}}\n\n"
+    "⚠️  CRITICAL REQUIREMENTS:\n"
+    "- Output EXACTLY one assignment for each input candidate\n"
+    "- If candidates X and Y are the same entity, they MUST have the same representative\n"
+    "- Rationale should explain WHY this candidate maps to this representative\n"
+    "- For self-representatives, rationale explains why it's chosen as representative\n"
+    "═══════════════════════════════════════════════════════════════════════════════\n"
 )
 
 DEFAULT_ATTRIBUTE_DEDUP_PROMPT = (
     "You are a knowledge graph curation assistant performing attribute value deduplication.\n"
     "All listed triples share the same head entity and relation.\n\n"
+    "🚨 TASK: For each candidate attribute value, determine its REPRESENTATIVE\n"
+    "\n"
+    "CORE CONCEPT:\n"
+    "- If candidates express the SAME value → they share the same representative\n"
+    "- If a candidate is unique → it represents itself\n"
+    "- Representative = the most complete/informative value expression in each equivalence group\n"
+    "\n"
+    "WORKFLOW:\n"
+    "Step 1: Survey ALL candidates to identify equivalence groups\n"
+    "Step 2: For each group, choose the best candidate as representative\n"
+    "Step 3: Assign each candidate to its representative\n"
+    "\n"
+    "Example with candidates [1], [2], [3], [4], [5], [6]:\n"
+    "\n"
+    "Analysis:\n"
+    "  - [1], [3], [4] express the same value (equivalence group A)\n"
+    "  - [2], [5] express the same value (equivalence group B)\n"
+    "  - [6] is unique (equivalence group C)\n"
+    "\n"
+    "Choose representatives:\n"
+    "  - Group A: [1] is most complete → representative = 1\n"
+    "  - Group B: [2] is most precise → representative = 2\n"
+    "  - Group C: [6] represents itself → representative = 6\n"
+    "\n"
+    "Output assignments:\n"
+    "  - candidate 1 → representative 1 (itself)\n"
+    "  - candidate 2 → representative 2 (itself)\n"
+    "  - candidate 3 → representative 1 (same value as [1])\n"
+    "  - candidate 4 → representative 1 (same value as [1])\n"
+    "  - candidate 5 → representative 2 (same value as [2])\n"
+    "  - candidate 6 → representative 6 (itself, unique)\n\n"
+    "{previous_representatives}\n\n"
+    "═══════════════════════════════════════════════════════════════════════════════\n\n"
     "Head entity: {head}\n"
     "Relation: {relation}\n\n"
     "Head contexts:\n{head_context}\n\n"
@@ -144,28 +221,40 @@ DEFAULT_ATTRIBUTE_DEDUP_PROMPT = (
     "False splits (keeping equivalent values separate) < False merges (merging distinct values)\n"
     "When in doubt, preserve distinctions.\n\n"
     "OUTPUT REQUIREMENTS:\n"
-    "1. Every input index must appear in exactly one group\n"
-    "2. Each group represents ONE property-value pair with its various expressions\n"
-    "3. Choose the most complete and informative expression as representative\n"
-    "4. Provide clear rationale based on VALUE IDENTITY\n"
-    "5. **CRITICAL CONSISTENCY**: Ensure your 'members' array MATCHES your 'rationale':\n"
-    "   - If rationale says \"X and Y are equivalent\" or \"express the same value\",\n"
-    "     then X and Y MUST be in the SAME group's members array\n"
-    "   - If rationale says \"different values\" or \"distinct properties\",\n"
-    "     then they MUST be in DIFFERENT groups\n"
-    "   - Do NOT put items in separate groups if your rationale says they are equivalent!\n"
-    "6. **RATIONALE WRITING GUIDELINES**:\n"
-    "   - Each rationale should INDEPENDENTLY explain why its members are equivalent\n"
-    "   - Use candidate numbers (e.g., \"[1] and [2]\") to refer to specific items\n"
-    "   - DO NOT reference other groups (e.g., avoid \"same as group 1\" or \"与组1一致\")\n"
-    "   - If comparing with non-members, explain why they are DIFFERENT values\n"
-    "   - Focus on describing the VALUE of this group, not relationships to other groups\n\n"
+    "1. For EACH candidate, assign exactly ONE representative\n"
+    "2. Representatives must be chosen from the candidate list\n"
+    "3. If a candidate represents itself, its representative = itself\n"
+    "4. Candidates expressing the SAME value must have the SAME representative\n"
+    "5. Choose the most complete/informative candidate as representative for each group\n\n"
+    "ASSIGNMENT RULES:\n"
+    "✅ CORRECT assignments:\n"
+    "   - Candidate [1] is most complete → {\"candidate\": 1, \"representative\": 1}\n"
+    "   - Candidate [3] same value as [1] → {\"candidate\": 3, \"representative\": 1}\n"
+    "   - Candidate [5] same value as [1] → {\"candidate\": 5, \"representative\": 1}\n"
+    "   Result: [1], [3], [5] all map to representative 1 ✓\n\n"
+    "❌ FORBIDDEN patterns:\n"
+    "   - Representative not in candidate list\n"
+    "   - Circular assignments (1→3, 3→5, 5→1)\n"
+    "   - Inconsistent assignments ([3]→1, [5]→2, but [3] and [5] express same value)\n\n"
+    "CONSERVATIVE PRINCIPLE:\n"
+    "When uncertain whether two candidates express the same value:\n"
+    "→ Assign them DIFFERENT representatives (let each represent itself)\n"
+    "→ False split is better than false merge\n\n"
     "Respond with strict JSON using this schema:\n"
     "{{\n"
-    "  \"groups\": [\n"
-    "    {{\"members\": [1, 3], \"representative\": 3, \"rationale\": \"Why these are equivalent (same property-value).\"}}\n"
+    "  \"assignments\": [\n"
+    "    {{\"candidate\": 1, \"representative\": 1, \"rationale\": \"Most complete expression\"}},\n"
+    "    {{\"candidate\": 2, \"representative\": 2, \"rationale\": \"Unique value\"}},\n"
+    "    {{\"candidate\": 3, \"representative\": 1, \"rationale\": \"Same value as [1], both express...\"}},\n"
+    "    {{\"candidate\": 4, \"representative\": 2, \"rationale\": \"Same value as [2], both express...\"}}\n"
     "  ]\n"
-    "}}\n"
+    "}}\n\n"
+    "⚠️  CRITICAL REQUIREMENTS:\n"
+    "- Output EXACTLY one assignment for each input candidate\n"
+    "- If candidates X and Y express the same value, they MUST have the same representative\n"
+    "- Rationale should explain WHY this candidate maps to this representative\n"
+    "- For self-representatives, rationale explains why it's chosen as representative\n"
+    "═══════════════════════════════════════════════════════════════════════════════\n"
 )
 
 # Validation prompt for checking semantic deduplication consistency
@@ -1769,6 +1858,7 @@ class KTBuilder:
         relation: str,
         head_context_lines: list,
         batch_entries: list,
+        previous_representatives: dict = None,
     ) -> str:
         candidate_blocks = []
         for idx, entry in enumerate(batch_entries, start=1):
@@ -1782,6 +1872,16 @@ class KTBuilder:
         candidates_text = "\n".join(candidate_blocks) if candidate_blocks else "[No candidates]"
         relation_text = relation or "[UNKNOWN]"
         head_context_text = "\n".join(head_context_lines) if head_context_lines else "- (no context available)"
+
+        # Build previous representatives context
+        prev_rep_text = ""
+        if previous_representatives:
+            prev_rep_lines = ["PREVIOUS BATCH REPRESENTATIVES (from earlier batches):"]
+            for rep_idx, rep_desc in previous_representatives.items():
+                prev_rep_lines.append(f"  - Representative [{rep_idx}]: {rep_desc}")
+            prev_rep_lines.append("\nIf the current candidates match any previous representative, assign them to that representative.")
+            prev_rep_lines.append("Otherwise, assign them to a new representative from the current batch.\n")
+            prev_rep_text = "\n".join(prev_rep_lines)
 
         # Auto-detect prompt type based on relation
         config = self._get_semantic_dedup_config()
@@ -1800,6 +1900,7 @@ class KTBuilder:
             "relation": relation_text,
             "head_context": head_context_text,
             "candidates": candidates_text,
+            "previous_representatives": prev_rep_text,
         }
 
         try:
@@ -1836,54 +1937,61 @@ class KTBuilder:
                 logger.warning("Failed to parse semantic dedup LLM response: %s: %s", type(parse_error).__name__, parse_error)
                 return []
 
-        groups_raw = parsed.get("groups") if isinstance(parsed, dict) else None
-        if not isinstance(groups_raw, list):
+        # Parse assignments (new format)
+        assignments_raw = parsed.get("assignments") if isinstance(parsed, dict) else None
+        if not isinstance(assignments_raw, list):
             return []
 
-        groups: list = []
-        assigned = set()
-        for group in groups_raw:
-            if not isinstance(group, dict):
+        # Build representative -> members mapping
+        rep_to_members = {}
+        for assignment in assignments_raw:
+            if not isinstance(assignment, dict):
                 continue
-
-            members_raw = group.get("members")
-            if not isinstance(members_raw, list):
-                continue
-
-            normalized_members = []
-            for member in members_raw:
-                try:
-                    member_idx = int(member) - 1
-                except (TypeError, ValueError):
-                    continue
-                if 0 <= member_idx < len(batch_entries):
-                    normalized_members.append(member_idx)
-
-            if not normalized_members:
-                continue
-
-            rep_raw = group.get("representative")
+            
             try:
-                rep_idx = int(rep_raw) - 1 if rep_raw is not None else None
+                candidate = int(assignment.get("candidate")) - 1
+                representative = int(assignment.get("representative")) - 1
             except (TypeError, ValueError):
-                rep_idx = None
-
-            if rep_idx is None or rep_idx not in normalized_members:
-                rep_idx = normalized_members[0]
-
-            rationale = group.get("rationale")
-            groups.append(
-                {
-                    "representative": rep_idx,
-                    "members": normalized_members,
-                    "rationale": rationale,
+                continue
+            
+            if not (0 <= candidate < len(batch_entries) and 0 <= representative < len(batch_entries)):
+                continue
+            
+            if representative not in rep_to_members:
+                rep_to_members[representative] = {
+                    "members": [],
+                    "rationales": []
                 }
-            )
-            assigned.update(normalized_members)
+            
+            rep_to_members[representative]["members"].append(candidate)
+            rationale = assignment.get("rationale")
+            if rationale:
+                rep_to_members[representative]["rationales"].append(f"[{candidate+1}]: {rationale}")
 
+        # Convert to groups format
+        groups: list = []
+        for rep_idx, data in rep_to_members.items():
+            normalized_members = sorted(data["members"])
+            combined_rationale = " | ".join(data["rationales"]) if data["rationales"] else None
+            
+            groups.append({
+                "representative": rep_idx,
+                "members": normalized_members,
+                "rationale": combined_rationale,
+            })
+
+        # Add unassigned as singletons
+        assigned = set()
+        for group in groups:
+            assigned.update(group["members"])
+        
         for idx in range(len(batch_entries)):
             if idx not in assigned:
-                groups.append({"representative": idx, "members": [idx], "rationale": None})
+                groups.append({
+                    "representative": idx,
+                    "members": [idx],
+                    "rationale": None,
+                })
 
         return groups
 
@@ -3902,15 +4010,19 @@ class KTBuilder:
                 overflow_indices = cluster_indices[max_candidates:]
                 cluster_indices = cluster_indices[:max_candidates]
             
+            # Track representatives from previous batches in this cluster
+            previous_representatives = {}
+            
             # Batch the cluster
             batch_num = 0
             while cluster_indices:
                 batch_indices = cluster_indices[:max_batch_size]
                 batch_entries = [entries[i] for i in batch_indices]
                 
-                # Build prompt
+                # Build prompt with previous representatives context
                 prompt = self._build_semantic_dedup_prompt(
-                    head_text, relation, head_context_lines, batch_entries
+                    head_text, relation, head_context_lines, batch_entries,
+                    previous_representatives=previous_representatives if batch_num > 0 else None
                 )
                 
                 prompts.append({
@@ -3921,8 +4033,17 @@ class KTBuilder:
                         'batch_num': batch_num,
                         'batch_indices': batch_indices,
                         'overflow_indices': overflow_indices if batch_num == 0 else [],
+                        'previous_representatives': previous_representatives.copy() if batch_num > 0 else {},
                     }
                 })
+                
+                # Update previous_representatives for next batch
+                # Note: We'll populate this in post-processing after getting LLM results
+                # For now, just collect indices that could be representatives
+                for idx in batch_indices:
+                    # Each batch could produce new representatives
+                    # We'll update this during result parsing
+                    pass
                 
                 cluster_indices = cluster_indices[len(batch_indices):]
                 batch_num += 1
@@ -3983,8 +4104,9 @@ class KTBuilder:
                         }
                         continue
                 
-                groups_raw = parsed.get("groups") if isinstance(parsed, dict) else None
-                if not isinstance(groups_raw, list):
+                # Parse assignments (new format)
+                assignments_raw = parsed.get("assignments") if isinstance(parsed, dict) else None
+                if not isinstance(assignments_raw, list):
                     semantic_groups[key] = {
                         'groups': [],
                         'batch_indices': batch_indices,
@@ -3992,46 +4114,49 @@ class KTBuilder:
                     }
                     continue
                 
-                # Parse groups
-                groups = []
-                assigned = set()
-                for group in groups_raw:
-                    if not isinstance(group, dict):
+                # Build representative -> members mapping
+                rep_to_members = {}
+                for assignment in assignments_raw:
+                    if not isinstance(assignment, dict):
                         continue
                     
-                    members_raw = group.get("members")
-                    if not isinstance(members_raw, list):
-                        continue
-                    
-                    normalized_members = []
-                    for member in members_raw:
-                        try:
-                            member_idx = int(member) - 1
-                        except (TypeError, ValueError):
-                            continue
-                        if 0 <= member_idx < len(batch_indices):
-                            normalized_members.append(member_idx)
-                    
-                    if not normalized_members:
-                        continue
-                    
-                    rep_raw = group.get("representative")
                     try:
-                        rep_idx = int(rep_raw) - 1 if rep_raw is not None else None
+                        candidate = int(assignment.get("candidate")) - 1
+                        representative = int(assignment.get("representative")) - 1
                     except (TypeError, ValueError):
-                        rep_idx = None
+                        continue
                     
-                    if rep_idx is None or rep_idx not in normalized_members:
-                        rep_idx = normalized_members[0]
+                    if not (0 <= candidate < len(batch_indices) and 0 <= representative < len(batch_indices)):
+                        continue
+                    
+                    if representative not in rep_to_members:
+                        rep_to_members[representative] = {
+                            "members": [],
+                            "rationales": []
+                        }
+                    
+                    rep_to_members[representative]["members"].append(candidate)
+                    rationale = assignment.get("rationale")
+                    if rationale:
+                        rep_to_members[representative]["rationales"].append(f"[{candidate+1}]: {rationale}")
+                
+                # Convert to groups format
+                groups = []
+                for rep_idx, data in rep_to_members.items():
+                    normalized_members = sorted(data["members"])
+                    combined_rationale = " | ".join(data["rationales"]) if data["rationales"] else None
                     
                     groups.append({
                         "representative": rep_idx,
                         "members": normalized_members,
-                        "rationale": group.get("rationale"),
+                        "rationale": combined_rationale,
                     })
-                    assigned.update(normalized_members)
                 
                 # Add unassigned as singletons
+                assigned = set()
+                for group in groups:
+                    assigned.update(group["members"])
+                
                 for idx in range(len(batch_indices)):
                     if idx not in assigned:
                         groups.append({
