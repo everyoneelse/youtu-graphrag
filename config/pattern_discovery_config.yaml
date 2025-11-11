@@ -1,0 +1,183 @@
+# 知识图谱模式发现配置文件
+# Knowledge Graph Pattern Discovery Configuration
+
+# 全局设置
+global:
+  # 是否启用LLM驱动的模式发现
+  use_llm: false
+  
+  # LLM配置（当use_llm=true时）
+  llm:
+    model: "deepseek-chat"  # 或 gpt-4, gpt-3.5-turbo 等
+    temperature: 0.3
+    max_tokens: 2000
+  
+  # 输出设置
+  output:
+    save_report: true
+    save_visualizations: true
+    output_dir: "./output/pattern_discovery"
+
+# 模式检测器配置
+patterns:
+  # 链式模式
+  chain_pattern:
+    enabled: true
+    params:
+      min_chain_length: 2
+      max_chain_length: 5
+      confidence_threshold: 0.5
+      # 是否添加推断的快捷边
+      add_shortcut_edges: true
+      # 快捷边的最小链长（只有链长>=此值才添加快捷边）
+      shortcut_min_length: 3
+  
+  # 星型模式
+  star_pattern:
+    enabled: true
+    params:
+      min_neighbors: 3
+      confidence_threshold: 0.6
+      # 是否合并相同关系为集合
+      consolidate_collections: false
+      # 是否分析邻居之间的关系
+      analyze_neighbor_relations: true
+  
+  # 具体化模式
+  reification_pattern:
+    enabled: true
+    params:
+      # 最少边数（只有>=此数量的多重边才考虑具体化）
+      min_edges_for_reification: 2
+      confidence_threshold: 0.7
+      # 是否自动执行具体化
+      auto_reify: false
+  
+  # LLM驱动的模式发现
+  llm_driven_pattern:
+    enabled: false  # 默认关闭，因为需要LLM
+    params:
+      max_subgraphs: 20
+      max_subgraph_size: 5
+      confidence_threshold: 0.7
+
+# 自定义模式定义
+custom_patterns:
+  # 示例：时间模式
+  - name: "Temporal Pattern"
+    description: "检测带有时间信息的关系"
+    enabled: false
+    detection:
+      # 基于节点属性
+      node_attributes:
+        - "time"
+        - "date"
+        - "timestamp"
+      # 基于关系类型
+      relation_types:
+        - "发生于"
+        - "在...时"
+        - "before"
+        - "after"
+    transformation:
+      type: "add_temporal_entity"
+      create_time_node: true
+  
+  # 示例：层次模式
+  - name: "Hierarchy Pattern"
+    description: "检测is-a和part-of层次关系"
+    enabled: false
+    detection:
+      relation_types:
+        - "is_a"
+        - "是"
+        - "属于"
+        - "part_of"
+        - "包含"
+    transformation:
+      type: "add_hierarchy_level"
+      create_level_attribute: true
+
+# 模式应用策略
+application_strategy:
+  # 模式应用优先级（按顺序应用）
+  priority:
+    - "Chain Pattern"
+    - "Star Pattern"
+    - "Reification Pattern"
+    - "LLM-Driven Pattern Discovery"
+  
+  # 冲突解决策略
+  conflict_resolution: "highest_confidence"  # 或 "first_match", "manual"
+  
+  # 是否允许多个模式应用于同一组节点
+  allow_overlapping: true
+  
+  # 批量转换设置
+  batch_transformation:
+    enabled: true
+    batch_size: 100
+
+# 评估和验证
+evaluation:
+  # 是否启用模式验证
+  validate_patterns: true
+  
+  # 验证规则
+  validation_rules:
+    # 确保转换不破坏图的连通性
+    preserve_connectivity: true
+    # 确保不创建自环（除非显式允许）
+    no_self_loops: true
+    # 确保不创建重复边
+    no_duplicate_edges: true
+  
+  # 质量指标
+  quality_metrics:
+    - "modularity"  # 模块度
+    - "density"     # 密度
+    - "clustering_coefficient"  # 聚类系数
+
+# 日志和调试
+logging:
+  level: "INFO"  # DEBUG, INFO, WARNING, ERROR
+  log_file: "./logs/pattern_discovery.log"
+  verbose: true
+
+# 性能优化
+performance:
+  # 最大处理节点数（超过此数量会采样）
+  max_nodes: 10000
+  # 是否使用并行处理
+  parallel_processing: false
+  # 并行worker数量
+  num_workers: 4
+  # 是否使用缓存
+  use_cache: true
+  cache_size: 1000
+
+# 领域特定配置
+domain_specific:
+  # 医学影像领域
+  medical_imaging:
+    enabled: false
+    entity_types:
+      - "伪影"
+      - "序列"
+      - "参数"
+      - "解决方案"
+    relation_types:
+      - "解决方案为"
+      - "影响"
+      - "设置为"
+    custom_patterns:
+      # 参数-状态-动作模式（类似事件模式的特化版本）
+      - name: "Parameter-State-Action Pattern"
+        trigger_relations: ["解决方案为", "设置为"]
+        state_indicators: ["高", "低", "快", "慢"]
+        action_indicators: ["采用", "使用", "提高", "降低"]
+  
+  # 其他领域可以在这里添加
+  # clinical_diagnosis:
+  #   enabled: false
+  #   ...
