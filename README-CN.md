@@ -224,6 +224,12 @@ curl -v http://localhost:8000
 4. 📤 推送到远程分支 (`git push origin feature/AmazingFeature`)
 5. 🔄 提交Pull Request
 
+## ❓ 常见问题
+
+**问：上传自定义数据时，会自动在 `config.datasets` 中新增条目吗？**
+
+不会。`ConfigManager` 只会在启动时读取 `config/base_config.yaml` 中声明过的数据集，并在 `get_dataset_config` 查询不到对应名称时抛出 `ValueError`。因此，当使用 `KTBuilder` 处理临时上传的数据时，只会通过 `dataset_name` 和 `schema_path` 进行构建流程，不会反向写入或扩展配置列表；若需要在其他模块中复用该数据集，请手动在配置文件里补充完整的路径信息。
+
 ### 🔧 扩展开发指南
 
 - **🌱 新种子Schema开发**：贡献高质量的种子图Schema设计和数据处理逻辑
