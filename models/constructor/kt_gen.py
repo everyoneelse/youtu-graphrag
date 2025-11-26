@@ -1,336 +1,27 @@
+import asyncio
 import copy
 import json
 import os
 import threading
 import time
 from concurrent import futures
+from datetime import datetime
 from typing import Any, Dict, List, Tuple
-from collections import defaultdict
-
+from tqdm import tqdm
+import pickle
 
 import nanoid
 import networkx as nx
 import tiktoken
 import json_repair
-from tqdm import tqdm
 
-from config import get_config
-from utils import call_llm_api, graph_processor, tree_comm
-from utils.logger import logger
+from collections import defaultdict
 
 import numpy as np
-
-DEFAULT_SEMANTIC_DEDUP_PROMPT = (
-    "You are a knowledge graph curation assistant performing entity deduplication.\n"
-    "All listed triples share the same head entity and relation.\n\n"
-    "Head entity: {head}\n"
-    "Relation: {relation}\n\n"
-    "Head contexts:\n{head_context}\n\n"
-    "Candidate tails:\n"
-    "{candidates}\n\n"
-    "TASK: Identify which tails are COREFERENT (refer to the exact same entity/concept).\n\n"
-    "FUNDAMENTAL PRINCIPLE:\n"
-    "COREFERENCE requires REFERENTIAL IDENTITY: Two expressions must denote the exact same referent.\n"
-    "- MERGE: 'Entity_A' and 'Entity_A_alias' → same referent (different names for one thing)\n"
-    "- DO NOT MERGE: 'Entity_X' and 'Entity_Y' → different referents (two distinct things)\n\n"
-    "CRITICAL DISTINCTION - Relation Satisfaction vs Entity Identity:\n"
-    "⚠️  If multiple tails all satisfy relation R with head H, this does NOT make them coreferent.\n"
-    "Each tail can be a DIFFERENT entity that happens to satisfy the SAME relation.\n"
-    "Formal logic: (H,R,X) ∧ (H,R,Y) ↛ X=Y  (relation satisfaction does not imply entity identity)\n\n"
-    "MERGE CONDITIONS - ALL must hold:\n"
-    "1. REFERENT TEST: Do the two tails refer to exactly the same entity in the real world?\n"
-    "   • Same entity, different names → MERGE (e.g., 'NYC' = 'New York City')\n"
-    "   • Different entities → KEEP SEPARATE (even if highly related)\n\n"
-    "2. SUBSTITUTION TEST: Can you replace one tail with the other in ALL contexts without changing truth value?\n"
-    "   • If substitution changes meaning/information → KEEP SEPARATE\n"
-    "   • If substitution preserves meaning → MERGE\n\n"
-    "3. EQUIVALENCE CLASS: After merging, all members must denote the SAME single entity.\n"
-    "   • Do NOT create groups containing multiple distinct entities\n"
-    "   • Each group = one entity with different linguistic expressions\n\n"
-    "PROHIBITED MERGE REASONS (these are NOT valid reasons to merge):\n"
-    "✗ Shared relation: \"Both satisfy R with H\" → NOT sufficient for coreference\n"
-    "✗ Semantic similarity: \"X and Y are similar/related\" → similarity ≠ identity\n"
-    "✗ Same category: \"Both are type T\" → category membership ≠ entity identity\n"
-    "✗ Co-occurrence: \"X and Y appear together\" → contextual proximity ≠ coreference\n"
-    "✗ Functional relationship: \"X causes/affects/contains Y\" → relationship ≠ identity\n"
-    "✗ Shared properties: \"X and Y have property P\" → property sharing ≠ entity identity\n"
-    "✗ Part of same set: \"X, Y ∈ Set_S\" → set membership ≠ element identity\n\n"
-    "MULTI-VALUED RELATIONS:\n"
-    "Many relations map one head to MULTIPLE distinct tail entities. Each tail is a separate instance.\n"
-    "Pattern: If H has relation R to {T1, T2, ..., Tn}, each Ti is typically a DIFFERENT entity.\n"
-    "Only merge Ti and Tj if they are different names for the SAME entity, not just because both satisfy R.\n\n"
-    "DECISION PROCEDURE:\n"
-    "For each pair of tails (Ti, Tj):\n"
-    "  1. Ask: \"Do Ti and Tj refer to the same entity?\" (not \"Are they related?\")\n"
-    "  2. Apply SUBSTITUTION TEST: Would swapping them change the information?\n"
-    "  3. If uncertain → KEEP SEPARATE (conservative principle)\n\n"
-    "CONSERVATIVE PRINCIPLE:\n"
-    "False splits (keeping coreferent entities separate) < False merges (merging distinct entities)\n"
-    "When in doubt, preserve distinctions.\n\n"
-    "OUTPUT REQUIREMENTS:\n"
-    "1. Every input index must appear in exactly one group\n"
-    "2. Each group represents ONE entity with its various expressions\n"
-    "3. Choose the most informative expression as representative\n"
-    "4. Provide clear rationale based on REFERENTIAL IDENTITY\n"
-    "5. **CRITICAL CONSISTENCY**: Ensure your 'members' array MATCHES your 'rationale':\n"
-    "   - If rationale says \"X and Y refer to the same entity\" or \"should be merged\",\n"
-    "     then X and Y MUST be in the SAME group's members array\n"
-    "   - If rationale says \"distinct entities\" or \"should be kept separate\",\n"
-    "     then they MUST be in DIFFERENT groups\n"
-    "   - Do NOT put items in separate groups if your rationale says they are coreferent!\n"
-    "   - Do NOT reference merging with other groups if members are already separate\n"
-    "6. **RATIONALE WRITING GUIDELINES**:\n"
-    "   - Each rationale should INDEPENDENTLY explain why its members are coreferent\n"
-    "   - Use candidate numbers (e.g., \"[1] and [2]\") to refer to specific items\n"
-    "   - DO NOT reference other groups (e.g., avoid \"same as group 1\" or \"与组1一致\")\n"
-    "   - If comparing with non-members, explain why they are DIFFERENT entities\n"
-    "   - Focus on describing the IDENTITY of this group's entity, not relationships to other groups\n\n"
-    "Respond with strict JSON using this schema:\n"
-    "{{\n"
-    "  \"groups\": [\n"
-    "    {{\"members\": [1, 3], \"representative\": 3, \"rationale\": \"Why these expressions are coreferent (same referent).\"}}\n"
-    "  ]\n"
-    "}}\n"
-)
-
-DEFAULT_ATTRIBUTE_DEDUP_PROMPT = (
-    "You are a knowledge graph curation assistant performing attribute value deduplication.\n"
-    "All listed triples share the same head entity and relation.\n\n"
-    "Head entity: {head}\n"
-    "Relation: {relation}\n\n"
-    "Head contexts:\n{head_context}\n\n"
-    "Candidate attribute values:\n"
-    "{candidates}\n\n"
-    "TASK: Identify which attribute values are EQUIVALENT (express the exact same property-value pair).\n\n"
-    "FUNDAMENTAL PRINCIPLE:\n"
-    "EQUIVALENCE requires VALUE IDENTITY: Two expressions must denote the exact same property-value combination.\n"
-    "- MERGE: 'Value_A' and 'Value_A_expressed_differently' → same value (different expressions)\n"
-    "- DO NOT MERGE: 'Value_X' and 'Value_Y' → different values (distinct property-value pairs)\n\n"
-    "CRITICAL DISTINCTION - Relation Satisfaction vs Value Identity:\n"
-    "⚠️  If multiple values all satisfy relation R with head H, this does NOT make them equivalent.\n"
-    "Each value can be a DIFFERENT property/measurement that happens to satisfy the SAME relation.\n"
-    "Formal: (H,R,V1) ∧ (H,R,V2) ↛ V1=V2  (co-satisfaction does not imply value equivalence)\n\n"
-    "MERGE CONDITIONS - ALL must hold:\n"
-    "1. SAME PROPERTY: Both values describe the same property/dimension/attribute.\n"
-    "   • Property_A and Property_B → KEEP SEPARATE (different properties)\n"
-    "   • Property_A and Property_A → proceed to condition 2\n\n"
-    "2. SAME VALUE: Both express the same measurement/state/quantity for that property.\n"
-    "   • Value_1 and Value_2 → KEEP SEPARATE (different values)\n"
-    "   • Value_X and Value_X → proceed to condition 3\n\n"
-    "3. LINGUISTIC VARIATION: The difference is only in expression, not in meaning.\n"
-    "   Acceptable variations:\n"
-    "   • Unit conversion: '10 cm' = '100 mm' (same length, different units)\n"
-    "   • Language: 'water' = 'H₂O' = '水' (same substance, different languages/notations)\n"
-    "   • Notation: 'fifty' = '50' = '5×10¹' (same number, different representations)\n\n"
-    "PROHIBITED MERGE REASONS (these are NOT valid reasons to merge):\n"
-    "✗ Shared entity: \"Both are attributes of H\" → NOT sufficient for equivalence\n"
-    "✗ Shared relation: \"Both satisfy R with H\" → NOT sufficient for equivalence\n"
-    "✗ Same domain: \"Both are from domain D\" → domain membership ≠ value identity\n"
-    "✗ Related properties: \"Property_A affects Property_B\" → relationship ≠ equivalence\n"
-    "✗ Similar magnitude: \"Value_1 ≈ Value_2\" → similarity ≠ identity\n"
-    "✗ Co-occurrence: \"V1 and V2 appear together\" → correlation ≠ equivalence\n"
-    "✗ Part of pattern: \"V1, V2 ∈ {set of attributes}\" → set membership ≠ element identity\n\n"
-    "MULTI-VALUED ATTRIBUTES:\n"
-    "Many entities possess MULTIPLE distinct attribute values for the same relation type.\n"
-    "Pattern: If H has relation R to {A1, A2, ..., An}, each Ai is typically a DIFFERENT attribute value.\n"
-    "Only merge Ai and Aj if they express the SAME property-value in different ways.\n\n"
-    "DECISION PROCEDURE:\n"
-    "For each pair of values (Vi, Vj):\n"
-    "  1. Ask: \"Do Vi and Vj express the same property?\" → If NO, KEEP SEPARATE\n"
-    "  2. Ask: \"Do Vi and Vj express the same value/measurement?\" → If NO, KEEP SEPARATE\n"
-    "  3. Ask: \"Is the difference only linguistic/notational?\" → If NO, KEEP SEPARATE\n"
-    "  4. If uncertain → KEEP SEPARATE (conservative principle)\n\n"
-    "CONSERVATIVE PRINCIPLE:\n"
-    "False splits (keeping equivalent values separate) < False merges (merging distinct values)\n"
-    "When in doubt, preserve distinctions.\n\n"
-    "OUTPUT REQUIREMENTS:\n"
-    "1. Every input index must appear in exactly one group\n"
-    "2. Each group represents ONE property-value pair with its various expressions\n"
-    "3. Choose the most complete and informative expression as representative\n"
-    "4. Provide clear rationale based on VALUE IDENTITY\n"
-    "5. **CRITICAL CONSISTENCY**: Ensure your 'members' array MATCHES your 'rationale':\n"
-    "   - If rationale says \"X and Y are equivalent\" or \"express the same value\",\n"
-    "     then X and Y MUST be in the SAME group's members array\n"
-    "   - If rationale says \"different values\" or \"distinct properties\",\n"
-    "     then they MUST be in DIFFERENT groups\n"
-    "   - Do NOT put items in separate groups if your rationale says they are equivalent!\n"
-    "6. **RATIONALE WRITING GUIDELINES**:\n"
-    "   - Each rationale should INDEPENDENTLY explain why its members are equivalent\n"
-    "   - Use candidate numbers (e.g., \"[1] and [2]\") to refer to specific items\n"
-    "   - DO NOT reference other groups (e.g., avoid \"same as group 1\" or \"与组1一致\")\n"
-    "   - If comparing with non-members, explain why they are DIFFERENT values\n"
-    "   - Focus on describing the VALUE of this group, not relationships to other groups\n\n"
-    "Respond with strict JSON using this schema:\n"
-    "{{\n"
-    "  \"groups\": [\n"
-    "    {{\"members\": [1, 3], \"representative\": 3, \"rationale\": \"Why these are equivalent (same property-value).\"}}\n"
-    "  ]\n"
-    "}}\n"
-)
-
-# Validation prompt for checking semantic deduplication consistency
-# Design principle: Use general consistency rules, NOT case-by-case patterns
-DEFAULT_SEMANTIC_DEDUP_VALIDATION_PROMPT = (
-    "You are a quality control assistant reviewing semantic deduplication results for consistency.\n\n"
-    "CONTEXT:\n"
-    "Head entity: {head}\n"
-    "Relation: {relation}\n\n"
-    "ORIGINAL CANDIDATES:\n"
-    "{candidates}\n\n"
-    "DEDUPLICATION RESULTS TO VALIDATE:\n"
-    "{dedup_results}\n\n"
-    "CORE TASK:\n"
-    "Check if each group's 'rationale' is LOGICALLY CONSISTENT with its 'members' array.\n\n"
-    "CONSISTENCY PRINCIPLE:\n"
-    "A group is CONSISTENT when:\n"
-    "  ✅ The rationale accurately describes WHY the members are grouped together\n"
-    "  ✅ If rationale says items are \"coreferent/equivalent/same\", they ARE in the same group\n"
-    "  ✅ If rationale says items are \"distinct/different\", they ARE in different groups\n"
-    "  ✅ The members array matches what the rationale claims\n\n"
-    "A group is INCONSISTENT when:\n"
-    "  ❌ Rationale and members contradict each other\n"
-    "  ❌ Rationale says \"same as group X\" but members don't include group X's items\n"
-    "  ❌ Rationale claims equivalence to other items not in the group\n"
-    "  ❌ Rationale says \"should be merged\" but items are in separate groups\n"
-    "  ❌ ANY logical mismatch between what rationale says and what members show\n\n"
-    "VALIDATION APPROACH:\n"
-    "1. Read each group's rationale carefully\n"
-    "2. Check if the members array matches the rationale's claim\n"
-    "3. If rationale mentions other groups/items, verify the relationship\n"
-    "4. Use your understanding of semantics and coreference\n"
-    "5. Consider the INTENT behind the rationale\n\n"
-    "IMPORTANT:\n"
-    "- Do NOT limit yourself to predefined patterns - find ANY inconsistency\n"
-    "- Use common sense and logical reasoning\n"
-    "- Consider context from the original candidates\n"
-    "- Focus on SEMANTIC consistency between rationale and members\n\n"
-    "OUTPUT FORMAT:\n"
-    "Respond with strict JSON:\n"
-    "{{\n"
-    "  \"has_inconsistencies\": true/false,\n"
-    "  \"inconsistencies\": [\n"
-    "    {{\n"
-    "      \"group_ids\": [list of affected group IDs],\n"
-    "      \"issue_type\": \"brief_category_name\",\n"
-    "      \"description\": \"Clear explanation of what's inconsistent\",\n"
-    "      \"suggested_fix\": \"How to fix it (e.g., 'merge group X into group Y')\"\n"
-    "    }}\n"
-    "  ],\n"
-    "  \"corrected_groups\": [\n"
-    "    {{\n"
-    "      \"members\": [member indices],\n"
-    "      \"representative\": index,\n"
-    "      \"rationale\": \"Updated rationale for the corrected group\"\n"
-    "    }}\n"
-    "  ]\n"
-    "}}\n\n"
-    "If NO inconsistencies found:\n"
-    "{{\n"
-    "  \"has_inconsistencies\": false,\n"
-    "  \"inconsistencies\": [],\n"
-    "  \"corrected_groups\": null\n"
-    "}}\n\n"
-    "EXAMPLE (for reference only - find ANY type of inconsistency):\n\n"
-    "Input groups:\n"
-    "- Group 0: {{members: [0, 1], representative: 0, rationale: \"These two refer to the same entity\"}}\n"
-    "- Group 1: {{members: [2], representative: 2, rationale: \"This is the same entity as items 0 and 1\"}}\n\n"
-    "Analysis: Group 1's rationale claims it's the same entity as items 0 and 1, but it's in a separate group.\n"
-    "This is inconsistent - if they're the same entity, they should be in one group.\n\n"
-    "Output:\n"
-    "{{\n"
-    "  \"has_inconsistencies\": true,\n"
-    "  \"inconsistencies\": [{{\n"
-    "    \"group_ids\": [1, 0],\n"
-    "    \"issue_type\": \"rationale_claims_coreference_but_separate\",\n"
-    "    \"description\": \"Group 1 claims to be the same entity as Group 0 members but is in a separate group\",\n"
-    "    \"suggested_fix\": \"merge group 1 into group 0\"\n"
-    "  }}],\n"
-    "  \"corrected_groups\": [\n"
-    "    {{\"members\": [0, 1, 2], \"representative\": 0, \"rationale\": \"These three expressions refer to the same entity\"}}\n"
-    "  ]\n"
-    "}}\n"
-)
-
-# Validation prompt for checking clustering consistency
-# Design principle: Use general consistency rules, NOT case-by-case patterns
-DEFAULT_CLUSTERING_VALIDATION_PROMPT = (
-    "You are a quality control assistant reviewing clustering results for consistency.\n\n"
-    "CONTEXT:\n"
-    "Head entity: {head}\n"
-    "Relation: {relation}\n\n"
-    "ORIGINAL CANDIDATE TAILS:\n"
-    "{candidates}\n\n"
-    "CLUSTERING RESULTS TO VALIDATE:\n"
-    "{clustering_results}\n\n"
-    "CORE TASK:\n"
-    "Check if each cluster's 'description/rationale' is LOGICALLY CONSISTENT with its 'members' array.\n\n"
-    "CONSISTENCY PRINCIPLE:\n"
-    "A cluster is CONSISTENT when:\n"
-    "  ✅ The description accurately reflects WHO is in the cluster\n"
-    "  ✅ If description says items are \"same/similar/should merge\", they ARE in the same cluster\n"
-    "  ✅ If description says items are \"different/distinct/separate\", they ARE in different clusters\n"
-    "  ✅ The membership (members array) matches what the description claims\n\n"
-    "A cluster is INCONSISTENT when:\n"
-    "  ❌ Description and members contradict each other\n"
-    "  ❌ Description refers to merging with other clusters, but members don't reflect this\n"
-    "  ❌ Description claims equivalence/similarity to other items not in the cluster\n"
-    "  ❌ ANY logical mismatch between what description says and what members show\n\n"
-    "VALIDATION APPROACH:\n"
-    "1. Read each cluster's description carefully\n"
-    "2. Check if the members array matches the description's claim\n"
-    "3. If description mentions other clusters/items, verify the relationship\n"
-    "4. Use your understanding of semantics, not just keyword matching\n"
-    "5. Consider the INTENT behind the description\n\n"
-    "IMPORTANT:\n"
-    "- Do NOT limit yourself to predefined patterns - find ANY inconsistency\n"
-    "- Use common sense and logical reasoning\n"
-    "- Consider context from the original candidates\n"
-    "- Focus on SEMANTIC consistency, not just syntactic matching\n\n"
-    "OUTPUT FORMAT:\n"
-    "Respond with strict JSON:\n"
-    "{{\n"
-    "  \"has_inconsistencies\": true/false,\n"
-    "  \"inconsistencies\": [\n"
-    "    {{\n"
-    "      \"cluster_ids\": [list of affected cluster IDs],\n"
-    "      \"issue_type\": \"brief_category_name\",\n"
-    "      \"description\": \"Clear explanation of what's inconsistent\",\n"
-    "      \"suggested_fix\": \"How to fix it (e.g., 'merge cluster X into cluster Y')\"\n"
-    "    }}\n"
-    "  ],\n"
-    "  \"corrected_clusters\": [\n"
-    "    {{\n"
-    "      \"members\": [member indices],\n"
-    "      \"description\": \"Updated description for the corrected cluster\"\n"
-    "    }}\n"
-    "  ]\n"
-    "}}\n\n"
-    "If NO inconsistencies found:\n"
-    "{{\n"
-    "  \"has_inconsistencies\": false,\n"
-    "  \"inconsistencies\": [],\n"
-    "  \"corrected_clusters\": null\n"
-    "}}\n\n"
-    "EXAMPLE (for reference only - find ANY type of inconsistency):\n\n"
-    "Input clusters:\n"
-    "- Cluster 0: {{members: [0, 1], description: \"These two items are identical\"}}\n"
-    "- Cluster 1: {{members: [2], description: \"This item is the same as items 0 and 1\"}}\n\n"
-    "Analysis: Cluster 1's description claims it's the same as items 0 and 1, but it's in a separate cluster.\n"
-    "This is inconsistent - if they're the same, they should be in one cluster.\n\n"
-    "Output:\n"
-    "{{\n"
-    "  \"has_inconsistencies\": true,\n"
-    "  \"inconsistencies\": [{{\n"
-    "    \"cluster_ids\": [1, 0],\n"
-    "    \"issue_type\": \"description_claims_equivalence_but_separate\",\n"
-    "    \"description\": \"Cluster 1 claims to be the same as Cluster 0 members but is in a separate cluster\",\n"
-    "    \"suggested_fix\": \"merge cluster 1 into cluster 0\"\n"
-    "  }}],\n"
-    "  \"corrected_clusters\": [\n"
-    "    {{\"members\": [0, 1, 2], \"description\": \"These three items are identical\"}}\n"
-    "  ]\n"
-    "}}\n"
-)
+from config import get_config
+from utils_ import call_llm_api, graph_processor, tree_comm
+from utils_.logger import logger
+import datetime
 
 DEFAULT_LLM_CLUSTERING_PROMPT = (
     "You are a knowledge graph curation assistant performing initial clustering of tail entities.\n"
@@ -364,18 +55,8 @@ DEFAULT_LLM_CLUSTERING_PROMPT = (
     "OUTPUT REQUIREMENTS:\n"
     "1. Every input index must appear in exactly one cluster\n"
     "2. Each cluster should contain semantically similar tails\n"
-    "3. Provide a brief description for each cluster explaining the grouping rationale\n"
-    "4. **CRITICAL**: Ensure your 'members' array MATCHES your 'description':\n"
-    "   - If description says items should be \"merged\" or \"combined\" or are \"identical/equivalent\",\n"
-    "     then those items MUST be in the SAME cluster (same 'members' array)\n"
-    "   - If description says items should be \"kept separate\" or are \"distinct\",\n"
-    "     then those items MUST be in DIFFERENT clusters\n"
-    "   - Do NOT put items in separate clusters if your description says they should be merged!\n"
-    "5. **DESCRIPTION WRITING GUIDELINES**:\n"
-    "   - Each description should INDEPENDENTLY explain why its members are grouped together\n"
-    "   - Use candidate numbers (e.g., \"[1] and [2]\") to refer to specific items if needed\n"
-    "   - DO NOT reference other clusters (e.g., avoid \"same as cluster 1\" or \"与簇1一致\")\n"
-    "   - Focus on describing the COMMON SEMANTIC THEME of this cluster's members\n\n"
+    "3. Provide a brief description for each cluster explaining the grouping rationale\n\n"
+    "4. Please provide a description in Chinese for each group."
     "Respond with strict JSON using this schema:\n"
     "{{\n"
     "  \"clusters\": [\n"
@@ -391,6 +72,104 @@ DEFAULT_LLM_CLUSTERING_PROMPT = (
     "}}\n"
 )
 
+# Validation prompt for checking semantic deduplication consistency
+# Design principle: Use general consistency rules, NOT case-by-case patterns
+DEFAULT_SEMANTIC_DEDUP_VALIDATION_PROMPT = (
+    "You are validating semantic deduplication results.\n\n"
+    "INPUT DATA:\n"
+    "{dedup_results}\n\n"
+    "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+    "YOUR TASK: Find groups where rationale's conclusion contradicts members\n"
+    "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
+    "WHAT TO CHECK:\n\n"
+    "For each group, ask:\n"
+    "  Q1: What does the rationale CONCLUDE? (merge into another group OR stay separate)\n"
+    "  Q2: What do the members show? (actually merged OR actually separate)\n"
+    "  Q3: Do they match?\n\n"
+    "❌ INCONSISTENT if:\n"
+    "  - Rationale concludes \"merge\" → but members show \"separate\"\n"
+    "  - Rationale concludes \"separate\" → but members show \"merged\"\n\n"
+    "✅ CONSISTENT if:\n"
+    "  - Rationale concludes \"merge\" → members show \"merged\" ✓\n"
+    "  - Rationale concludes \"separate\" → members show \"separate\" ✓\n\n"
+    "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+    "MERGE conclusion indicators (rationale says to merge):\n"
+    "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
+    "English: \"merge\", \"identical\", \"same as\", \"归入\"\n"
+    "Chinese: \"可合并\", \"应合并\", \"完全一致\", \"归入一组\", \"归为一组\", \"视为同一\"\n\n"
+    "⚠️ CRITICAL: \"故归入一组\" / \"归入XX组\" = says to MERGE\n"
+    "   → Check if members actually include the referenced group's items!\n\n"
+    "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+    "SEPARATE conclusion indicators (rationale says to keep separate):\n"
+    "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
+    "English: \"keep separate\", \"distinct\", \"independent\"\n"
+    "Chinese: \"保持独立\", \"单独保留\", \"不宜合并\", \"保留为独立组\"\n\n"
+    "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+    "IGNORE (out of scope):\n"
+    "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
+    "🚫 Content accuracy of rationale\n"
+    "🚫 Whether reasoning makes sense\n"
+    "🚫 Details mentioned in rationale\n\n"
+    "✅ ONLY check: conclusion vs structure\n\n"
+    "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+    "OUTPUT FORMAT:\n"
+    "═══════════════════════════════════════════════════════════════════\n\n"
+    "Respond with strict JSON:\n"
+    "{{\n"
+    "  \"has_inconsistencies\": true/false,\n"
+    "  \"inconsistencies\": [\n"
+    "    {{\n"
+    "      \"group_ids\": [affected group IDs],\n"
+    "      \"issue_type\": \"conclusion_structure_mismatch\",\n"
+    "      \"description\": \"Rationale says X but members show Y\",\n"
+    "      \"suggested_fix\": \"merge/split action\"\n"
+    "    }}\n"
+    "  ],\n"
+    "  \"corrected_groups\": [\n"
+    "    {{\n"
+    "      \"members\": [corrected member indices],\n"
+    "      \"representative\": index,\n"
+    "      \"rationale\": \"Updated rationale matching the corrected grouping\"\n"
+    "    }}\n"
+    "  ]\n"
+    "}}\n\n"
+    "IMPORTANT: corrected_groups should contain ALL groups (both corrected and unchanged).\n"
+    "Do not omit groups that were already consistent.\n\n"
+    "If NO inconsistencies:\n"
+    "{{\n"
+    "  \"has_inconsistencies\": false,\n"
+    "  \"inconsistencies\": [],\n"
+    "  \"corrected_groups\": null\n"
+    "}}\n\n"
+    "═══════════════════════════════════════════════════════════════════\n"
+    "EXAMPLES:\n"
+    "═══════════════════════════════════════════════════════════════════\n\n"
+    "Example 1 (English):\n"
+    "Input:\n"
+    "- Group 0: {{members: [1, 2], rationale: \"These refer to the same entity\"}}\n"
+    "- Group 1: {{members: [3], rationale: \"This is the same entity as group 0\"}}\n\n"
+    "Analysis:\n"
+    "Group 1's rationale says \"same entity as group 0\" (merge intention),\n"
+    "but Group 1 is separate with only [3], not merged with [1, 2].\n"
+    "❌ Conclusion (merge) ≠ Structure (separate) → INCONSISTENT\n\n"
+    "Output:\n"
+    "{{\n"
+    "  \"has_inconsistencies\": true,\n"
+    "  \"inconsistencies\": [{{\n"
+    "    \"group_ids\": [1, 0],\n"
+    "    \"issue_type\": \"rationale_conclusion_vs_grouping_mismatch\",\n"
+    "    \"description\": \"Group 1 says 'same as group 0' but is separate\",\n"
+    "    \"suggested_fix\": \"merge group 1 into group 0\"\n"
+    "  }}],\n"
+    "  \"corrected_groups\": [\n"
+    "    {{\"members\": [1, 2, 3], \"representative\": 1, \"rationale\": \"These refer to the same entity\"}}\n"
+    "  ]\n"
+    "}}\n"
+    "═══════════════════════════════════════════════════════════════════\n"
+    "Remember: ONLY check conclusion vs structure. Ignore content details!\n"
+    "═══════════════════════════════════════════════════════════════════\n"
+)
+
 class KTBuilder:
     def __init__(self, dataset_name, schema_path=None, mode=None, config=None):
         if config is None:
@@ -399,63 +178,35 @@ class KTBuilder:
         self.config = config
         self.dataset_name = dataset_name
         self.schema = self.load_schema(schema_path or config.get_dataset_config(dataset_name).schema_path)
+
+        dataset_config = None
+        try:
+            dataset_config = config.get_dataset_config(dataset_name)
+        except ValueError:
+            dataset_config = None
+        
+        self.resolved_schema_path_for_update = f"schemas/{dataset_name}.json"
+        
+        # if not self.resolved_schema_path_for_update and dataset_config:
+        #     self.resolved_schema_path_for_update = dataset_config.schema_path
+        
+        if dataset_config is None:
+            self.resolved_schema_path_for_update = f"schemas/{dataset_name}.json"
+        else:
+            self.resolved_schema_path_for_update = dataset_config.schema_path
+
         self.graph = nx.MultiDiGraph()
         self.node_counter = 0
         self.datasets_no_chunk = config.construction.datasets_no_chunk
         self.token_len = 0
         self.lock = threading.Lock()
-        
-        # Initialize LLM clients
-        self._init_llm_clients()
-        
+        self.llm_client = call_llm_api.LLMCompletionCall()
+        self.llm_dedup_client = call_llm_api.LLMCompletionCall_Dedup()
         self.all_chunks = {}
         self.mode = mode or config.construction.mode
         self._semantic_dedup_embedder = None
-    
-    def _init_llm_clients(self):
-        """Initialize LLM clients for different tasks."""
-        # Default LLM client (for general construction tasks)
-        self.llm_client = call_llm_api.LLMCompletionCall()
-        
-        # Get semantic dedup config
-        semantic_config = getattr(self.config.construction, "semantic_dedup", None)
-        
-        if semantic_config:
-            # Clustering LLM client
-            clustering_llm_config = getattr(semantic_config, "clustering_llm", None)
-            if clustering_llm_config and clustering_llm_config.model:
-                # Use custom clustering LLM
-                self.clustering_llm_client = call_llm_api.LLMCompletionCall(
-                    model=clustering_llm_config.model or None,
-                    base_url=clustering_llm_config.base_url or None,
-                    api_key=clustering_llm_config.api_key or None,
-                    temperature=clustering_llm_config.temperature
-                )
-                logger.info(f"Initialized custom clustering LLM: {clustering_llm_config.model}")
-            else:
-                # Use default LLM for clustering
-                self.clustering_llm_client = self.llm_client
-                logger.info("Using default LLM for clustering")
-            
-            # Deduplication LLM client
-            dedup_llm_config = getattr(semantic_config, "dedup_llm", None)
-            if dedup_llm_config and dedup_llm_config.model:
-                # Use custom dedup LLM
-                self.dedup_llm_client = call_llm_api.LLMCompletionCall(
-                    model=dedup_llm_config.model or None,
-                    base_url=dedup_llm_config.base_url or None,
-                    api_key=dedup_llm_config.api_key or None,
-                    temperature=dedup_llm_config.temperature
-                )
-                logger.info(f"Initialized custom deduplication LLM: {dedup_llm_config.model}")
-            else:
-                # Use default LLM for deduplication
-                self.dedup_llm_client = self.llm_client
-                logger.info("Using default LLM for deduplication")
-        else:
-            # No semantic dedup config, use default for both
-            self.clustering_llm_client = self.llm_client
-            self.dedup_llm_client = self.llm_client
+        self.llm_embed_client = call_llm_api.LLMEmbeddingCall()
+
 
     def load_schema(self, schema_path) -> Dict[str, Any]:
         try:
@@ -664,7 +415,7 @@ class KTBuilder:
             subj_node_id = self._find_or_create_entity(subj, chunk_id, nodes_to_add, subj_type)
             obj_node_id = self._find_or_create_entity(obj, chunk_id, nodes_to_add, obj_type)
             
-            edges_to_add.append((subj_node_id, obj_node_id, pred))
+            edges_to_add.append((subj_node_id, obj_node_id, pred, chunk_id))
         
         return nodes_to_add, edges_to_add
 
@@ -687,12 +438,15 @@ class KTBuilder:
         triple_nodes, triple_edges = self._process_triples(extracted_triples, id, entity_types)
         
         all_nodes = attr_nodes + triple_nodes
-        #all_edges = attr_edges + triple_edges
+        # all_edges = attr_edges + triple_edges
         
         with self.lock:
             for node_id, node_data in all_nodes:
                 self.graph.add_node(node_id, **node_data)
             
+            # for u, v, relation in all_edges:
+            #     self.graph.add_edge(u, v, relation=relation)
+
             for u, v, relation in attr_edges:
                 self.graph.add_edge(u, v, relation=relation)
 
@@ -702,7 +456,7 @@ class KTBuilder:
                     edge_data["source_chunks"] = [source_chunk_id]
                 self.graph.add_edge(subj, obj, **edge_data)
 
-    
+
     def _find_or_create_entity_direct(self, entity_name: str, chunk_id: int, entity_type: str = None) -> str:
         """Find existing entity or create a new one directly in graph (for agent mode)."""
         entity_node_id = next(
@@ -767,12 +521,13 @@ class KTBuilder:
             subj_node_id = self._find_or_create_entity_direct(subj, chunk_id, subj_type)
             obj_node_id = self._find_or_create_entity_direct(obj, chunk_id, obj_type)
             
-            #self.graph.add_edge(subj_node_id, obj_node_id, relation=pred)
+            # self.graph.add_edge(subj_node_id, obj_node_id, relation=pred)
+
             edge_data = {"relation": pred}
             if chunk_id:
                 edge_data["source_chunks"] = [chunk_id]
             self.graph.add_edge(subj_node_id, obj_node_id, **edge_data)
-    
+
 
     def process_level1_level2_agent(self, chunk: str, id: int):
         """Process attributes (level 1) and triples (level 2) with agent mechanism for schema evolution.
@@ -858,7 +613,7 @@ class KTBuilder:
         except Exception as e:
             logger.error(f"Failed to update schema for dataset '{self.dataset_name}': {type(e).__name__}: {e}")
 
-    def process_level4(self, method = "semantic"):
+    def process_level4(self, dedup = "normal"):
         """Process communities using Tree-Comm algorithm"""
         level2_nodes = [n for n, d in self.graph.nodes(data=True) if d['level'] == 2]
         start_comm = time.time()
@@ -868,7 +623,8 @@ class KTBuilder:
             struct_weight=self.config.tree_comm.struct_weight,
         )
         comm_to_nodes = _tree_comm.detect_communities(level2_nodes)
-        if method == 'semantic':
+
+        if dedup == "semantic":
             _, keyword_mapping = _tree_comm.create_super_nodes_with_keywords(comm_to_nodes, level=4)
             if keyword_mapping:
                 try:
@@ -879,12 +635,13 @@ class KTBuilder:
                         type(keyword_error).__name__,
                         keyword_error,
                     )
-        else:                    
-            # create super nodes (level 4 communities)
+        else:
+
+        # create super nodes (level 4 communities)
             _tree_comm.create_super_nodes_with_keywords(comm_to_nodes, level=4)
-            # _tree_comm.add_keywords_to_level3(comm_to_nodes)
-            # connect keywords to communities (optional)
-            # self._connect_keywords_to_communities()
+        # _tree_comm.add_keywords_to_level3(comm_to_nodes)
+        # connect keywords to communities (optional)
+        # self._connect_keywords_to_communities()
         end_comm = time.time()
         logger.info(f"Community Indexing Time: {end_comm - start_comm}s")
     
@@ -987,7 +744,56 @@ class KTBuilder:
 
     def _get_semantic_dedup_config(self):
         return getattr(self.config.construction, "semantic_dedup", None)
+    
+    def _get_online_API_embedder(self):
 
+        class OnlineAPIEmbedder:
+            def __init__(self, config):
+                self.online_embed_client = call_llm_api.LLMEmbeddingCall()
+                # Get embedding batch size from config, default to 100
+                self.batch_size = getattr(config, "embedding_batch_size", 100) if config else 100
+
+            def encode(self, texts, normalize_embeddings=True):
+                if len(texts) <= self.batch_size:
+                    # Single batch
+                    embeddings_list = self.online_embed_client.call_api(texts)
+                    num_embeddings = len(texts)
+                    embeddings = []
+                    for i in range(num_embeddings):
+                        embeddings.append(embeddings_list[i])
+                    embeddings_array = np.array(embeddings)
+                else:
+                    # Process in batches
+                    embeddings_array = []
+                    to_retry = []
+                    for batch_start in range(0, len(texts), self.batch_size):
+                        batch_end = min(batch_start + self.batch_size, len(texts))
+                        batch_texts = texts[batch_start:batch_end]
+                        logger.info(f"Processing embedding batch {batch_start//self.batch_size + 1}/{(len(texts)-1)//self.batch_size + 1} ({batch_end - batch_start} texts)")
+
+                        try:
+                            batch_embeddings_list = self.online_embed_client.call_api(batch_texts)
+                            for embedding in batch_embeddings_list:
+                                embeddings_array.append(embedding)
+                        except Exception as e:
+                            logger.error(f"Failed to process embedding batch {batch_start}-{batch_end}: {e}")
+                            # On failure, add zero vectors as fallback
+                            for _ in batch_texts:
+                                embeddings_array.append([0.0] * 1536)  # Assuming 1536-dim embeddings
+
+                    embeddings_array = np.array(embeddings_array)
+
+                if normalize_embeddings:
+                    # Normalize each embedding
+                    norms = np.linalg.norm(embeddings_array, axis=1, keepdims=True)
+                    norms[norms == 0] = 1  # Avoid division by zero
+                    embeddings_array = embeddings_array / norms
+
+                return embeddings_array
+
+        config = self._get_semantic_dedup_config()
+        return OnlineAPIEmbedder(config)
+        
     def _get_semantic_dedup_embedder(self):
         config = self._get_semantic_dedup_config()
         if not config or not config.use_embeddings:
@@ -1000,7 +806,7 @@ class KTBuilder:
         try:
             from sentence_transformers import SentenceTransformer
 
-            self._semantic_dedup_embedder = SentenceTransformer(model_name)
+            self._semantic_dedup_embedder = SentenceTransformer(f"/home/hhy/GPT/workspace/m_youtu/sentence-transformers/{model_name}")
         except Exception as e:
             logger.warning(
                 "Failed to initialize semantic dedup embedder with model '%s': %s: %s",
@@ -1021,7 +827,7 @@ class KTBuilder:
             name = properties.get("name") or properties.get("title")
             extras = []
             for key, value in properties.items():
-                if key == "name" or value in (None, ""):
+                if key == "name" or value in (None, "") or key in ['node_role', 'aliases', 'alias_of']:
                     continue
                 extras.append(f"{key}: {value}")
 
@@ -1092,7 +898,7 @@ class KTBuilder:
 
         return []
 
-    def _summarize_contexts(self, chunk_ids: list, max_items: int = 2, max_chars: int = 200) -> list:
+    def _summarize_contexts(self, chunk_ids: list, max_items: int = 10, max_chars: int = 5000) -> list:
         summaries: list = []
         seen: set = set()
 
@@ -1120,7 +926,6 @@ class KTBuilder:
             summaries.append("- (no context available)")
 
         return summaries
-
     def _llm_validate_semantic_dedup(self, groups: list, original_candidates: list,
                                      head_text: str = None, relation: str = None) -> tuple:
         """
@@ -1176,7 +981,7 @@ class KTBuilder:
         
         # Call LLM for validation
         try:
-            response = self.dedup_llm_client.call_api(prompt)
+            response = self.llm_dedup_client.call_api(prompt)
         except Exception as e:
             logger.warning("LLM semantic dedup validation call failed: %s, skipping validation", e)
             return groups, None
@@ -1190,10 +995,14 @@ class KTBuilder:
             except Exception as parse_error:
                 logger.warning("Failed to parse LLM semantic dedup validation response: %s, skipping validation", parse_error)
                 return groups, None
-        
-        has_inconsistencies = parsed.get('has_inconsistencies', False)
-        inconsistencies = parsed.get('inconsistencies', [])
-        corrected_groups_raw = parsed.get('corrected_groups')
+        #import pdb; pdb.set_trace()
+        try:
+            has_inconsistencies = parsed.get('has_inconsistencies', False)
+            inconsistencies = parsed.get('inconsistencies', [])
+            corrected_groups_raw = parsed.get('corrected_groups')
+        except Exception as e:
+            logger.warning("Failed to parse LLM semantic dedup validation response: %s, skipping validation", e)
+            #import pdb; pdb.set_trace()
         
         validation_report = {
             'has_inconsistencies': has_inconsistencies,
@@ -1209,6 +1018,11 @@ class KTBuilder:
         
         # Apply corrections
         logger.info("LLM semantic dedup validation found %d inconsistencies, applying corrections", len(inconsistencies))
+        logger.info("--------------------------")
+        logger.debug("Groups: %s", groups)
+        logger.info("--------------------------")
+        logger.debug("Parsed: %s", parsed)
+        logger.info("--------------------------")
         
         corrected_groups = []
         for group_info in corrected_groups_raw:
@@ -1243,6 +1057,22 @@ class KTBuilder:
                     "validation_corrected": True
                 })
         
+        # Verify we got all items covered
+        all_items = set(range(len(original_candidates)))
+        covered_items = set()
+        for group in corrected_groups:
+            covered_items.update(group['members'])
+        
+        missing_items = all_items - covered_items
+        if missing_items:
+            logger.warning(
+                "LLM validation output missing items %s. Keeping original groups to avoid data loss.",
+                sorted(missing_items)
+            )
+            validation_report['corrected'] = False
+            validation_report['error'] = f"Missing items in corrected_groups: {sorted(missing_items)}"
+            return groups, validation_report
+
         validation_report['corrected'] = True
         validation_report['corrected_group_count'] = len(corrected_groups)
         validation_report['inconsistencies_fixed'] = inconsistencies
@@ -1252,8 +1082,8 @@ class KTBuilder:
             len(groups), len(corrected_groups), len(inconsistencies)
         )
         
-        return corrected_groups, validation_report
-    
+        return groups, validation_report
+
     def _llm_validate_clustering(self, clusters: list, cluster_details: list, 
                                  descriptions: list, head_text: str = None, relation: str = None,
                                  index_offset: int = 0) -> tuple:
@@ -1506,8 +1336,8 @@ class KTBuilder:
         # Users can review the logs and fix manually if needed
         
         return clusters, cluster_details
-    
-    def _cluster_candidate_tails_with_llm(self, head_text: str, relation: str, descriptions: list, max_batch_size: int = 30) -> tuple:
+
+    def _cluster_candidate_tails_with_llm(self, head_text: str, relation: str, descriptions: list, max_batch_size: int = 30) -> list:
         """
         Cluster candidate tails using LLM for initial grouping.
         
@@ -1521,24 +1351,13 @@ class KTBuilder:
             max_batch_size: Maximum number of tails to send to LLM at once
             
         Returns:
-            Tuple of (clusters, cluster_details):
-                - clusters: List of clusters, where each cluster is a list of indices
-                - cluster_details: List of dicts with LLM's clustering rationale
+            List of clusters, where each cluster is a list of indices
         """
         if len(descriptions) <= 1:
-            single_cluster = [list(range(len(descriptions)))]
-            single_details = [{
-                "cluster_id": 0,
-                "members": list(range(len(descriptions))),
-                "description": "Single item, no clustering needed",
-                "llm_rationale": ""
-            }]
-            return single_cluster, single_details
+            return [list(range(len(descriptions)))]
         
         # If there are too many tails, batch them
         all_clusters = []
-        all_details = []
-        
         if len(descriptions) > max_batch_size:
             # Process in batches
             for batch_start in range(0, len(descriptions), max_batch_size):
@@ -1546,15 +1365,14 @@ class KTBuilder:
                 batch_descriptions = descriptions[batch_start:batch_end]
                 batch_offset = batch_start
                 
-                batch_clusters, batch_details = self._llm_cluster_batch(head_text, relation, batch_descriptions, batch_offset)
+                batch_clusters = self._llm_cluster_batch(head_text, relation, batch_descriptions, batch_offset)
                 all_clusters.extend(batch_clusters)
-                all_details.extend(batch_details)
-            return all_clusters, all_details
+            return all_clusters
         else:
             # Process all at once
             return self._llm_cluster_batch(head_text, relation, descriptions, 0)
     
-    def _llm_cluster_batch(self, head_text: str, relation: str, descriptions: list, index_offset: int = 0) -> tuple:
+    def _llm_cluster_batch(self, head_text: str, relation: str, descriptions: list, index_offset: int = 0) -> list:
         """
         Use LLM to cluster a batch of tail descriptions.
         
@@ -1565,9 +1383,7 @@ class KTBuilder:
             index_offset: Offset to add to indices (for batched processing)
             
         Returns:
-            Tuple of (clusters, cluster_details):
-                - clusters: List of clusters with adjusted indices
-                - cluster_details: List of dicts with clustering rationale from LLM
+            List of clusters with adjusted indices
         """
         # Build candidate list for prompt
         candidate_blocks = []
@@ -1583,9 +1399,9 @@ class KTBuilder:
             candidates=candidates_text
         )
         
-        # Call LLM (use clustering LLM client)
+        # Call LLM
         try:
-            response = self.clustering_llm_client.call_api(prompt)
+            response = self.llm_client.call_api(prompt)
         except Exception as e:
             logger.warning("LLM clustering call failed: %s: %s, falling back to single cluster", type(e).__name__, e)
             # Fallback: put all items in one cluster
@@ -1604,7 +1420,9 @@ class KTBuilder:
                 fallback_cluster = [[idx + index_offset for idx in range(len(descriptions))]]
                 fallback_details = [{"description": "Fallback cluster (parse failed)", "members": fallback_cluster[0]}]
                 return fallback_cluster, fallback_details
-        
+            
+
+        # import pdb; pdb.set_trace()
         clusters_raw = parsed.get("clusters") if isinstance(parsed, dict) else None
         if not isinstance(clusters_raw, list):
             logger.warning("LLM clustering response missing 'clusters' field, using fallback")
@@ -1612,7 +1430,7 @@ class KTBuilder:
             fallback_details = [{"description": "Fallback cluster (invalid response)", "members": fallback_cluster[0]}]
             return fallback_cluster, fallback_details
         
-        # Convert LLM output to cluster format and preserve details
+        # Convert LLM output to cluster format
         clusters = []
         cluster_details = []
         assigned = set()
@@ -1623,6 +1441,7 @@ class KTBuilder:
             
             members_raw = cluster_info.get("members")
             if not isinstance(members_raw, list):
+                logger.warning(f"Invalid cluster members format, assert LIST, get {type(members_raw)} skipping cluster")
                 continue
             
             # Convert 1-based indices to 0-based and add offset
@@ -1646,7 +1465,7 @@ class KTBuilder:
                     "description": cluster_info.get("description", "No description provided"),
                     "llm_rationale": cluster_info.get("description", ""),
                     "rationale": cluster_info.get("rationale", "")  # Preserve rationale if provided separately
-                })
+                })        
         
         # Add unassigned items as singleton clusters
         for idx in range(len(descriptions)):
@@ -1660,7 +1479,7 @@ class KTBuilder:
                     "llm_rationale": "",
                     "rationale": ""
                 })
-        
+            
         # Two-step validation approach:
         # Step 1: LLM self-validation and correction (if enabled)
         clusters, cluster_details, validation_report = self._llm_validate_clustering(
@@ -1671,24 +1490,10 @@ class KTBuilder:
         clusters, cluster_details = self._validate_and_fix_clustering_inconsistencies(
             clusters, cluster_details, descriptions, index_offset
         )
-        
+
         return clusters, cluster_details
 
     def _cluster_candidate_tails(self, descriptions: list, threshold: float) -> list:
-        """
-        Cluster candidate descriptions using Average Linkage hierarchical clustering.
-        
-        This uses sklearn's AgglomerativeClustering with average linkage to ensure
-        that items are only clustered together if they have high average similarity
-        to all members of the cluster, avoiding the chaining effect of single linkage.
-        
-        Args:
-            descriptions: List of text descriptions to cluster
-            threshold: Similarity threshold (cosine similarity, 0-1)
-            
-        Returns:
-            List of clusters, where each cluster is a list of indices
-        """
         if len(descriptions) <= 1:
             return [list(range(len(descriptions)))]
 
@@ -1702,6 +1507,17 @@ class KTBuilder:
             logger.warning("Failed to encode descriptions for semantic dedup: %s: %s", type(e).__name__, e)
             return [list(range(len(descriptions)))]
 
+        # clusters: list = []
+        # for idx, vector in enumerate(embeddings):
+        #     vector_arr = np.asarray(vector, dtype=float)
+        #     assigned = False
+        #     for cluster in clusters:
+        #         if any(float(np.dot(existing_vec, vector_arr)) >= threshold for existing_vec in cluster["vectors"]):
+        #             cluster["members"].append(idx)
+        #             cluster["vectors"].append(vector_arr)
+        #             assigned = True
+        #             break
+        # import pdb; pdb.set_trace()
         try:
             from sklearn.cluster import AgglomerativeClustering
             
@@ -1757,11 +1573,12 @@ class KTBuilder:
                 if not assigned:
                     clusters.append({"members": [idx], "vectors": [vector_arr]})
 
-            return [cluster["members"] for cluster in clusters]
+        # return [cluster["members"] for cluster in clusters]
         except Exception as e:
             logger.warning("Clustering failed: %s: %s, using fallback", type(e).__name__, e)
             # If anything goes wrong, put all items in one cluster
             return [list(range(len(descriptions)))]
+
 
     def _build_semantic_dedup_prompt(
         self,
@@ -1769,6 +1586,7 @@ class KTBuilder:
         relation: str,
         head_context_lines: list,
         batch_entries: list,
+        only_head_context: list,
     ) -> str:
         candidate_blocks = []
         for idx, entry in enumerate(batch_entries, start=1):
@@ -1782,34 +1600,17 @@ class KTBuilder:
         candidates_text = "\n".join(candidate_blocks) if candidate_blocks else "[No candidates]"
         relation_text = relation or "[UNKNOWN]"
         head_context_text = "\n".join(head_context_lines) if head_context_lines else "- (no context available)"
+        only_head_context_text = "\n".join(only_head_context) if only_head_context else "- (no context available)"
 
-        # Auto-detect prompt type based on relation
-        config = self._get_semantic_dedup_config()
-        prompt_type = getattr(config, "prompt_type", "general")
-        
-        # Use 'attribute' prompt for attribute-related relations
-        if prompt_type == "general":
-            attribute_relations = {"has_attribute", "attribute", "property", "has_property", "characteristic"}
-            relation_lower = relation.lower() if relation else ""
-            if relation_lower in attribute_relations or "attribute" in relation_lower:
-                prompt_type = "attribute"
-                logger.debug(f"Auto-selected 'attribute' prompt type for relation: {relation}")
-        
+        prompt_type = getattr(self._get_semantic_dedup_config(), "prompt_type", "general")
         prompt_kwargs = {
             "head": head_text or "[UNKNOWN_HEAD]",
             "relation": relation_text,
-            "head_context": head_context_text,
+            "head_context": only_head_context_text,
             "candidates": candidates_text,
         }
 
-        try:
-            return self.config.get_prompt_formatted("semantic_dedup", prompt_type, **prompt_kwargs)
-        except Exception:
-            # Fallback to appropriate default prompt based on type
-            if prompt_type == "attribute":
-                return DEFAULT_ATTRIBUTE_DEDUP_PROMPT.format(**prompt_kwargs)
-            else:
-                return DEFAULT_SEMANTIC_DEDUP_PROMPT.format(**prompt_kwargs)
+        return self.config.get_prompt_formatted("semantic_dedup", prompt_type, **prompt_kwargs)
 
     def _llm_semantic_group(
         self,
@@ -1820,9 +1621,20 @@ class KTBuilder:
     ) -> list:
         prompt = self._build_semantic_dedup_prompt(head_text, relation, head_context_lines, batch_entries)
 
+        # Log LLM input in the requested format
+        logger.info("=" * 80)
+        logger.info("LLM Semantic Deduplication Input:")
+        logger.info("Head and relation:")
+        logger.info(f"{head_text} | {relation}")
+        logger.info("")
+        logger.info("Tail:")
+        for idx, entry in enumerate(batch_entries):
+            description = entry.get("description") or "[NO DESCRIPTION]"
+            logger.info(f"{idx}: {description}")
+        logger.info("=" * 80)
+
         try:
-            # Use deduplication LLM client for semantic grouping
-            response = self.dedup_llm_client.call_api(prompt)
+            response = self.llm_dedup_client.call_api(prompt)
         except Exception as e:
             logger.warning("Semantic dedup LLM call failed: %s: %s", type(e).__name__, e)
             return []
@@ -1885,18 +1697,274 @@ class KTBuilder:
             if idx not in assigned:
                 groups.append({"representative": idx, "members": [idx], "rationale": None})
 
-        return groups
+        # Log LLM output in the requested format
+        # logger.info("=" * 80)
+        logger.info("LLM Semantic Deduplication Output:")
+        
+        # Check if output is unchanged (each tail in its own cluster)
+        is_unchanged = all(len(group.get("members", [])) == 1 for group in groups)
+        
+        if is_unchanged:
+            logger.info("未做更改")
+        else:
+            # Group outputs by cluster
+            for cluster_idx, group in enumerate(groups, start=1):
+                members = group.get("members", [])
+                if len(members) > 1:  # Only show clusters with multiple members
+                    logger.info(f"cluster{cluster_idx}:")
+                    for member_idx in members:
+                        if 0 <= member_idx < len(batch_entries):
+                            description = batch_entries[member_idx].get("description") or "[NO DESCRIPTION]"
+                            logger.info(f"{description},")
+                    logger.info("")
+                    logger.info(f"Rationale: {group.get('rationale')}")
+        
+        logger.info("=" * 80)
 
-    def _concurrent_llm_calls(self, prompts_with_metadata: list) -> list:
+        return groups
+    
+    def _generate_embedding_cache_key(self, texts: list) -> str:
+        """
+        Generate a cache key based on graph state and chunks for LLM results caching.
+        """
+        import hashlib
+        import json
+
+        cache_data = {
+            'texts': texts}
+        cache_str = json.dumps(cache_data, sort_keys=True, ensure_ascii=False)
+        cache_hash = hashlib.sha256(cache_str.encode('utf-8')).hexdigest()[:16]
+        return f"embedding_cache_{cache_hash}.json"
+
+    def _generate_llm_cache_key(self, prompts_with_metadata: list) -> str:
+        """
+        Generate a cache key based on graph state and chunks for LLM results caching.
+
+        Args:
+            prompts_with_metadata: List of prompt dictionaries
+
+        Returns:
+            str: Hash string that can be used as filename
+        """
+        import hashlib
+        import json
+
+        # Collect key data for hashing
+        cache_data = {
+            'dataset_name': self.dataset_name,
+            'graph_nodes': sorted([str(node) for node in self.ori_graph.nodes()]),
+            'graph_edges': sorted([f"{u}({self.ori_graph.nodes[u]['properties']['name']})-{v}({self.ori_graph.nodes[v]['properties']['name']})  -{k}" for u, v, k in self.ori_graph.edges(keys=True)]),
+            'chunks_count': len(self.all_chunks),
+            'chunks_keys': sorted(list(self.all_chunks.keys())),
+            'prompts_count': len(prompts_with_metadata),
+            'prompt_types': sorted([p.get('type') for p in prompts_with_metadata]),  # Sort for consistency
+            'prompt_hashes': sorted([hashlib.md5(p.get('prompt', '').encode('utf-8')).hexdigest()[:8] for p in prompts_with_metadata])  # Sort for consistency
+        }
+        # Convert to JSON string and hash
+        cache_str = json.dumps(cache_data, sort_keys=True, ensure_ascii=False)
+        cache_hash = hashlib.sha256(cache_str.encode('utf-8')).hexdigest()[:16]
+        #print(f"cache_data: {cache_data}")
+        #print(f"cache_hash: {cache_hash}")
+        #with open("/home/hhy/GPT/workspace/m_youtu/cache/cache_data.json", "w", encoding="utf-8") as f:
+        #    json.dump(cache_data, f, indent=2, ensure_ascii=False)
+        return f"llm_cache_{cache_hash}.json"
+
+    def _save_llm_results(self, cache_key: str, results: list) -> None:
+        """
+        Save LLM call results to local cache file.
+
+        Args:
+            cache_key: Cache key generated by _generate_llm_cache_key
+            results: LLM call results to save
+        """
+        import os
+        import json
+
+        cache_dir = os.path.join("cache", "llm_results")
+        os.makedirs(cache_dir, exist_ok=True)
+
+        cache_path = os.path.join(cache_dir, cache_key)
+
+        try:
+            with open(cache_path, 'w', encoding='utf-8') as f:
+                json.dump({
+                    'timestamp': str(datetime.datetime.now()),
+                    'results': results}, f, indent=2, ensure_ascii=False)
+            logger.info(f"Saved LLM results to cache: {cache_path}")
+        except Exception as e:
+            logger.warning(f"Failed to save LLM results to cache: {e}")
+
+    def _load_llm_results(self, cache_key: str) -> list | None:
+        """
+        Load LLM call results from local cache file.
+
+        Args:
+            cache_key: Cache key generated by _generate_llm_cache_key
+
+        Returns:
+            List of cached results or None if not found/invalid
+        """
+        import os
+        import json
+
+        cache_dir = os.path.join("cache", "llm_results")
+        cache_path = os.path.join(cache_dir, cache_key)
+
+        if not os.path.exists(cache_path):
+            return None
+
+        try:
+            with open(cache_path, 'r', encoding='utf-8') as f:
+                #import pdb; pdb.set_trace()
+                data = json.load(f)
+                results = data.get('results', [])
+                logger.info(f"Loaded cached LLM results: {cache_path}")
+                return results
+        except Exception as e:
+            logger.warning(f"Failed to load cached LLM results: {e}")
+            return None
+
+    def _save_embedding_results(self, cache_key: str, results: list) -> None:
+        """
+        Save embedding results to local cache file.
+        """
+        import os
+        import json
+        
+        cache_dir = os.path.join("cache", "embedding_results")
+        os.makedirs(cache_dir, exist_ok=True)
+
+        cache_path = os.path.join(cache_dir, cache_key)
+
+        try:
+            with open(cache_path, 'wb') as f:
+                pickle.dump({
+                    'timestamp': str(datetime.datetime.now()),
+                    'results': results
+                }, f, protocol=4)
+            logger.info(f"Saved embedding results to cache: {cache_path}")
+        except Exception as e:
+            logger.warning(f"Failed to save embedding results to cache: {e}")
+
+    def _load_embedding_results(self, cache_key: str) -> list | None:
+        """
+        Load embedding results from local cache file.
+        """
+        import os
+        import json
+
+        cache_dir = os.path.join("cache", "embedding_results")
+        cache_path = os.path.join(cache_dir, cache_key)
+
+        if not os.path.exists(cache_path):
+            return None
+
+        try:
+            with open(cache_path, 'rb') as f:
+                data = pickle.load(f)
+                results = data.get('results', [])
+                logger.info(f"Loaded cached embedding results: {cache_path}")
+                return np.concatenate(results, axis=0)
+        except Exception as e:
+            logger.warning(f"Failed to load cached embedding results: {e}")
+            return None
+    
+    def _generate_embedding_cache_key(self, texts: list) -> str:
+        """
+        Generate a cache key based on graph state and chunks for LLM results caching.
+        """
+        import hashlib
+        import json
+        
+        cache_data = {
+            'texts': texts}
+        cache_str = json.dumps(cache_data, sort_keys=True, ensure_ascii=False)
+        cache_hash = hashlib.sha256(cache_str.encode('utf-8')).hexdigest()[:16]
+        return f"embedding_cache_{cache_hash}.json"
+
+    def _concurrent_embedding_calls(self, texts: list, enable_cache: bool = True) -> list:
+        """
+        Concurrently process multiple embedding calls.
+        """
+        embedder = self._get_online_API_embedder()
+        embedding_batch_size = getattr(self._get_semantic_dedup_config(), "embedding_batch_size", 1000)
+
+        if embedder is None:
+            return []
+        
+        cached_results = None
+
+        if enable_cache:
+            
+            cache_key = self._generate_embedding_cache_key(texts)
+            cached_results = self._load_embedding_results(cache_key)
+            if cached_results is not None:
+                logger.info(f"Using cached embedding results for {len(cached_results)} texts")
+                return cached_results
+
+        def retry_sync(fun, item, index):
+            """Synchronous retry function"""
+            start_time = datetime.datetime.now()
+            max_wait_time = 1 * 3600
+            attempt_count = 0
+            retry_delay = 10  # Initial retry delay
+            MAX_RETRY_WAIT_SECONDS = 300  # Max 5 minutes between retries
+
+            while True:
+                attempt_count += 1
+                elapsed = (datetime.datetime.now() - start_time).total_seconds()
+                if elapsed > max_wait_time:
+                    logger.error("Max wait time (%ds) exceeded. ", max_wait_time)
+                    return None
+                try:
+                    return fun(item, index)
+                except Exception as e:
+                    import traceback
+                    logger.warning(f"Embedding call failed: {e}\n{traceback.format_exc()}")
+
+                    # Wait before retry (with exponential backoff) - sync sleep
+                    retry_delay = min(retry_delay * 1.5, MAX_RETRY_WAIT_SECONDS)
+                    logger.info(f"Embedding batch {index} waiting {retry_delay:.0f}s before next attempt...")
+                    time.sleep(retry_delay)
+
+        def _call_single_batch_embedding_sync(item, index):
+            """Call embedding for a single batch of texts synchronously."""
+            batch_texts = texts[item:item + embedding_batch_size]
+            return embedder.encode(batch_texts)
+
+        # Process batches synchronously with progress bar
+        embeddings_array = []
+        total_batches = (len(texts) + embedding_batch_size - 1) // embedding_batch_size
+
+        with tqdm(total=total_batches, desc="Processing Embedding calls", unit="batch") as pbar:
+            for batch_index in range(total_batches):
+                start_index = batch_index * embedding_batch_size
+                result = retry_sync(_call_single_batch_embedding_sync, start_index, batch_index)
+                if result is not None:
+                    embeddings_array.append(result)
+                pbar.update(1)
+
+        # Save results to cache if caching is enabled
+        if enable_cache and embeddings_array:
+            try:
+                cache_key = self._generate_embedding_cache_key(texts)
+                self._save_embedding_results(cache_key, embeddings_array)
+            except Exception as e:
+                logger.warning(f"Failed to save embedding results to cache: {e}")
+
+        return np.concatenate(embeddings_array, axis=0)
+
+    def _concurrent_llm_calls(self, prompts_with_metadata: list, enable_cache: bool = True, type: str = "clustering") -> list:
         """
         Concurrently process multiple LLM prompts.
-        
+
         Args:
             prompts_with_metadata: List of dicts with keys:
                 - 'type': 'clustering' or 'semantic'
                 - 'prompt': the prompt string
                 - 'metadata': additional metadata for processing results
-                
+            enable_cache: Whether to enable caching of LLM results
+
         Returns:
             List of dicts with keys:
                 - 'type': same as input
@@ -1904,69 +1972,118 @@ class KTBuilder:
                 - 'metadata': same as input
                 - 'error': error message if failed (None if successful)
         """
+
+
         if not prompts_with_metadata:
             return []
+
+        # Check for cached results if caching is enabled
+        if enable_cache:
+            cache_key = self._generate_llm_cache_key(prompts_with_metadata)
+            cached_results = self._load_llm_results(cache_key)
+            if cached_results is not None:
+                logger.info(f"Using cached LLM results for {len(cached_results)} prompts")
+                return cached_results
         
         results = []
         
-        def _call_single_llm(item):
+        def retry_sync(fun, item, index):
+            """Synchronous retry function"""
+            start_time = datetime.datetime.now()
+            max_wait_time = 1 * 3600
+            attempt_count = 0
+            retry_delay = 10  # Initial retry delay
+            MAX_RETRY_WAIT_SECONDS = 300  # Max 5 minutes between retries
+
+            while True:
+                attempt_count += 1
+                elapsed = (datetime.datetime.now() - start_time).total_seconds()
+                if elapsed > max_wait_time:
+                    logger.error("Max wait time (%ds) exceeded. ", max_wait_time)
+                    return None
+
+                try:
+                    return fun(item, index)
+                except Exception as e:
+                    import traceback
+                    logger.warning(f"LLM call failed: {e}\n{traceback.format_exc()}")
+
+                    # Wait before retry (with exponential backoff) - sync sleep
+                    retry_delay = min(retry_delay * 1.5, MAX_RETRY_WAIT_SECONDS)
+                    logger.info(f"Prompt {index} waiting {retry_delay:.0f}s before next attempt...")
+                    time.sleep(retry_delay)
+
+        def _call_single_llm(item, index):
             """Call LLM for a single prompt."""
             prompt_type = item.get('type')
             prompt = item.get('prompt')
             metadata = item.get('metadata', {})
-            
+
             result = {
                 'type': prompt_type,
                 'metadata': metadata,
                 'response': None,
-                'error': None
+                'error': None,
+                'index': index
             }
-            
+
             try:
                 # Choose appropriate client based on type
                 if prompt_type == 'clustering':
-                    response = self.clustering_llm_client.call_api(prompt)
+                    response = self.llm_client.call_api(prompt)
                 elif prompt_type == 'semantic':
-                    response = self.dedup_llm_client.call_api(prompt)
+                    response = self.llm_dedup_client.call_api(prompt)
+                elif prompt_type == 'head_dedup':
+                    response = self.llm_dedup_client.call_api(prompt)
                 else:
                     raise ValueError(f"Unknown prompt type: {prompt_type}")
-                
+
                 result['response'] = response
             except Exception as e:
-                result['error'] = f"{type(e).__name__}: {e}"
+                import traceback
+                result['error'] = f"{e}\n{traceback.format_exc()}"
                 logger.warning("LLM call failed for type %s: %s", prompt_type, result['error'])
-            
+
             return result
-        
-        # Use ThreadPoolExecutor for concurrent API calls with progress bar
-        max_workers = min(10, len(prompts_with_metadata))  # Limit concurrent requests
-        
-        # Submit all tasks and collect futures
-        with futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+
+
+        # Process prompts concurrently using ThreadPoolExecutor
+        import concurrent.futures
+
+        # Limit concurrent requests based on prompt type
+        if prompts_with_metadata and prompts_with_metadata[0]['type'] == 'semantic':
+            max_workers = 10  # LLM semantic dedup calls are not thread-safe, limit to 5
+        else:
+            max_workers = min(10, len(prompts_with_metadata))
+
+        results = []
+        with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
             # Submit all tasks
-            future_to_item = {
-                executor.submit(_call_single_llm, item): item 
-                for item in prompts_with_metadata
+            future_to_index = {
+                executor.submit(retry_sync, _call_single_llm, item, index): index
+                for index, item in enumerate(prompts_with_metadata)
             }
-            
-            # Collect results with progress bar
-            results = []
+
+            # Process results as they complete with progress bar
             with tqdm(total=len(prompts_with_metadata), desc="Processing LLM calls", unit="call") as pbar:
-                for future in futures.as_completed(future_to_item):
-                    try:
-                        result = future.result()
+                for future in concurrent.futures.as_completed(future_to_index):
+                    result = future.result()
+                    if result is not None:
                         results.append(result)
-                    except Exception as e:
-                        # This shouldn't happen as exceptions are caught in _call_single_llm
-                        logger.error(f"Unexpected error in concurrent call: {e}")
-                        results.append({
-                            'type': 'unknown',
-                            'metadata': {},
-                            'response': None,
-                            'error': str(e)
-                        })
                     pbar.update(1)
-        
+                    time.sleep(0.5)
+
+        # Sort results by original index to maintain order
+        results.sort(key=lambda x: x['index'])
+
+        # Save results to cache if caching is enabled
+        if enable_cache and results:
+            try:
+                cache_key = self._generate_llm_cache_key(prompts_with_metadata)
+                self._save_llm_results(cache_key, results)
+            except Exception as e:
+                logger.warning(f"Failed to save LLM results to cache: {e}")
+
         return results
 
     def _merge_duplicate_metadata(self, base_entry: dict, duplicates: list, rationale: str = None):
@@ -2188,178 +2305,6 @@ class KTBuilder:
 
         return removed_nodes
 
-    def _deduplicate_keyword_nodes(self, keyword_mapping: dict):
-        """
-        Deduplicate keyword nodes using batch concurrent LLM processing.
-        
-        This method uses a multi-phase approach similar to triple_deduplicate_semantic:
-        1. Prepare all communities and collect metadata
-        2. Batch collect and process all clustering prompts concurrently
-        3. Batch collect and process all semantic dedup prompts concurrently
-        4. Apply results and merge keyword nodes
-        """
-        if not keyword_mapping or not self._semantic_dedup_enabled():
-            return
-
-        config = self._get_semantic_dedup_config()
-        if not config:
-            return
-
-        # Group keywords by community
-        community_to_keywords: dict = defaultdict(list)
-        for keyword_node_id in list(keyword_mapping.keys()):
-            if keyword_node_id not in self.graph:
-                continue
-            for _, target, _, data in self.graph.out_edges(keyword_node_id, keys=True, data=True):
-                if isinstance(data, dict) and data.get("relation") == "keyword_of":
-                    community_to_keywords[target].append(keyword_node_id)
-
-        if not community_to_keywords:
-            return
-
-        # Get config parameters
-        # 打印待处理的关键词总数
-        total_keywords = sum(len(kws) for kws in community_to_keywords.values())
-        logger.info(f"开始关键词去重，共 {len(community_to_keywords)} 个社区，总计 {total_keywords} 个关键词待处理")
-
-        threshold = getattr(config, "embedding_threshold", 0.85) or 0.85
-        max_batch_size = max(1, int(getattr(config, "max_batch_size", 8) or 8))
-        max_candidates = int(getattr(config, "max_candidates", 0) or 0)
-        clustering_method = getattr(config, "clustering_method", "embedding")
-        llm_clustering_batch_size = getattr(config, "llm_clustering_batch_size", 30)
-        save_intermediate = getattr(config, "save_intermediate_results", False)
-        
-        # Initialize intermediate results collector
-        intermediate_results = {
-            "dataset": self.dataset_name,
-            "config": {
-                "threshold": threshold,
-                "max_batch_size": max_batch_size,
-                "max_candidates": max_candidates,
-                "clustering_method": clustering_method,
-            },
-            "communities": []
-        } if save_intermediate else None
-
-        # ================================================================
-        # PHASE 1: Prepare all communities and collect metadata
-        # ================================================================
-        dedup_communities = []  # List of dicts with all info needed for deduplication
-        
-        for community_id, keyword_ids in community_to_keywords.items():
-            keyword_ids = [kw for kw in keyword_ids if kw in self.graph]
-            if len(keyword_ids) <= 1:
-                continue
-
-            # Prepare community data
-            community_data = self._prepare_keyword_dedup_community(
-                community_id, keyword_ids, keyword_mapping, config
-            )
-            if community_data:
-                dedup_communities.append(community_data)
-        
-        logger.info(f"Prepared {len(dedup_communities)} communities for keyword deduplication")
-        
-        if not dedup_communities:
-            return
-        
-        # ================================================================
-        # PHASE 2: Batch collect and process clustering prompts
-        # ================================================================
-        clustering_prompts = []
-        
-        # Check if we have preloaded keyword clusters to skip clustering phase
-        if hasattr(self, 'preloaded_keyword_clusters') and self.preloaded_keyword_clusters:
-            logger.info("Using preloaded keyword cluster results, skipping clustering phase...")
-            self._apply_preloaded_clusters(dedup_communities, self.preloaded_keyword_clusters)
-        elif clustering_method == "llm":
-            logger.info("Collecting all keyword clustering prompts...")
-            for comm_idx, community_data in enumerate(dedup_communities):
-                prompts = self._collect_clustering_prompts(community_data)
-                for prompt_data in prompts:
-                    prompt_data['metadata']['comm_idx'] = comm_idx
-                    clustering_prompts.append(prompt_data)
-            
-            logger.info(f"Collected {len(clustering_prompts)} keyword clustering prompts, processing concurrently...")
-            clustering_results = self._concurrent_llm_calls(clustering_prompts)
-            
-            # Parse clustering results and update community_data
-            logger.info("Parsing keyword clustering results...")
-            self._parse_keyword_clustering_results(dedup_communities, clustering_results)
-        else:
-            # Use embedding-based clustering
-            logger.info("Using embedding-based clustering for keywords...")
-            for community_data in dedup_communities:
-                self._apply_embedding_clustering(community_data)
-        
-        # ================================================================
-        # PHASE 3: Batch collect and process semantic dedup prompts
-        # ================================================================
-        logger.info("Collecting all keyword semantic dedup prompts...")
-        semantic_prompts = []
-        
-        for comm_idx, community_data in enumerate(dedup_communities):
-            prompts = self._collect_semantic_dedup_prompts(community_data)
-            for prompt_data in prompts:
-                prompt_data['metadata']['comm_idx'] = comm_idx
-                semantic_prompts.append(prompt_data)
-        
-        logger.info(f"Collected {len(semantic_prompts)} keyword semantic dedup prompts, processing concurrently...")
-        semantic_results = self._concurrent_llm_calls(semantic_prompts)
-        
-        # Parse semantic dedup results and update community_data
-        logger.info("Parsing keyword semantic dedup results...")
-        self._parse_semantic_dedup_results(dedup_communities, semantic_results)
-        
-        # ================================================================
-        # PHASE 4: Apply results and merge keyword nodes
-        # ================================================================
-        logger.info("Applying keyword deduplication results...")
-        for community_data in dedup_communities:
-            self._apply_keyword_dedup_results(community_data, keyword_mapping, save_intermediate, intermediate_results)
-        
-        logger.info("Keyword deduplication completed")
-        
-        # Save intermediate results to file
-        if save_intermediate and intermediate_results:
-            import datetime
-            timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-            output_path = getattr(config, "intermediate_results_path", None)
-            
-            if not output_path:
-                output_path = f"output/dedup_intermediate/{self.dataset_name}_keyword_dedup_{timestamp}.json"
-            else:
-                # If path is a directory, add filename
-                if output_path.endswith('/'):
-                    output_path = f"{output_path}{self.dataset_name}_keyword_dedup_{timestamp}.json"
-                else:
-                    # Add _keyword suffix
-                    base, ext = os.path.splitext(output_path)
-                    output_path = f"{base}_keyword_{timestamp}{ext}"
-            
-            # Ensure directory exists
-            output_dir = os.path.dirname(output_path)
-            if output_dir:
-                os.makedirs(output_dir, exist_ok=True)
-            
-            # Add summary statistics
-            intermediate_results["summary"] = {
-                "total_communities": len(intermediate_results["communities"]),
-                "total_candidates": sum(c["total_candidates"] for c in intermediate_results["communities"]),
-                "total_clusters": sum(len(c["clustering"]["clusters"]) for c in intermediate_results["communities"]),
-                "total_llm_calls": sum(len(c["llm_groups"]) for c in intermediate_results["communities"]),
-                "total_merges": sum(len(c["final_merges"]) for c in intermediate_results["communities"]),
-                "total_items_merged": sum(c["summary"]["items_merged"] for c in intermediate_results["communities"])
-            }
-            
-            try:
-                with open(output_path, 'w', encoding='utf-8') as f:
-                    json.dump(intermediate_results, f, indent=2, ensure_ascii=False)
-                logger.info(f"Saved keyword deduplication intermediate results to: {output_path}")
-                logger.info(f"Summary: {intermediate_results['summary']}")
-            except Exception as e:
-                logger.warning(f"Failed to save intermediate results: {e}")
-
     def _apply_preloaded_clusters(self, dedup_communities: list, preloaded_data: dict) -> None:
         """
         Apply preloaded cluster results to communities, skipping the clustering phase.
@@ -2524,6 +2469,174 @@ class KTBuilder:
             
         logger.info(f"Successfully applied preloaded clusters to {matched_count}/{len(dedup_groups)} edge groups")
 
+    def _deduplicate_keyword_nodes(self, keyword_mapping: dict):
+        if not keyword_mapping or not self._semantic_dedup_enabled():
+            return
+
+        config = self._get_semantic_dedup_config()
+        if not config:
+            return
+
+        community_to_keywords: dict = defaultdict(list)
+        for keyword_node_id in list(keyword_mapping.keys()):
+            if keyword_node_id not in self.graph:
+                continue
+            for _, target, _, data in self.graph.out_edges(keyword_node_id, keys=True, data=True):
+                if isinstance(data, dict) and data.get("relation") == "keyword_of":
+                    community_to_keywords[target].append(keyword_node_id)
+
+        if not community_to_keywords:
+            return
+        #import pdb; pdb.set_trace()
+        # 打印待处理的关键词总数
+        total_keywords = sum(len(kws) for kws in community_to_keywords.values())
+        logger.info(f"开始关键词去重，共 {len(community_to_keywords)} 个社区，总计 {total_keywords} 个关键词待处理")
+
+
+        threshold = getattr(config, "embedding_threshold", 0.85) or 0.85
+        max_batch_size = max(1, int(getattr(config, "max_batch_size", 8) or 8))
+        max_candidates = int(getattr(config, "max_candidates", 0) or 0)
+
+        clustering_method = getattr(config, "clustering_method", "embedding")
+        llm_clustering_batch_size = getattr(config, "llm_clustering_batch_size", 30)
+        save_intermediate = getattr(config, "save_intermediate_results", False)
+
+
+        # Initialize intermediate results collector
+        # save_intermediate = getattr(config, "save_intermediate_results", False)
+        intermediate_results = {
+            "dataset": self.dataset_name,
+            "config": {
+                "threshold": threshold,
+                "max_batch_size": max_batch_size,
+                "max_candidates": max_candidates,
+                "clustering_method": clustering_method,
+            },
+            "communities": []
+        } if save_intermediate else None   
+
+
+        # ================================================================
+        # PHASE 1: Prepare all communities and collect metadata
+        # ================================================================
+        dedup_communities = []  # List of dicts with all info needed for deduplication
+    
+
+        for community_id, keyword_ids in community_to_keywords.items():
+            keyword_ids = [kw for kw in keyword_ids if kw in self.graph]
+            if len(keyword_ids) <= 1:
+                continue
+            # Prepare community data
+            community_data = self._prepare_keyword_dedup_community(
+                community_id, keyword_ids, keyword_mapping, config
+            )
+            if community_data:
+                dedup_communities.append(community_data)
+        
+        logger.info(f"Prepared {len(dedup_communities)} communities for keyword deduplication")
+        
+        if not dedup_communities:
+            return
+        
+        # ================================================================
+        # PHASE 2: Batch collect and process clustering prompts
+        # ================================================================
+        clustering_prompts = []
+        
+        # Check if we have preloaded keyword clusters to skip clustering phase
+        if hasattr(self, 'preloaded_keyword_clusters') and self.preloaded_keyword_clusters:
+            logger.info("Using preloaded keyword cluster results, skipping clustering phase...")
+            self._apply_preloaded_clusters(dedup_communities, self.preloaded_keyword_clusters)
+        elif clustering_method == "llm":
+            logger.info("Collecting all keyword clustering prompts...")
+            for comm_idx, community_data in enumerate(dedup_communities):
+                prompts = self._collect_clustering_prompts(community_data)
+                for prompt_data in prompts:
+                    prompt_data['metadata']['comm_idx'] = comm_idx
+                    clustering_prompts.append(prompt_data)
+            
+            logger.info(f"Collected {len(clustering_prompts)} keyword clustering prompts, processing concurrently...")
+            clustering_results = self._concurrent_llm_calls(clustering_prompts)
+            
+            # Parse clustering results and update community_data
+            logger.info("Parsing keyword clustering results...")
+            self._parse_keyword_clustering_results(dedup_communities, clustering_results)
+        else:
+            # Use embedding-based clustering
+            logger.info("Using embedding-based clustering for keywords...")
+            for community_data in dedup_communities:
+                self._apply_embedding_clustering(community_data)
+        
+        # ================================================================
+        # PHASE 3: Batch collect and process semantic dedup prompts
+        # ================================================================
+        logger.info("Collecting all keyword semantic dedup prompts...")
+        semantic_prompts = []
+        
+        for comm_idx, community_data in enumerate(dedup_communities):
+            prompts = self._collect_semantic_dedup_prompts(community_data)
+            for prompt_data in prompts:
+                prompt_data['metadata']['comm_idx'] = comm_idx
+                semantic_prompts.append(prompt_data)
+        
+        logger.info(f"Collected {len(semantic_prompts)} keyword semantic dedup prompts, processing concurrently...")
+        semantic_results = self._concurrent_llm_calls(semantic_prompts)
+        
+        # Parse semantic dedup results and update community_data
+        logger.info("Parsing keyword semantic dedup results...")
+        self._parse_semantic_dedup_results(dedup_communities, semantic_results)
+        
+        # ================================================================
+        # PHASE 4: Apply results and merge keyword nodes
+        # ================================================================
+        logger.info("Applying keyword deduplication results...")
+        for community_data in dedup_communities:
+            self._apply_keyword_dedup_results(community_data, keyword_mapping, save_intermediate, intermediate_results)
+        
+        logger.info("Keyword deduplication completed")
+        
+        # Save intermediate results to file
+        if save_intermediate and intermediate_results:
+            import datetime
+            timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+            output_path = getattr(config, "intermediate_results_path", None)
+            
+            if not output_path:
+                output_path = f"output/dedup_intermediate/{self.dataset_name}_keyword_dedup_{timestamp}.json"
+            else:
+                # If path is a directory, add filename
+                if output_path.endswith('/'):
+                    output_path = f"{output_path}{self.dataset_name}_keyword_dedup_{timestamp}.json"
+                else:
+                    # Add _keyword suffix
+                    base, ext = os.path.splitext(output_path)
+                    output_path = f"{base}_keyword_{timestamp}{ext}"
+            
+            # Ensure directory exists
+            output_dir = os.path.dirname(output_path)
+            if output_dir:
+                os.makedirs(output_dir, exist_ok=True)
+            
+            # Add summary statistics
+            intermediate_results["summary"] = {
+                "total_communities": len(intermediate_results["communities"]),
+                "total_candidates": sum(c["total_candidates"] for c in intermediate_results["communities"]),
+                "total_clusters": sum(len(c["clustering"]["clusters"]) for c in intermediate_results["communities"]),
+                "total_llm_calls": sum(len(c["llm_groups"]) for c in intermediate_results["communities"]),
+                "total_merges": sum(len(c["final_merges"]) for c in intermediate_results["communities"]),
+                "total_items_merged": sum(c["summary"]["items_merged"] for c in intermediate_results["communities"])
+            }
+            
+            try:
+                with open(output_path, 'w', encoding='utf-8') as f:
+                    json.dump(intermediate_results, f, indent=2, ensure_ascii=False)
+                logger.info(f"Saved keyword deduplication intermediate results to: {output_path}")
+                logger.info(f"Summary: {intermediate_results['summary']}")
+            except Exception as e:
+                logger.warning(f"Failed to save intermediate results: {e}")
+
+
+
     def _prepare_keyword_dedup_community(self, community_id: str, keyword_ids: list, 
                                          keyword_mapping: dict, config) -> dict:
         """
@@ -2540,24 +2653,28 @@ class KTBuilder:
             node_data = self.graph.nodes.get(kw_id, {})
             properties = node_data.get("properties", {}) if isinstance(node_data, dict) else {}
             raw_name = properties.get("name") or properties.get("title") or kw_id
-
+            
             chunk_ids = set(self._collect_node_chunk_ids(kw_id))
             source_entity_id = keyword_mapping.get(kw_id)
+#                source_entity_name = None
+
             source_entity_name_full = None
             source_entity_name_simple = None
 
+
             if source_entity_id and source_entity_id in self.graph:
+                # source_entity_name = self._describe_node(source_entity_id)
                 source_entity_name_full = self._describe_node(source_entity_id)  # Full for LLM
                 source_entity_name_simple = self._describe_node_for_clustering(source_entity_id)  # Simple for clustering
+
                 for chunk_id in self._collect_node_chunk_ids(source_entity_id):
                     if chunk_id:
                         chunk_ids.add(chunk_id)
 
-            # Full description for LLM prompt
             description_full = raw_name
             if source_entity_name_full and source_entity_name_full not in description_full:
                 description_full = f"{raw_name} (from {source_entity_name_full})"
-            
+
             # Simplified description for vector clustering
             description_simple = raw_name
             if source_entity_name_simple and source_entity_name_simple not in description_simple:
@@ -2565,30 +2682,30 @@ class KTBuilder:
 
             context_summaries = self._summarize_contexts(list(chunk_ids))
 
-            entries.append({
-                "node_id": kw_id,
-                "description": description_full,  # Full for LLM
-                "description_for_clustering": description_simple,  # Simple for clustering
-                "raw_name": raw_name,
-                "chunk_ids": list(chunk_ids),
-                "context_summaries": context_summaries,
-                "source_entity_id": source_entity_id,
-                "source_entity_name": source_entity_name_full,
-            })
+            entries.append(
+                {
+                    "node_id": kw_id,
+                    "description": description_full,
+                    "description_for_clustering": description_simple,
+                    "raw_name": raw_name,
+                    "chunk_ids": list(chunk_ids),
+                    "context_summaries": context_summaries,
+                    "source_entity_id": source_entity_id,
+                    "source_entity_name": source_entity_name_full,
+                }
+            )
 
-        if len(entries) <= 1:
-            return None
+            if len(entries) <= 1:
+                continue
 
-        # Add index to each entry
-        for idx, entry in enumerate(entries):
-            entry["index"] = idx
+            for idx, entry in enumerate(entries):
+                entry["index"] = idx
 
-        # Collect community context
-        community_chunk_ids = set()
-        for entry in entries:
-            for chunk_id in entry.get("chunk_ids", []):
-                if chunk_id:
-                    community_chunk_ids.add(chunk_id)
+            community_chunk_ids = set()
+            for entry in entries:
+                for chunk_id in entry.get("chunk_ids", []):
+                    if chunk_id:
+                        community_chunk_ids.add(chunk_id)
 
         head_context_lines = self._summarize_contexts(list(community_chunk_ids))
         head_text = self._describe_node(community_id)
@@ -2732,7 +2849,7 @@ class KTBuilder:
             all_clusters, all_details = self._validate_and_fix_clustering_inconsistencies(
                 all_clusters, all_details, candidates, 0
             )
-            
+
             community_data['initial_clusters'] = all_clusters
             community_data['llm_clustering_details'] = all_details
     
@@ -2753,10 +2870,6 @@ class KTBuilder:
         # Initialize community result for intermediate results
         community_result = None
         if save_intermediate:
-            # 打印当前社区待处理的关键词数量
-            logger.info(f"处理社区 {community_id}，包含 {len(keyword_ids)} 个关键词")
-
-            # Initialize community result collector
             community_result = {
                 "community_id": community_id,
                 "community_name": head_text,
@@ -2865,13 +2978,12 @@ class KTBuilder:
                         rep_local = group.get("representative")
                         if rep_local is None or rep_local < 0 or rep_local >= len(batch_indices):
                             continue
-                        
+
                         rep_global = batch_indices[rep_local]
                         if rep_global in processed_indices:
                             continue
-                        
-                        # Collect duplicates
-                        duplicates = []
+
+                        duplicates: list = []
                         for member_local in group.get("members", []):
                             if member_local < 0 or member_local >= len(batch_indices):
                                 continue
@@ -2880,6 +2992,7 @@ class KTBuilder:
                                 continue
                             duplicates.append(entries[member_global])
                             duplicate_indices.add(member_global)
+
                         
                         # Save merge info
                         if save_intermediate and duplicates:
@@ -2903,13 +3016,14 @@ class KTBuilder:
                         
                         # Merge keyword nodes
                         if duplicates:
+
                             self._merge_keyword_nodes(
                                 entries[rep_global],
                                 duplicates,
                                 group.get("rationale"),
                                 keyword_mapping,
                             )
-                        
+
                         processed_indices.add(rep_global)
                         for duplicate_entry in duplicates:
                             duplicate_idx = duplicate_entry.get("index")
@@ -2937,57 +3051,23 @@ class KTBuilder:
             }
             intermediate_results["communities"].append(community_result)
 
+
     def _deduplicate_exact(self, edges: list) -> list:
-        unique_edges: list = []
-        index_by_key: dict = {}
+        unique_edges = []
+        seen = set()
 
         for tail_id, data in edges:
-            data_copy = copy.deepcopy(data)
-
-            if isinstance(data_copy, dict):
-                chunk_ids = self._extract_edge_chunk_ids(data_copy)
-                normalized_chunks: list = []
-                seen_chunks: set = set()
-                for chunk_id in chunk_ids:
-                    if chunk_id and chunk_id not in seen_chunks:
-                        normalized_chunks.append(chunk_id)
-                        seen_chunks.add(chunk_id)
-
-                # ensure chunk provenance stored in a consistent field
-                if normalized_chunks:
-                    data_copy["source_chunks"] = normalized_chunks
-                if "source_chunk_ids" in data_copy:
-                    data_copy.pop("source_chunk_ids", None)
-
-                key_payload = copy.deepcopy(data_copy)
-                key_payload.pop("source_chunks", None)
-            else:
-                chunk_ids = []
-                key_payload = copy.deepcopy(data_copy)
-
             try:
-                frozen = json.dumps(key_payload, ensure_ascii=False, sort_keys=True, default=str)
+                frozen = json.dumps(data, ensure_ascii=False, sort_keys=True, default=str)
             except Exception:
-                frozen = str(key_payload)
+                frozen = str(data)
 
             key = (tail_id, frozen)
-            if key in index_by_key:
-                _, existing_data = unique_edges[index_by_key[key]]
-                if isinstance(existing_data, dict):
-                    existing_chunks = self._extract_edge_chunk_ids(existing_data)
-                    combined = list(existing_chunks)
-                    seen_chunks = set(existing_chunks)
-                    for chunk_id in chunk_ids:
-                        if chunk_id and chunk_id not in seen_chunks:
-                            combined.append(chunk_id)
-                            seen_chunks.add(chunk_id)
-                    if combined:
-                        existing_data["source_chunks"] = combined
-                        existing_data.pop("source_chunk_ids", None)
+            if key in seen:
                 continue
 
-            unique_edges.append((tail_id, data_copy))
-            index_by_key[key] = len(unique_edges) - 1
+            seen.add(key)
+            unique_edges.append((tail_id, copy.deepcopy(data)))
 
         return unique_edges
 
@@ -3008,7 +3088,7 @@ class KTBuilder:
                     "node_id": tail_id,
                     "data": copy.deepcopy(data),
                     "raw_data": copy.deepcopy(data),
-                    "description": self._describe_node(tail_id),  # Full description for LLM
+                    "description": self._describe_node(tail_id),
                     "description_for_clustering": self._describe_node_for_clustering(tail_id),  # Simplified for clustering
                     "context_chunk_ids": chunk_ids,
                     "context_summaries": self._summarize_contexts(chunk_ids),
@@ -3028,16 +3108,18 @@ class KTBuilder:
 
         head_context_lines = self._summarize_contexts(list(head_chunk_ids))
 
-        # Get configuration parameters
         clustering_method = getattr(config, "clustering_method", "embedding")
+
         threshold = getattr(config, "embedding_threshold", 0.85) or 0.85
-        llm_clustering_batch_size = getattr(config, "llm_clustering_batch_size", 30)
+        llm_clustering_batch_size = getattr(config, "llm_clustering_batch_size", 50)
+
         max_batch_size = max(1, int(getattr(config, "max_batch_size", 8) or 8))
         max_candidates = int(getattr(config, "max_candidates", 0) or 0)
+
+        # candidate_descriptions_ = [entry["description"] for entry in entries]
         
-        # Use simplified descriptions for clustering (without context, chunk_id, etc.)
         candidate_descriptions = [entry["description_for_clustering"] for entry in entries]
-        
+
         # ============================================================
         # PHASE 1: Collect all prompts (clustering + semantic grouping)
         # ============================================================
@@ -3046,9 +3128,16 @@ class KTBuilder:
         # 1.1: Collect clustering prompts (if using LLM clustering)
         clustering_prompt_indices = []  # Track which prompts are for clustering
         initial_clusters = None
+
+        # import pdb; pdb.set_trace()
+        # initial_clusters = self._cluster_candidate_tails(candidate_descriptions, threshold)
+
         llm_clustering_details = None
-        
+
         if clustering_method == "llm":
+            # Use LLM for initial clustering (more accurate but slower)
+            # logger.debug("Using LLM-based clustering for head '%s' relation '%s' with %d tails", head_text, relation, len(entries))
+            # initial_clusters, llm_clustering_details = self._cluster_candidate_tails_with_llm(head_text, relation, candidate_descriptions, llm_clustering_batch_size)
             logger.debug("Collecting LLM clustering prompts for head '%s' relation '%s' with %d tails", 
                         head_text, relation, len(entries))
             
@@ -3110,11 +3199,11 @@ class KTBuilder:
                         'descriptions': descriptions
                     }
                 })
+
         else:
-            # Use embedding-based clustering (no prompts needed)
+            # Use embedding-based clustering (faster but less accurate)
             initial_clusters = self._cluster_candidate_tails(candidate_descriptions, threshold)
-        
-        # 1.2: Collect semantic grouping prompts (prepare for each cluster batch)
+                # 1.2: Collect semantic grouping prompts (prepare for each cluster batch)
         # We need to predict which batches will be processed for semantic grouping
         # For now, we'll collect prompts after getting clustering results
         # So this phase is split into two sub-phases
@@ -3124,7 +3213,7 @@ class KTBuilder:
         # ============================================================
         if clustering_method == "llm" and prompts_to_process:
             logger.debug("Processing %d clustering prompt(s) concurrently", len(prompts_to_process))
-            clustering_results = self._concurrent_llm_calls(prompts_to_process)
+            clustering_results = self._concurrent_llm_calls(prompts_to_process, type="clustering")
             
             # Parse clustering results
             all_clusters = []
@@ -3227,7 +3316,7 @@ class KTBuilder:
             all_clusters, all_details = self._validate_and_fix_clustering_inconsistencies(
                 all_clusters, all_details, candidate_descriptions, 0
             )
-            
+
             initial_clusters = all_clusters
             llm_clustering_details = all_details
         
@@ -3277,7 +3366,7 @@ class KTBuilder:
         semantic_results = []
         if semantic_prompts:
             logger.debug("Processing %d semantic grouping prompt(s) concurrently", len(semantic_prompts))
-            semantic_results = self._concurrent_llm_calls(semantic_prompts)
+            semantic_results = self._concurrent_llm_calls(semantic_prompts, type="tail_dedup")
         
         # Parse semantic grouping results
         semantic_groups_by_batch = []
@@ -3377,7 +3466,7 @@ class KTBuilder:
                 head_text=head_text,
                 relation=relation
             )
-            
+
             semantic_groups_by_batch.append({
                 'groups': groups,  # Use validated groups
                 'metadata': metadata,
@@ -3387,6 +3476,11 @@ class KTBuilder:
         # ============================================================
         # PHASE 4: Process results and build final edges
         # ============================================================
+        
+
+        #import pdb; pdb.set_trace()
+        max_batch_size = max(1, int(getattr(config, "max_batch_size", 8) or 8))
+        max_candidates = int(getattr(config, "max_candidates", 0) or 0)
 
         # Initialize intermediate results collector for edge deduplication
         save_intermediate = getattr(config, "save_intermediate_results", False)
@@ -3397,7 +3491,6 @@ class KTBuilder:
             "total_edges": len(edges),
             "candidates": [],
             "clustering": {
-                "method": "average_linkage",
                 "threshold": threshold,
                 "clusters": []
             },
@@ -3419,7 +3512,7 @@ class KTBuilder:
         if save_intermediate:
             # Add clustering method info
             edge_dedup_result["clustering"]["method"] = clustering_method
-            
+
             for cluster_idx, cluster in enumerate(initial_clusters):
                 cluster_info = {
                     "cluster_id": cluster_idx,
@@ -3434,19 +3527,23 @@ class KTBuilder:
                         for idx in cluster if 0 <= idx < len(entries)
                     ]
                 }
-                
+
                 # Add LLM clustering details if available
                 if llm_clustering_details and cluster_idx < len(llm_clustering_details):
                     detail = llm_clustering_details[cluster_idx]
                     cluster_info["llm_description"] = detail.get("description", "")
                     cluster_info["llm_rationale"] = detail.get("llm_rationale", "")
-                
+
+
                 edge_dedup_result["clustering"]["clusters"].append(cluster_info)
 
-        # Build final edges from semantic grouping results
         final_edges: list = []
+
+        save_intermediate = getattr(config, "save_intermediate_results", False)
+
         processed_indices: set = set()
         duplicate_indices: set = set()
+
         
         # Create a mapping from cluster_idx to semantic results
         semantic_results_map = {}
@@ -3462,15 +3559,32 @@ class KTBuilder:
             cluster_indices = [idx for idx in cluster if idx not in processed_indices and idx not in duplicate_indices]
             if not cluster_indices:
                 continue
-            
-            # Optimization: Skip LLM call for single-item clusters
+
             if len(cluster_indices) == 1:
                 idx = cluster_indices[0]
                 entry = entries[idx]
                 final_edges.append((entry["node_id"], copy.deepcopy(entry["data"])))
                 processed_indices.add(idx)
                 continue
-            
+
+            # overflow_indices = []
+            # if max_candidates and len(cluster_indices) > max_candidates:
+            #     overflow_indices = cluster_indices[max_candidates:]
+            #     cluster_indices = cluster_indices[:max_candidates]
+            #     logger.debug(
+            #         "Semantic dedup limited LLM candidates for head '%s' relation '%s' to %d of %d items",
+            #         head_text,
+            #         relation,
+            #         max_candidates,
+            #         len(cluster),
+            #     )
+
+            # # import pdb; pdb.set_trace()
+            # while cluster_indices:
+            #     batch_indices = cluster_indices[:max_batch_size]
+            #     batch_entries = [entries[i] for i in batch_indices]
+            #     groups = self._llm_semantic_group(head_text, relation, head_context_lines, batch_entries)
+
             # Get semantic grouping results for this cluster
             cluster_semantic_results = semantic_results_map.get(cluster_idx, [])
             
@@ -3480,11 +3594,12 @@ class KTBuilder:
                 metadata = batch_result['metadata']
                 batch_indices = metadata['batch_indices']
                 overflow_indices = metadata.get('overflow_indices', [])
-                
+
+                # import pdb; pdb.set_trace()
                 # Save LLM groups result
                 if save_intermediate:
                     llm_result = {
-                        "cluster_id": cluster_idx,
+                        "cluster_id": cluster_idx, #initial_clusters.index([idx for idx in cluster if idx not in processed_indices and idx not in duplicate_indices][:len(cluster_indices)]) if cluster_indices else -1,
                         "batch_indices": batch_indices,
                         "batch_size": len(batch_indices),
                         "groups": []
@@ -3507,10 +3622,8 @@ class KTBuilder:
                             }
                             llm_result["groups"].append(group_info)
                     edge_dedup_result["llm_groups"].append(llm_result)
-                
-                # Process groups
+
                 if not groups:
-                    # No grouping, add all batch items as separate edges
                     for global_idx in batch_indices:
                         if global_idx not in processed_indices:
                             entry = entries[global_idx]
@@ -3600,22 +3713,8 @@ class KTBuilder:
                 self._edge_dedup_results = []
             self._edge_dedup_results.append(edge_dedup_result)
 
+
         return final_edges
-
-    def triple_deduplicate(self):
-        """deduplicate triples in lv1 and lv2"""
-        new_graph = nx.MultiDiGraph()
-
-        for node, node_data in self.graph.nodes(data=True):
-            new_graph.add_node(node, **node_data)
-
-        seen_triples = set()
-        for u, v, key, data in self.graph.edges(keys=True, data=True):
-            relation = data.get('relation') 
-            if (u, v, relation) not in seen_triples:
-                seen_triples.add((u, v, relation))
-                new_graph.add_edge(u, v, **data)
-        self.graph = new_graph
 
     def _prepare_dedup_group(self, head_id: str, relation: str, edges: list, config) -> dict:
         """
@@ -3642,7 +3741,7 @@ class KTBuilder:
                 "context_chunk_ids": chunk_ids,
                 "context_summaries": self._summarize_contexts(chunk_ids),
             })
-        
+        #import pdb; pdb.set_trace()
         # Collect head context
         head_chunk_ids = set()
         for entry in entries:
@@ -3662,8 +3761,8 @@ class KTBuilder:
         config_params = {
             'clustering_method': getattr(config, "clustering_method", "embedding"),
             'threshold': getattr(config, "embedding_threshold", 0.85) or 0.85,
-            'llm_clustering_batch_size': getattr(config, "llm_clustering_batch_size", 30),
-            'max_batch_size': max(1, int(getattr(config, "max_batch_size", 8) or 8)),
+            'llm_clustering_batch_size': getattr(config, "llm_clustering_batch_size", 50),
+            'max_batch_size': max(1, int(getattr(config, "max_batch_size", 5) or 5)),
             'max_candidates': int(getattr(config, "max_candidates", 0) or 0),
         }
         
@@ -3679,6 +3778,7 @@ class KTBuilder:
             'initial_clusters': None,  # Will be filled by clustering
             'llm_clustering_details': None,  # Will be filled by LLM clustering
             'semantic_results': {},  # Will be filled by semantic dedup
+            'only_head_context': self._summarize_contexts(list(self._collect_node_chunk_ids(head_id)))
         }
     
     def _collect_clustering_prompts(self, group_data: dict) -> list:
@@ -3748,6 +3848,7 @@ class KTBuilder:
         Parse clustering results and update dedup_groups with initial_clusters.
         """
         # Group results by group_idx
+        #import pdb; pdb.set_trace()
         results_by_group = defaultdict(list)
         for result in clustering_results:
             group_idx = result['metadata'].get('group_idx')
@@ -3830,7 +3931,6 @@ class KTBuilder:
                         all_details.append({
                             "description": cluster_info.get("description", ""),
                             "llm_rationale": cluster_info.get("rationale", ""),
-                            "rationale": cluster_info.get("rationale", ""),
                             "members": cluster_members
                         })
                 
@@ -3842,9 +3942,9 @@ class KTBuilder:
                         all_details.append({
                             "description": f"Singleton cluster for item {adjusted_idx}",
                             "members": [adjusted_idx],
-                            "rationale": ""
+                            "rationale": ""                            
                         })
-            
+            #import pdb; pdb.set_trace()
             # Two-step validation
             # Step 1: LLM self-validation (if enabled)
             candidate_descriptions = group_data.get('candidate_descriptions', [])
@@ -3859,7 +3959,7 @@ class KTBuilder:
             all_clusters, all_details = self._validate_and_fix_clustering_inconsistencies(
                 all_clusters, all_details, candidate_descriptions, 0
             )
-            
+
             group_data['initial_clusters'] = all_clusters
             group_data['llm_clustering_details'] = all_details
     
@@ -3888,6 +3988,8 @@ class KTBuilder:
         entries = group_data['entries']
         max_batch_size = group_data['config_params']['max_batch_size']
         max_candidates = group_data['config_params']['max_candidates']
+        only_head_context = group_data['only_head_context']
+        
         
         for cluster_idx, cluster in enumerate(initial_clusters):
             cluster_indices = cluster.copy()
@@ -3907,10 +4009,11 @@ class KTBuilder:
             while cluster_indices:
                 batch_indices = cluster_indices[:max_batch_size]
                 batch_entries = [entries[i] for i in batch_indices]
+
                 
                 # Build prompt
                 prompt = self._build_semantic_dedup_prompt(
-                    head_text, relation, head_context_lines, batch_entries
+                    head_text, relation, head_context_lines, batch_entries, only_head_context
                 )
                 
                 prompts.append({
@@ -3927,6 +4030,8 @@ class KTBuilder:
                 cluster_indices = cluster_indices[len(batch_indices):]
                 batch_num += 1
         
+        #import ipdb; ipdb.set_trace()
+        
         return prompts
     
     def _parse_semantic_dedup_results(self, dedup_groups: list, semantic_results: list):
@@ -3940,8 +4045,12 @@ class KTBuilder:
             if group_idx is not None:
                 results_by_group[group_idx].append(result)
         
+        #import pdb; pdb.set_trace()
         # Parse results for each group
-        for group_idx, results in results_by_group.items():
+        for group_idx, results in tqdm(results_by_group.items()):
+            # if group_idx !=16:
+            #     continue
+
             if group_idx >= len(dedup_groups):
                 continue
             
@@ -3951,7 +4060,9 @@ class KTBuilder:
             # Store parsed groups by (cluster_idx, batch_num)
             semantic_groups = {}
             
-            for result in results:
+            for idx, result in enumerate(results):
+                # if idx == 0:
+                #     import pdb; pdb.set_trace()
                 metadata = result['metadata']
                 cluster_idx = metadata['cluster_idx']
                 batch_num = metadata['batch_num']
@@ -4040,43 +4151,37 @@ class KTBuilder:
                             "rationale": None
                         })
                 
-                semantic_groups[key] = {
-                    'groups': groups,
-                    'batch_indices': batch_indices,
-                    'overflow_indices': overflow_indices,
-                }
-            
-            # ============================================================
-            # Two-step validation: Validate semantic dedup results for all batches
-            # ============================================================
-            # Get head and relation info from group_data
-            head_text = group_data.get('head_name', '')
-            relation = group_data.get('relation', '')
-            
-            # Validate all groups in this cluster
-            for key, group_info in semantic_groups.items():
-                groups = group_info['groups']
-                batch_indices = group_info['batch_indices']
-                
-                if not groups:  # Skip if no groups (error case)
-                    group_info['validation_report'] = None
-                    continue
-                
+                # ============================================================
+                # Two-step validation: Validate semantic dedup results
+                # ============================================================
                 # Extract candidate descriptions for this batch
-                batch_entries = [entries[i] for i in batch_indices]
-                candidate_descriptions = [entry['description'] for entry in batch_entries]
+                try:
+                    batch_entries = [entries[i] for i in batch_indices]
+                    candidate_descriptions = [entry['description'] for entry in batch_entries]
+                except Exception:
+                    #import ipdb; ipdb.set_trace()
+                    raise Exception("Error parsing semantic dedup results")
                 
+                # Get head and relation info from group_data
+                head_text = group_data.get('head_name', '')
+                relation = group_data.get('relation', '')
+                
+                # import pdb; pdb.set_trace()
+                # print()
                 # Validate groups for consistency (rationale vs members)
-                validated_groups, validation_report = self._llm_validate_semantic_dedup(
+                groups, validation_report = self._llm_validate_semantic_dedup(
                     groups,
                     candidate_descriptions,
                     head_text=head_text,
                     relation=relation
                 )
-                
-                # Update with validated results
-                group_info['groups'] = validated_groups
-                group_info['validation_report'] = validation_report
+
+                semantic_groups[key] = {
+                    'groups': groups,
+                    'batch_indices': batch_indices,
+                    'overflow_indices': overflow_indices,
+                    'validation_report': validation_report  # Store validation report
+                }
             
             group_data['semantic_results'] = semantic_groups
     
@@ -4288,39 +4393,53 @@ class KTBuilder:
         
         return final_edges
 
-    def triple_deduplicate_semantic(self):
-        """
-        Deduplicate triples in lv1 and lv2 using batch concurrent LLM processing.
-        
-        This method uses a multi-phase approach:
-        1. Prepare all head-relation groups
-        2. Batch collect and process all clustering prompts concurrently
-        3. Batch collect and process all semantic dedup prompts concurrently
-        4. Build final deduplicated graph
-        """
-        
-        # Initialize edge dedup results collector
-        config = self._get_semantic_dedup_config()
-        save_intermediate = config and getattr(config, "save_intermediate_results", False)
-        if save_intermediate:
-            self._edge_dedup_results = []
-        
+    def triple_deduplicate(self):
+        """deduplicate triples in lv1 and lv2"""
         new_graph = nx.MultiDiGraph()
 
         for node, node_data in self.graph.nodes(data=True):
             new_graph.add_node(node, **node_data)
 
-        # Group edges by (head, relation)
+        seen_triples = set()
+        for u, v, key, data in self.graph.edges(keys=True, data=True):
+            relation = data.get('relation') 
+            if (u, v, relation) not in seen_triples:
+                seen_triples.add((u, v, relation))
+                new_graph.add_edge(u, v, **data)
+        self.graph = new_graph
+
+    def triple_deduplicate_semantic(self, return_dedup_results=False):
+        """deduplicate triples in lv1 and lv2
+
+        Args:
+            return_dedup_results: If True, return dedup results in entity_attribution format instead of modifying graph
+        """
+        new_graph = nx.MultiDiGraph()
+        for node, node_data in self.graph.nodes(data=True):
+            new_graph.add_node(node, **node_data)
+
+        config = self._get_semantic_dedup_config()
+        save_intermediate = config and getattr(config, "save_intermediate_results", False)
+        if save_intermediate:
+            self._edge_dedup_results = []
+
+        # seen_triples = set()
         grouped_edges: dict = defaultdict(list)
         for u, v, key, data in self.graph.edges(keys=True, data=True):
+            # relation = data.get('relation') 
+            # if (u, v, relation) not in seen_triples:
+            #     seen_triples.add((u, v, relation))
+            #     new_graph.add_edge(u, v, **data)
             relation = data.get('relation')
             grouped_edges[(u, relation)].append((v, copy.deepcopy(data)))
+
 
         # ================================================================
         # PHASE 1: Prepare all groups and collect metadata
         # ================================================================
         dedup_groups = []  # List of dicts with all info needed for deduplication
-        
+ 
+
         for (head, relation), edges in grouped_edges.items():
             exact_unique = self._deduplicate_exact(edges)
             
@@ -4329,6 +4448,10 @@ class KTBuilder:
                 # No dedup needed, add directly to graph
                 for tail_id, edge_data in exact_unique:
                     new_graph.add_edge(head, tail_id, **edge_data)
+                continue
+
+            if "别名包括" in relation or "等同于" in relation or "member_of" in relation or "represented_by" in relation \
+                or "kw_filter_by" in relation:
                 continue
             
             # Prepare group metadata
@@ -4339,8 +4462,8 @@ class KTBuilder:
         logger.info(f"Prepared {len(dedup_groups)} groups for semantic deduplication")
         
         if not dedup_groups:
-            self.graph = new_graph
-            return
+            # No deduplication needed, return empty results or None based on return_dedup_results flag
+            return [] if return_dedup_results else None
         
         # ================================================================
         # PHASE 2: Batch collect and process clustering prompts
@@ -4348,10 +4471,11 @@ class KTBuilder:
         clustering_prompts = []
         clustering_method = getattr(config, "clustering_method", "embedding")
         
-        # Check if we have preloaded edge clusters to skip clustering phase
+        # Check if we have preloaded clusters to skip clustering phase
         if hasattr(self, 'preloaded_edge_clusters') and self.preloaded_edge_clusters:
-            logger.info("Using preloaded edge cluster results, skipping clustering phase...")
+            logger.info("Using preloaded cluster results for edge deduplication, skipping clustering phase...")
             self._apply_preloaded_clusters_for_edges(dedup_groups, self.preloaded_edge_clusters)
+
         elif clustering_method == "llm":
             logger.info("Collecting all clustering prompts...")
             for group_idx, group_data in enumerate(dedup_groups):
@@ -4361,7 +4485,7 @@ class KTBuilder:
                     clustering_prompts.append(prompt_data)
             
             logger.info(f"Collected {len(clustering_prompts)} clustering prompts, processing concurrently...")
-            clustering_results = self._concurrent_llm_calls(clustering_prompts)
+            clustering_results = self._concurrent_llm_calls(clustering_prompts,type = "clustering")
             
             # Parse clustering results and update group_data
             logger.info("Parsing clustering results...")
@@ -4377,15 +4501,34 @@ class KTBuilder:
         # ================================================================
         logger.info("Collecting all semantic dedup prompts...")
         semantic_prompts = []
-        
+        #import ipdb; ipdb.set_trace()
         for group_idx, group_data in enumerate(dedup_groups):
+            entries = group_data['entries']
+#            node_ids = [x['node_id'] for x in entries]
+#            # "entity_1513" in node_ids or attribute_1417 entity_494 entity_720
+#            #if "entity_494" not in node_ids or "entity_720" not in node_ids or "entity_740" not in node_ids:
+#            if "entity_201" not in node_ids or "entity_203" not in node_ids:
+#                continue
+#            print(f"-------------len:{len(node_ids)}-----------------")
+#            print(node_ids)
+#            import ipdb; ipdb.set_trace()
+
             prompts = self._collect_semantic_dedup_prompts(group_data)
             for prompt_data in prompts:
                 prompt_data['metadata']['group_idx'] = group_idx
                 semantic_prompts.append(prompt_data)
-        
-        logger.info(f"Collected {len(semantic_prompts)} semantic dedup prompts, processing concurrently...")
-        semantic_results = self._concurrent_llm_calls(semantic_prompts)
+
+        if True:
+        #if True:
+            #import pdb; pdb.set_trace()
+            logger.info(f"Collected {len(semantic_prompts)} semantic dedup prompts, processing concurrently...")
+            semantic_results = self._concurrent_llm_calls(semantic_prompts)
+        #import pdb; pdb.set_trace()
+        #import pickle
+        #with open(r"/home/hhy/GPT/workspace/youtu-graphrag/output/dedup_intermediate/Artifacts_5_test_new_semantic_results_20251020_131314.pkl",'rb') as f:
+        #with open(r"/home/hhy/GPT/workspace/m_youtu/temp_llm_results.pkl",'rb') as f:
+            #semantic_results = pickle.load(f)
+            #semantic_results = pickle.load(f)
         
         # Parse semantic dedup results and update group_data
         logger.info("Parsing semantic dedup results...")
@@ -4400,16 +4543,21 @@ class KTBuilder:
             head = group_data['head_id']
             for tail_id, edge_data in final_edges:
                 new_graph.add_edge(head, tail_id, **edge_data)
-        
-        self.graph = new_graph
-        logger.info("Semantic deduplication completed")
-        
+
+        # If return_dedup_results is True, format and return results instead of modifying graph
+        if return_dedup_results:
+            dedup_results = self._format_dedup_results_for_output(dedup_groups)
+            return dedup_results
+        else:
+            # Only modify self.graph when not returning dedup results
+            self.graph = new_graph
+
         # Save edge deduplication intermediate results
         if save_intermediate and hasattr(self, '_edge_dedup_results') and self._edge_dedup_results:
             import datetime
             timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
             output_path = getattr(config, "intermediate_results_path", None)
-            
+
             if not output_path:
                 output_path = f"output/dedup_intermediate/{self.dataset_name}_edge_dedup_{timestamp}.json"
             else:
@@ -4420,12 +4568,12 @@ class KTBuilder:
                     # Add _edge suffix to distinguish from keyword dedup
                     base, ext = os.path.splitext(output_path)
                     output_path = f"{base}_edge_{timestamp}{ext}"
-            
+
             # Ensure directory exists
             output_dir = os.path.dirname(output_path)
             if output_dir:
                 os.makedirs(output_dir, exist_ok=True)
-            
+
             # Build complete results structure
             edge_intermediate_results = {
                 "dataset": self.dataset_name,
@@ -4446,7 +4594,7 @@ class KTBuilder:
                     "final_total_edges": sum(r["summary"]["final_edges"] for r in self._edge_dedup_results)
                 }
             }
-            
+
             try:
                 with open(output_path, 'w', encoding='utf-8') as f:
                     json.dump(edge_intermediate_results, f, indent=2, ensure_ascii=False)
@@ -4454,10 +4602,128 @@ class KTBuilder:
                 logger.info(f"Summary: {edge_intermediate_results['summary']}")
             except Exception as e:
                 logger.warning(f"Failed to save edge deduplication intermediate results: {e}")
-            
+
             # Clean up
             del self._edge_dedup_results
 
+    def _format_dedup_results_for_output(self, dedup_groups: list) -> List[Dict[str, Any]]:
+        """Format dedup groups into entity_attribution_dedup_results.json style format"""
+        output = []
+        cluster_idx = 0
+
+        
+
+        for group_data in dedup_groups:
+            head_id = group_data['head_id']
+            relation = group_data['relation']
+            entries = group_data['entries']
+
+            # Get head node info
+            head_node_data = self.graph.nodes.get(head_id, {})
+            head_node = {
+                "label": head_node_data.get("label", "entity"),
+                "properties": head_node_data.get("properties", {})
+            }
+
+            # Get tail nodes to dedup (original candidates)
+            tail_nodes_to_dedup = []
+            for entry in entries:
+                node_id = entry['node_id']
+                # Use the existing _describe_node method for consistent formatting
+                entity_text = self._describe_node(node_id)
+                tail_nodes_to_dedup.append(entity_text)
+
+            # Get dedup results with validation info and convert to clusters
+            group_dedup_results = self._extract_dedup_results_with_validation(group_data)
+            dedup_results = {}
+
+            # Convert each group to cluster format
+            for group_key, group_info in group_dedup_results.items():
+                members = group_info.get('members', [])
+
+                # Convert member indices to actual entity texts
+                member_texts = []
+                for member_idx in members:
+                    if isinstance(member_idx, int) and member_idx < len(entries):
+                        entry = entries[member_idx]
+                        node_id = entry['node_id']
+                        # Use the existing _describe_node method for consistent formatting
+                        entity_text = self._describe_node(node_id)
+                        member_texts.append(entity_text)
+                    else:
+                        # If member_idx is not an integer index, use it directly
+                        member_texts.append(str(member_idx))
+
+                # Only create cluster if there are multiple members (as per deduplication logic)
+                if len(member_texts) > 1:
+                    cluster_key = f"cluster_{cluster_idx}"
+                    dedup_results[cluster_key] = {
+                        "member": member_texts,
+                        "llm_judge_reason": group_info.get('rationale', '')
+                    }
+                    cluster_idx += 1
+
+            # Get deduped tails (final edges after dedup)
+            deduped_tails = []
+            final_edges = self._build_final_edges(group_data, False)
+            for tail_id, edge_data in final_edges:
+                # Use the existing _describe_node method for consistent formatting
+                tail_text = self._describe_node(tail_id)
+                deduped_tails.append(tail_text)
+
+            result_item = {
+                "head_node": head_node,
+                "relation": relation,
+                "tail_nodes_to_dedup": tail_nodes_to_dedup,
+                "dedup_results": dedup_results,
+                "deduped_tails": deduped_tails
+            }
+
+            output.append(result_item)
+
+        return output
+
+    def _extract_dedup_results_with_validation(self, group_data: dict) -> Dict[str, Any]:
+        """Extract dedup results with LLM validation information"""
+        dedup_results = {}
+
+        # Check if we have semantic results with validation info
+        semantic_results = group_data.get('semantic_results', {})
+
+        for key, semantic_data in semantic_results.items():
+            groups = semantic_data.get('groups', [])
+            validation_report = semantic_data.get('validation_report')
+            batch_indices = semantic_data.get('batch_indices', [])
+
+            # For each group, add validation info
+            for group_idx, group in enumerate(groups):
+                group_key = f"group_{group_idx}"
+
+                # Base group info
+                dedup_results[group_key] = {
+                    "members": [batch_indices[x] for x in group.get('members', [])],
+                    "representative": group.get('representative'),
+                    "rationale": group.get('rationale', ''),
+                }
+
+                # Add validation info if available
+                if validation_report:
+                    is_valid = not validation_report.get('has_inconsistencies', False)
+                    dedup_results[group_key]["llm_validation"] = {
+                        "passed": is_valid,
+                        "validation_report": validation_report
+                    }
+                    if not is_valid:
+                        # Add the validation output for failed validations
+                        dedup_results[group_key]["llm_validation"]["validation_output"] = validation_report
+                else:
+                    # No validation performed
+                    dedup_results[group_key]["llm_validation"] = {
+                        "passed": True,  # Assume passed if no validation
+                        "validation_report": None
+                    }
+
+        return dedup_results
 
     def format_output(self) -> List[Dict[str, Any]]:
         """convert graph to specified output format"""
@@ -4494,7 +4760,8 @@ class KTBuilder:
         enable_semantic: bool = None,
         similarity_threshold: float = None,
         use_llm_validation: bool = None,
-        max_candidates: int = None
+        max_candidates: int = None,
+        load_llm_results: bool = False
     ) -> Dict[str, Any]:
         """
         Main entry point for head node deduplication.
@@ -4516,22 +4783,22 @@ class KTBuilder:
             self.config.construction.semantic_dedup, 'head_dedup'
         ) else None
         
-        if not config or not getattr(config, 'enabled', False):
+        if not config or not config.get('enabled', False):
             logger.info("Head deduplication is disabled in config")
             return {"enabled": False}
         
         # Use config values if not specified
         if enable_semantic is None:
-            enable_semantic = getattr(config, 'enable_semantic', True)
+            enable_semantic = config.get('enable_semantic', True)
         if similarity_threshold is None:
-            similarity_threshold = getattr(config, 'similarity_threshold', 0.85)
+            similarity_threshold = config.get('similarity_threshold', 0.85)
         if use_llm_validation is None:
-            use_llm_validation = getattr(config, 'use_llm_validation', False)
+            use_llm_validation = config.get('use_llm_validation', False)
         if max_candidates is None:
-            max_candidates = getattr(config, 'max_candidates', 1000)
+            max_candidates = config.get('max_candidates', 1000)
         
         # Check if intermediate results should be saved
-        save_intermediate = getattr(config, 'save_intermediate_results', False)
+        save_intermediate = config.get('save_intermediate_results', False)
         
         # Initialize intermediate results collector
         intermediate_results = {
@@ -4545,7 +4812,8 @@ class KTBuilder:
             },
             "phases": {}
         } if save_intermediate else None
-        
+
+
         logger.info("=" * 70)
         logger.info("Starting Head Node Deduplication")
         logger.info("=" * 70)
@@ -4561,7 +4829,7 @@ class KTBuilder:
         
         # Phase 1: Collect head candidates
         logger.info("\n[Phase 1/4] Collecting head candidates...")
-        candidates = self._collect_head_candidates()
+        candidates, candidates_names = self._collect_head_candidates()
         logger.info(f"✓ Found {len(candidates)} entity nodes")
         
         # Record candidates info if saving intermediate results
@@ -4575,7 +4843,7 @@ class KTBuilder:
                     "description": self.graph.nodes[node_id].get("properties", {}).get("description", "")[:200]
                 } for node_id in candidates[:10]] if candidates else []  # Store first 10 samples
             }
-        
+
         # Phase 2: Exact match deduplication
         logger.info("\n[Phase 2/4] Exact match deduplication...")
         exact_merge_mapping = self._deduplicate_heads_exact(candidates)
@@ -4592,7 +4860,7 @@ class KTBuilder:
                     "canonical_name": self.graph.nodes.get(can_id, {}).get("properties", {}).get("name", "")
                 } for dup_id, can_id in list(exact_merge_mapping.items())[:50]]  # Store first 50 pairs
             }
-        
+
         # Apply exact match merging
         exact_merged_count = self._merge_head_nodes(exact_merge_mapping, {})
         logger.info(f"✓ Merged {exact_merged_count} nodes")
@@ -4609,45 +4877,66 @@ class KTBuilder:
                 node_id for node_id in candidates
                 if node_id not in exact_merge_mapping and node_id in self.graph
             ]
+            to_del_node_names = [candidates_names[node_id] for node_id in remaining_nodes]
+            to_del_node_names = list(set(to_del_node_names))
+            for node_name in to_del_node_names:
+                if node_name in candidates_names:
+                    del candidates_names[node_name]
+                
             logger.info(f"  Remaining nodes after exact match: {len(remaining_nodes)}")
             
             if len(remaining_nodes) >= 2:
-                # Generate candidate pairs
-                candidate_similarity_threshold = getattr(config, 'candidate_similarity_threshold', 0.75)
-                candidate_pairs = self._generate_semantic_candidates(
-                    remaining_nodes,
-                    max_candidates=max_candidates,
-                    similarity_threshold=candidate_similarity_threshold
-                )
-                logger.info(f"✓ Generated {len(candidate_pairs)} candidate pairs")
+                candidate_pairs = None
+                if not load_llm_results:
+                    # Generate candidate pairs
+                    candidate_similarity_threshold = config.get('candidate_similarity_threshold', 0.75)
+                    candidate_pairs = self._generate_semantic_candidates(
+                        remaining_nodes,
+                        candidates_names,
+                        max_candidates=max_candidates,
+                        similarity_threshold=candidate_similarity_threshold
+                    )
+                    logger.info(f"✓ Generated {len(candidate_pairs)} candidate pairs")
                 
+                #import pdb; pdb.set_trace()
                 # Record candidate pairs
                 if save_intermediate:
-                    intermediate_results["phases"]["phase3_semantic"] = {
-                        "remaining_nodes": len(remaining_nodes),
-                        "candidate_pairs_generated": len(candidate_pairs),
-                        "validation_method": "llm" if use_llm_validation else "embedding",
-                        "sample_candidate_pairs": [{
-                            "node_id_1": pair[0],
-                            "node_name_1": self.graph.nodes.get(pair[0], {}).get("properties", {}).get("name", ""),
-                            "node_id_2": pair[1],
-                            "node_name_2": self.graph.nodes.get(pair[1], {}).get("properties", {}).get("name", ""),
-                            "embedding_similarity": float(pair[2])
-                        } for pair in candidate_pairs[:20]]  # Store first 20 pairs
-                    }
-                
+                    if candidate_pairs is not None:
+                        intermediate_results["phases"]["phase3_semantic"] = {
+                            "remaining_nodes": len(remaining_nodes),
+                            "candidate_pairs_generated": len(candidate_pairs),
+                            "validation_method": "llm" if use_llm_validation else "embedding",
+                            "sample_candidate_pairs": [{
+                                "node_id_1": pair[0],
+                                "node_name_1": self.graph.nodes.get(pair[0], {}).get("properties", {}).get("name", ""),
+                                "node_id_2": pair[1],
+                                "node_name_2": self.graph.nodes.get(pair[1], {}).get("properties", {}).get("name", ""),
+                                "embedding_similarity": float(pair[2])
+                            } for pair in candidate_pairs[:20]]  # Store first 20 pairs
+                        }
+                    else:
+                        # Initialize phase3_semantic when loading LLM results
+                        intermediate_results["phases"]["phase3_semantic"] = {
+                            "remaining_nodes": len(remaining_nodes),
+                            "candidate_pairs_generated": 0,
+                            "validation_method": "llm",
+                            "load_llm_results": True
+                        }
+
                 # Validate candidates
-                if candidate_pairs:
-                    if use_llm_validation:
+                if candidate_pairs or load_llm_results:
+                    if use_llm_validation or load_llm_results:
                         logger.info("  Using LLM validation (high accuracy mode)...")
                         semantic_merge_mapping, metadata = self._validate_candidates_with_llm(
-                            candidate_pairs,
-                            similarity_threshold
+                            candidate_pairs if candidate_pairs is not None else [],
+                            similarity_threshold,
+                            load_llm_results
                         )
                     else:
                         logger.info("  Using embedding validation (fast mode)...")
                         semantic_merge_mapping, metadata = self._validate_candidates_with_embedding(
-                            candidate_pairs,
+                            candidate_pairs if candidate_pairs is not None else [],
+                            candidates_names,
                             similarity_threshold
                         )
                     
@@ -4665,7 +4954,7 @@ class KTBuilder:
                                 "metadata": metadata.get(dup_id, {})
                             } for dup_id, can_id in list(semantic_merge_mapping.items())[:50]]  # Store first 50
                         }
-                    
+
                     # Apply semantic merging
                     semantic_merged_count = self._merge_head_nodes(semantic_merge_mapping, metadata)
                     logger.info(f"✓ Merged {semantic_merged_count} nodes")
@@ -4751,14 +5040,14 @@ class KTBuilder:
                 logger.info(f"Summary: {intermediate_results['summary']}")
             except Exception as e:
                 logger.warning(f"Failed to save intermediate results: {e}")
-        
+
         # Export for review if configured
-        if getattr(config, 'export_review', False):
+        if config.get('export_review', False):
             review_path = os.path.join(
-                getattr(config, 'review_output_dir', 'output/review'),
+                config.get('review_output_dir', 'output/review'),
                 f"head_merge_{self.dataset_name}_{int(time.time())}.csv"
             )
-            min_conf, max_conf = getattr(config, 'review_confidence_range', [0.70, 0.90])
+            min_conf, max_conf = config.get('review_confidence_range', [0.70, 0.90])
             self.export_head_merge_candidates_for_review(
                 output_path=review_path,
                 min_confidence=min_conf,
@@ -4767,14 +5056,21 @@ class KTBuilder:
         
         return stats
     
-    def _collect_head_candidates(self) -> List[str]:
+    def _collect_head_candidates(self) -> Tuple[List[str], Dict[str, str]]:
         """Collect all entity nodes for deduplication."""
+        from collections import defaultdict
+        candidates_names = defaultdict(str)
+        candidates_names.update({
+            node_id: data.get("properties", {}).get("name", "")
+            for node_id, data in self.graph.nodes(data=True)
+            if data.get("label") == "entity" or data.get("label") == 'attribute'
+        })
         candidates = [
             node_id
             for node_id, data in self.graph.nodes(data=True)
             if data.get("label") == "entity"
         ]
-        return candidates
+        return candidates, candidates_names
     
     def _normalize_entity_name(self, name: str) -> str:
         """Normalize entity name for exact matching."""
@@ -4793,24 +5089,31 @@ class KTBuilder:
         
         return normalized
     
-    def _deduplicate_heads_exact(self, candidates: List[str]) -> Dict[str, str]:
+    def _deduplicate_heads_exact(self, candidates: List[str]) -> Tuple[Dict[str, str], List[Tuple[str, str]]]:
         """Exact match deduplication based on normalized names."""
         logger.info("Starting exact match deduplication for head nodes...")
         
         # Group by normalized name
         name_groups = defaultdict(list)
+
+        invalid_nodes = []
         
         for node_id in candidates:
             if node_id not in self.graph:
                 continue
-            
+            #import pdb; pdb.set_trace()
             node_data = self.graph.nodes[node_id]
             name = node_data.get("properties", {}).get("name", "")
             
             if not name:
+                #import pdb; pdb.set_trace()
                 continue
             
             normalized_name = self._normalize_entity_name(name)
+            if not normalized_name:
+                logger.warning(f"Normalized name is empty for node {node_id} with name {name}, will be ignored")
+                invalid_nodes.append((node_id, name))
+
             name_groups[normalized_name].append((node_id, name))
         
         # Build merge mapping
@@ -4828,13 +5131,15 @@ class KTBuilder:
                 merge_mapping[node_id] = canonical_id
         
         logger.info(f"Exact match found {len(merge_mapping)} duplicate head nodes")
-        return merge_mapping
+        return merge_mapping, invalid_nodes
     
     def _generate_semantic_candidates(
         self,
         remaining_nodes: List[str],
+        candidates_names: Dict[str, str],
         max_candidates: int = 1000,
-        similarity_threshold: float = 0.75
+        similarity_threshold: float = 0.75,
+        concurrent_calls: bool = True
     ) -> List[Tuple[str, str, float]]:
         """Generate candidate node pairs using embedding similarity."""
         logger.info("Generating semantic deduplication candidates...")
@@ -4842,6 +5147,7 @@ class KTBuilder:
         if len(remaining_nodes) < 2:
             return []
         
+        #import pdb; pdb.set_trace()
         # Get node descriptions
         node_descriptions = {}
         for node_id in remaining_nodes:
@@ -4857,14 +5163,23 @@ class KTBuilder:
         # Get embeddings
         nodes = list(node_descriptions.keys())
         descriptions = [node_descriptions[node_id] for node_id in nodes]
-        
-        try:
-            embeddings = self._batch_get_embeddings(descriptions)
-            embeddings_array = np.array(embeddings)
-        except Exception as e:
-            logger.error(f"Failed to get embeddings: {e}")
-            return []
-        
+        if concurrent_calls:
+            embeddings_array = self._concurrent_embedding_calls(descriptions, enable_cache=True)
+        else:
+            #import pdb; pdb.set_trace()
+            #embedder = self._get_semantic_dedup_embedder()
+            embedder = self._get_online_API_embedder()  
+            if embedder is None:
+                return [list(range(len(descriptions)))]
+
+            try:
+                embeddings = embedder.encode(descriptions, normalize_embeddings=True)
+                embeddings_array = np.array(embeddings)
+            except Exception as e:
+                logger.error(f"Failed to get embeddings: {e}")
+                return []
+
+            #import pdb; pdb.set_trace()
         # Compute similarity matrix
         from sklearn.metrics.pairwise import cosine_similarity
         similarity_matrix = cosine_similarity(embeddings_array)
@@ -4890,6 +5205,7 @@ class KTBuilder:
     def _validate_candidates_with_embedding(
         self,
         candidate_pairs: List[Tuple[str, str, float]],
+        candidate_names: Dict[str, str],
         threshold: float
     ) -> Tuple[Dict[str, str], Dict[str, dict]]:
         """Validate candidates using embedding similarity only."""
@@ -4916,11 +5232,14 @@ class KTBuilder:
         
         # Process valid pairs
         valid_pairs = []
+        valid_pairs_names = []
         for node_id_1, node_id_2, similarity in candidate_pairs:
             if similarity >= threshold:
                 union(node_id_1, node_id_2)
                 valid_pairs.append((node_id_1, node_id_2, similarity))
-        
+                valid_pairs_names.append((candidate_names[node_id_1], candidate_names[node_id_2]))
+
+        #import pdb; pdb.set_trace()
         # Build merge_mapping
         canonical_map = {}
         
@@ -4946,26 +5265,34 @@ class KTBuilder:
     def _validate_candidates_with_llm(
         self,
         candidate_pairs: List[Tuple[str, str, float]],
-        threshold: float
+        threshold: float,
+        load_llm_results: bool = False
     ) -> Tuple[Dict[str, str], Dict[str, dict]]:
         """Validate candidates using LLM."""
         logger.info(f"Validating {len(candidate_pairs)} candidates with LLM...")
         
-        # Build prompts
-        prompts = []
-        for node_id_1, node_id_2, embedding_sim in candidate_pairs:
-            prompt_text = self._build_head_dedup_prompt(node_id_1, node_id_2)
-            prompts.append({
-                "prompt": prompt_text,
-                "metadata": {
-                    "node_id_1": node_id_1,
-                    "node_id_2": node_id_2,
-                    "embedding_similarity": embedding_sim
-                }
-            })
+        if not load_llm_results:
+            # Build prompts
+            prompts = []
+            for node_id_1, node_id_2, embedding_sim in candidate_pairs:
+                prompt_text = self._build_head_dedup_prompt(node_id_1, node_id_2)
+                prompts.append({
+                    "prompt": prompt_text,
+                    'type':'semantic',
+                    "metadata": {
+                        "node_id_1": node_id_1,
+                        "node_id_2": node_id_2,
+                        "embedding_similarity": embedding_sim
+                    }
+                })
         
         # Concurrent LLM calls
-        llm_results = self._concurrent_llm_calls(prompts)
+            llm_results = self._concurrent_llm_calls(prompts, type="head_dedup")
+        else:
+            with open(r"/home/hhy/GPT/workspace/m_youtu/llm_results.json", "r") as f:
+                llm_results = json.load(f)
+        
+        #import pdb; pdb.set_trace()
         
         # Parse results
         merge_mapping = {}
@@ -4977,10 +5304,9 @@ class KTBuilder:
             
             parsed = self._parse_coreference_response(response)
             is_coreferent = parsed.get("is_coreferent", False)
-            confidence = parsed.get("confidence", 0.0)
             rationale = parsed.get("rationale", "")
             
-            if is_coreferent and confidence >= threshold:
+            if is_coreferent:
                 node_id_1 = meta["node_id_1"]
                 node_id_2 = meta["node_id_2"]
                 
@@ -4990,144 +5316,10 @@ class KTBuilder:
                 merge_mapping[duplicate] = canonical
                 metadata[duplicate] = {
                     "rationale": rationale,
-                    "confidence": confidence,
                     "embedding_similarity": meta.get("embedding_similarity", 0.0),
                     "method": "llm"
                 }
         
-        # Add existing "别名包括" relationships from the graph to merge_mapping
-        # Strategy: LLM priority, but resolve complex conflicts with graph canonical
-        # - Normal case: respect LLM decisions, don't override
-        # - Complex conflict: when graph says A --[别名包括]--> B, but:
-        #   * LLM says B → C
-        #   * LLM says A → D (D ≠ C)
-        #   Solution: Use A (graph canonical) as final canonical, merge B, C, D to A
-        # Unified semantic: A --[别名包括]--> B means "B is an alias of A"
-        logger.info("Scanning graph for existing '别名包括' relationships (graph canonical priority in conflicts)...")
-        alias_count = 0
-        skipped_count = 0
-        transitive_count = 0
-        complex_resolved_count = 0
-        
-        for source_id, target_id, edge_data in self.graph.edges(data=True):
-            if edge_data.get("relation", "") != "别名包括":
-                continue
-            
-            # Unified semantic: source_id --[别名包括]--> target_id
-            # Means: "target_id is an alias of source_id"
-            canonical_id = source_id  # A (graph canonical)
-            duplicate_id = target_id  # B (alias)
-            
-            if duplicate_id in merge_mapping:
-                # B already has LLM decision: B → C
-                existing_canonical = merge_mapping[duplicate_id]  # C
-                
-                if existing_canonical == canonical_id:
-                    # Already correct: B → A, skip
-                    skipped_count += 1
-                    logger.debug(f"Already correct: {duplicate_id} → {canonical_id}")
-                else:
-                    # Conflict: B → C (LLM), but graph says B is alias of A
-                    # Check if A also has a decision
-                    if canonical_id not in merge_mapping:
-                        # Use graph canonical: A is the final canonical, override B and cascade C
-                        logger.info(
-                            f"Graph canonical override: {canonical_id} is canonical, "
-                            f"overriding {duplicate_id} → {existing_canonical} to {duplicate_id} → {canonical_id}"
-                        )
-                        
-                        # Override B → A
-                        merge_mapping[duplicate_id] = canonical_id
-                        metadata[duplicate_id] = {
-                            "rationale": f"{duplicate_id} is alias of graph canonical {canonical_id}",
-                            "confidence": 1.0,
-                            "method": "existing_alias_graph_canonical_override"
-                        }
-                        
-                        # Cascade C → A
-                        if existing_canonical != canonical_id and existing_canonical in self.graph.nodes():
-                            merge_mapping[existing_canonical] = canonical_id
-                            metadata[existing_canonical] = {
-                                "rationale": f"Cascade to graph canonical {canonical_id}",
-                                "confidence": 0.9,
-                                "method": "alias_graph_canonical_cascade"
-                            }
-                            logger.info(f"Cascade: {existing_canonical} → {canonical_id}")
-                        
-                        transitive_count += 1
-                        
-                    elif merge_mapping[canonical_id] != existing_canonical:
-                        # Complex conflict: A → D, B → C, but B is alias of A
-                        # Solution: Use A (graph canonical) as final canonical
-                        canonical_target = merge_mapping[canonical_id]  # D
-                        
-                        logger.info(
-                            f"Resolving complex conflict: {canonical_id} --[别名包括]--> {duplicate_id}, "
-                            f"where {duplicate_id} → {existing_canonical} (LLM) and {canonical_id} → {canonical_target} (LLM). "
-                            f"Using {canonical_id} as final canonical (graph canonical has priority)."
-                        )
-                        
-                        # Override: B → A (use graph canonical)
-                        merge_mapping[duplicate_id] = canonical_id
-                        metadata[duplicate_id] = {
-                            "rationale": f"Complex conflict resolved: {duplicate_id} is alias of graph canonical {canonical_id}",
-                            "confidence": 0.95,
-                            "method": "existing_alias_graph_canonical_override"
-                        }
-                        
-                        # Cascade: C → A
-                        if existing_canonical != canonical_id and existing_canonical in self.graph.nodes():
-                            merge_mapping[existing_canonical] = canonical_id
-                            metadata[existing_canonical] = {
-                                "rationale": f"Cascade to graph canonical {canonical_id}",
-                                "confidence": 0.9,
-                                "method": "alias_graph_canonical_cascade"
-                            }
-                            logger.info(f"Cascade: {existing_canonical} → {canonical_id}")
-                        
-                        # Clear A's decision (A is final canonical, should not merge elsewhere)
-                        if canonical_target != canonical_id:
-                            # Cascade: D → A
-                            if canonical_target in self.graph.nodes():
-                                merge_mapping[canonical_target] = canonical_id
-                                metadata[canonical_target] = {
-                                    "rationale": f"Cascade to graph canonical {canonical_id}",
-                                    "confidence": 0.9,
-                                    "method": "alias_graph_canonical_cascade"
-                                }
-                                logger.info(f"Cascade: {canonical_target} → {canonical_id}")
-                            # Clear A's decision
-                            del merge_mapping[canonical_id]
-                        
-                        complex_resolved_count += 1
-            else:
-                # B has no LLM decision yet, use graph relationship
-                # Check if A has a decision
-                if canonical_id in merge_mapping:
-                    # A → D, so B should also → D
-                    final_canonical = merge_mapping[canonical_id]
-                    merge_mapping[duplicate_id] = final_canonical
-                    metadata[duplicate_id] = {
-                        "rationale": f"Alias of {canonical_id} which merges to {final_canonical}",
-                        "confidence": 1.0,
-                        "method": "existing_alias_transitive"
-                    }
-                    logger.debug(f"Transitive from graph: {duplicate_id} → {final_canonical} (via {canonical_id})")
-                else:
-                    # Simple case: B → A
-                    merge_mapping[duplicate_id] = canonical_id
-                    metadata[duplicate_id] = {
-                        "rationale": "Pre-existing alias relationship in graph",
-                        "confidence": 1.0,
-                        "method": "existing_alias"
-                    }
-                alias_count += 1
-        
-        logger.info(
-            f"Added {alias_count} alias relationships from graph. "
-            f"Skipped {skipped_count} (already correct). "
-            f"Resolved {transitive_count} simple conflicts and {complex_resolved_count} complex conflicts."
-        )
         return merge_mapping, metadata
     
     def _build_head_dedup_prompt(self, node_id_1: str, node_id_2: str) -> str:
@@ -5225,6 +5417,7 @@ class KTBuilder:
                 continue
             
             try:
+
                 # Transfer outgoing edges
                 self._reassign_outgoing_edges(duplicate_id, canonical_id)
                 
@@ -5251,7 +5444,7 @@ class KTBuilder:
     def _reassign_outgoing_edges(self, source_id: str, target_id: str):
         """Transfer outgoing edges from source to target node."""
         outgoing = list(self.graph.out_edges(source_id, keys=True, data=True))
-        
+        #import pdb; pdb.set_trace()
         for _, tail_id, key, data in outgoing:
             if tail_id == target_id:
                 continue
@@ -5427,1000 +5620,1753 @@ class KTBuilder:
             logger.info(f"✓ Exported {len(candidates)} merge candidates to {output_path}")
         else:
             logger.info("No candidates found in the specified confidence range")
-
-# ============================================================
-# Improved Head Deduplication: LLM-Driven + Alias Relationships
-# ============================================================
-
-def _validate_candidates_with_llm_v2(
-    self,
-    candidate_pairs: List[Tuple[str, str, float]],
-    threshold: float = 0.85
-) -> Tuple[Dict[str, str], Dict[str, dict]]:
-    """
-    Validate candidates using LLM with representative selection.
-    
-    This improved version asks LLM to:
-    1. Determine if entities are coreferent
-    2. Choose which entity should be the primary representative
-    
-    Args:
-        candidate_pairs: List of (node_id_1, node_id_2, similarity)
-        threshold: Confidence threshold (not used for representative selection)
-        
-    Returns:
-        (merge_mapping, metadata): {duplicate_id: representative_id}, metadata
-    """
-    logger.info(f"Validating {len(candidate_pairs)} candidates with LLM (v2: LLM-driven representative)...")
-    
-    # Build prompts
-    prompts = []
-    for node_id_1, node_id_2, embedding_sim in candidate_pairs:
-        prompt_text = self._build_head_dedup_prompt_v2(node_id_1, node_id_2)
-        prompts.append({
-            "prompt": prompt_text,
-            "metadata": {
-                "node_id_1": node_id_1,
-                "node_id_2": node_id_2,
-                "embedding_similarity": embedding_sim
-            }
-        })
-    
-    # Concurrent LLM calls
-    logger.info(f"Sending {len(prompts)} requests to LLM...")
-    llm_results = self._concurrent_llm_calls(prompts)
-    
-    # Parse results
-    merge_mapping = {}
-    metadata = {}
-    
-    for result in llm_results:
-        meta = result.get("metadata", {})
-        response = result.get("response", "")
-        
-        # Parse LLM response
-        parsed = self._parse_coreference_response_v2(response)
-        is_coreferent = parsed.get("is_coreferent", False)
-        preferred_representative = parsed.get("preferred_representative")
-        rationale = parsed.get("rationale", "")
-        
-        if is_coreferent and preferred_representative:
-            node_id_1 = meta["node_id_1"]
-            node_id_2 = meta["node_id_2"]
-            
-            # Validate that preferred_representative is one of the two entities
-            if preferred_representative not in [node_id_1, node_id_2]:
-                logger.warning(
-                    f"LLM returned invalid representative {preferred_representative} "
-                    f"for pair ({node_id_1}, {node_id_2}). Skipping."
-                )
-                continue
-            
-            # Determine canonical and duplicate based on LLM's choice
-            canonical = preferred_representative
-            duplicate = node_id_2 if canonical == node_id_1 else node_id_1
-            
-            # Record the merge decision
-            merge_mapping[duplicate] = canonical
-            metadata[duplicate] = {
-                "rationale": rationale,
-                "confidence": 1.0,  # LLM made the decision
-                "embedding_similarity": meta.get("embedding_similarity", 0.0),
-                "method": "llm_v2",
-                "llm_chosen_representative": canonical
-            }
-            
-            logger.debug(
-                f"LLM decided: {duplicate} is alias of {canonical} "
-                f"(rationale: {rationale[:100]}...)"
-            )
-    
-    logger.info(f"LLM validated {len(merge_mapping)} merges with representative selection")
-    return merge_mapping, metadata
-
-def _collect_chunk_context(self, node_id: str, max_length: int = 500) -> str:
-    """
-    Collect chunk text context for a node.
-    
-    Args:
-        node_id: Node ID
-        max_length: Maximum length of chunk text to include (characters)
-        
-    Returns:
-        Formatted chunk context string
-    """
-    if node_id not in self.graph:
-        return "  (Node not found in graph)"
-    
-    node_data = self.graph.nodes[node_id]
-    properties = node_data.get("properties", {})
-    chunk_id = properties.get("chunk id") or properties.get("chunk_id")
-    
-    if not chunk_id:
-        return "  (No chunk information)"
-    
-    chunk_text = self.all_chunks.get(chunk_id)
-    if not chunk_text:
-        return f"  (Chunk {chunk_id} not found)"
-    
-    # Truncate if too long
-    if len(chunk_text) > max_length:
-        chunk_text = chunk_text[:max_length] + "..."
-    
-    return f"  Source text: \"{chunk_text}\""
-
-def _build_head_dedup_prompt_v2(self, node_id_1: str, node_id_2: str) -> str:
-    """
-    Build improved LLM prompt that asks for representative selection.
-    
-    Args:
-        node_id_1, node_id_2: Entity IDs
-        
-    Returns:
-        Complete prompt text
-    """
-    # Get entity descriptions
-    desc_1 = self._describe_node(node_id_1)
-    desc_2 = self._describe_node(node_id_2)
-    
-    # Get graph context (always included)
-    context_1 = self._collect_node_context(node_id_1, max_relations=10)
-    context_2 = self._collect_node_context(node_id_2, max_relations=10)
-    
-    # Check if hybrid context is enabled
-    config = self.config.construction.semantic_dedup.head_dedup if hasattr(
-        self.config.construction.semantic_dedup, 'head_dedup'
-    ) else None
-    
-    use_hybrid_context = False
-    if config:
-        use_hybrid_context = getattr(config, 'use_hybrid_context', False)
-    
-    # Add chunk context if hybrid mode is enabled
-    if use_hybrid_context:
-        chunk_context_1 = self._collect_chunk_context(node_id_1)
-        chunk_context_2 = self._collect_chunk_context(node_id_2)
-        
-        # Combine graph relations and chunk text
-        context_1 = f"{context_1}\n{chunk_context_1}"
-        context_2 = f"{context_2}\n{chunk_context_2}"
-    
-    # Try to load from config first
-    try:
-        prompt_template = self.config.get_prompt_formatted(
-            "head_dedup", 
-            "with_representative_selection",  # New template
-            entity_1_id=node_id_1,
-            entity_1_desc=desc_1,
-            context_1=context_1,
-            entity_2_id=node_id_2,
-            entity_2_desc=desc_2,
-            context_2=context_2
-        )
-        return prompt_template
-    except Exception as e:
-        error_msg = (
-            f"Failed to load head_dedup prompt from config: {e}\n"
-            f"Please ensure 'prompts.head_dedup.with_representative_selection' is defined in your config file.\n"
-            f"See HEAD_DEDUP_PROMPT_CUSTOMIZATION.md for details."
-        )
-        logger.error(error_msg)
-        raise ValueError(error_msg)
-
-def _parse_coreference_response_v2(self, response: str) -> dict:
-    """
-    Parse LLM response with representative selection.
-    
-    Expected format:
-    {
-      "is_coreferent": true/false,
-      "preferred_representative": "entity_XXX" or null,
-      "rationale": "..."
-    }
-    
-    Args:
-        response: LLM JSON response
-        
-    Returns:
-        Parsed dict with is_coreferent, preferred_representative, rationale
-    """
-    try:
-        import json_repair
-        parsed = json_repair.loads(response)
-        
-        is_coreferent = bool(parsed.get("is_coreferent", False))
-        preferred_representative = parsed.get("preferred_representative")
-        rationale = str(parsed.get("rationale", ""))
-        
-        # Validate
-        if is_coreferent and not preferred_representative:
-            logger.warning(
-                f"LLM said is_coreferent=true but didn't provide preferred_representative. "
-                f"Response: {response[:200]}"
-            )
-            # Don't mark as coreferent if no representative
-            is_coreferent = False
-        
-        if not is_coreferent:
-            preferred_representative = None
-        
-        return {
-            "is_coreferent": is_coreferent,
-            "preferred_representative": preferred_representative,
-            "rationale": rationale
-        }
-        
-    except Exception as e:
-        logger.warning(f"Failed to parse LLM response: {e}")
-        logger.debug(f"Response: {response[:500]}...")
-        return {
-            "is_coreferent": False,
-            "preferred_representative": None,
-            "rationale": "Parse error"
-        }
-
-def _revise_representative_with_frequency(
-    self,
-    merge_mapping: Dict[str, str],
-    metadata: Dict[str, dict]
-) -> Dict[str, str]:
-    """
-    Revise representative selection with frequency-based priority.
-    
-    Key improvement: If an entity appears in multiple pairs (high frequency),
-    it's likely a more standard/canonical name and should become the representative.
-    
-    Example:
-      Pairs: (A, B), (A, C), (A, D) all coreferent
-      → A is high-frequency, so A becomes representative
-      Result: B -> A, C -> A, D -> A
-    
-    Args:
-        merge_mapping: Initial {duplicate: canonical} from LLM
-        metadata: Metadata containing LLM's rationale
-        
-    Returns:
-        Revised merge_mapping with frequency-aware selection
-    """
-    from collections import defaultdict
-    
-    # Step 1: Count entity frequency (how many pairs each entity appears in)
-    entity_frequency = defaultdict(int)
-    for duplicate, canonical in merge_mapping.items():
-        entity_frequency[duplicate] += 1
-        entity_frequency[canonical] += 1
-    
-    # Step 2: Identify high-frequency entities
-    # Adaptive threshold: min(3, max_freq - 1)
-    if entity_frequency:
-        max_freq = max(entity_frequency.values())
-        HIGH_FREQ_THRESHOLD = max(2, min(3, max_freq - 1))
-    else:
-        HIGH_FREQ_THRESHOLD = 2
-    
-    high_freq_entities = {
-        entity for entity, freq in entity_frequency.items()
-        if freq >= HIGH_FREQ_THRESHOLD
-    }
-    
-    if high_freq_entities:
-        logger.info(
-            f"Identified {len(high_freq_entities)} high-frequency entities "
-            f"(threshold={HIGH_FREQ_THRESHOLD}): "
-            f"{sorted(high_freq_entities)[:5]}{'...' if len(high_freq_entities) > 5 else ''}"
-        )
-    
-    # Step 3: Build Union-Find with frequency priority
-    parent = {}
-    rank = {}
-    
-    def find(x):
-        """Find root with path compression."""
-        if x not in parent:
-            parent[x] = x
-            rank[x] = 0
-        if parent[x] != x:
-            parent[x] = find(parent[x])
-        return parent[x]
-    
-    def find_with_path(x):
-        """Find root and return the path from x to root.
-        
-        Returns:
-            tuple: (root, path) where path is list of nodes from x to root
-        """
-        if x not in parent:
-            parent[x] = x
-            rank[x] = 0
-            return x, [x]
-        
-        path = [x]
-        visited = {x}
-        current = x
-        
-        # Traverse to root, detecting cycles
-        while parent[current] != current:
-            next_node = parent[current]
-            
-            # Cycle detection
-            if next_node in visited:
-                cycle_start = path.index(next_node)
-                cycle = path[cycle_start:] + [next_node]
-                logger.error(
-                    f"CYCLE DETECTED: {' -> '.join(cycle)}\n"
-                    f"Full path: {' -> '.join(path)} -> {next_node}"
-                )
-                raise ValueError(f"Cycle detected in DSU: {' -> '.join(cycle)}")
-            
-            visited.add(next_node)
-            path.append(next_node)
-            current = next_node
-        
-        return current, path
-    
-    def get_path_to_root(x):
-        """Get the path from entity x to its root without modifying structure.
-        
-        Returns:
-            list: Path from x to root (including both x and root)
-        """
-        if x not in parent:
-            return [x]
-        
-        path = [x]
-        visited = {x}
-        current = x
-        max_depth = len(parent) + 1  # Safety limit
-        
-        while parent.get(current) != current and len(path) < max_depth:
-            next_node = parent[current]
-            
-            # Cycle detection
-            if next_node in visited:
-                cycle_start = path.index(next_node)
-                cycle = path[cycle_start:] + [next_node]
-                logger.warning(
-                    f"Cycle in path from {x}: {' -> '.join(cycle)}"
-                )
-                return path + [next_node]  # Return path including cycle point
-            
-            visited.add(next_node)
-            path.append(next_node)
-            current = next_node
-        
-        return path
-    
-    def union(entity1, entity2):
-        """Union with frequency priority."""
-        root1, root2 = find(entity1), find(entity2)
-        if root1 == root2:
-            return
-        
-        # Check if either is high-frequency
-        is_high_freq_1 = root1 in high_freq_entities
-        is_high_freq_2 = root2 in high_freq_entities
-        
-        if is_high_freq_1 and not is_high_freq_2:
-            # root1 is high-freq → make it representative
-            parent[root2] = root1
-            logger.debug(
-                f"Union: {root2} -> {root1} "
-                f"(high-freq priority, freq={entity_frequency[root1]})"
-            )
-        elif is_high_freq_2 and not is_high_freq_1:
-            # root2 is high-freq → make it representative
-            parent[root1] = root2
-            logger.debug(
-                f"Union: {root1} -> {root2} "
-                f"(high-freq priority, freq={entity_frequency[root2]})"
-            )
-        elif is_high_freq_1 and is_high_freq_2:
-            # Both high-freq → choose one with higher frequency
-            if entity_frequency[root1] > entity_frequency[root2]:
-                parent[root2] = root1
-                logger.debug(
-                    f"Union: {root2} -> {root1} "
-                    f"(higher freq: {entity_frequency[root1]} > {entity_frequency[root2]})"
-                )
-            elif entity_frequency[root1] < entity_frequency[root2]:
-                parent[root1] = root2
-                logger.debug(
-                    f"Union: {root1} -> {root2} "
-                    f"(higher freq: {entity_frequency[root2]} > {entity_frequency[root1]})"
-                )
-            else:
-                # Same frequency → use rank optimization
-                if rank[root1] < rank[root2]:
-                    parent[root1] = root2
-                elif rank[root1] > rank[root2]:
-                    parent[root2] = root1
-                else:
-                    parent[root2] = root1
-                    rank[root1] += 1
-        else:
-            # Neither is high-freq → use rank optimization (standard Union-Find)
-            if rank[root1] < rank[root2]:
-                parent[root1] = root2
-            elif rank[root1] > rank[root2]:
-                parent[root2] = root1
-            else:
-                parent[root2] = root1
-                rank[root1] += 1
-    
-    # Step 4: Apply all merge decisions with frequency-aware union
-    for duplicate, canonical in merge_mapping.items():
-        union(duplicate, canonical)
-    
-    # Step 5: Build final mapping
-    revised_mapping = {}
-    representative_changes = 0
-    
-    for duplicate, original_canonical in merge_mapping.items():
-        final_canonical = find(duplicate)
-        if duplicate != final_canonical:
-            revised_mapping[duplicate] = final_canonical
-            
-            # Log if representative changed
-            if final_canonical != original_canonical:
-                representative_changes += 1
-                logger.info(
-                    f"Representative revised: {duplicate} -> {original_canonical} "
-                    f"changed to {duplicate} -> {final_canonical} "
-                    f"(freq: {entity_frequency[final_canonical]})"
-                )
-    
-    if representative_changes > 0:
-        logger.info(
-            f"✓ Revised {representative_changes} representatives based on frequency"
-        )
-    
-    return revised_mapping
-
-def _merge_head_nodes_with_alias(
-    self,
-    merge_mapping: Dict[str, str],
-    metadata: Dict[str, dict],
-    alias_relation: str = "alias_of"
-) -> Dict[str, int]:
-    """
-    Merge head nodes using explicit alias relationships.
-    
-    Strategy:
-    1. Transfer all non-alias edges to representative
-    2. Keep duplicate node (don't delete)
-    3. Create explicit: duplicate --[alias_of]--> representative
-    4. Clean up other edges from duplicate
-    5. Mark node roles
-    
-    Args:
-        merge_mapping: {duplicate_id: canonical_id}
-        metadata: Merge metadata from LLM/embedding
-        alias_relation: Name of the alias relationship
-        
-    Returns:
-        Statistics dict with counts
-    """
-    if not merge_mapping:
-        logger.info("No head nodes to merge")
-        return {"alias_relations_created": 0, "edges_transferred": 0}
-    
-    logger.info(f"Merging {len(merge_mapping)} head nodes with alias relationships...")
-    
-    alias_count = 0
-    edges_transferred = 0
-    
-    for duplicate_id, canonical_id in merge_mapping.items():
-        # Validate nodes exist
-        if duplicate_id not in self.graph or canonical_id not in self.graph:
-            logger.debug(f"Nodes not found: {duplicate_id} or {canonical_id}")
-            continue
-        
-        if duplicate_id == canonical_id:
-            logger.warning(f"Duplicate and canonical are same: {duplicate_id}")
-            continue
-        
-        try:
-            # Step 1: Transfer edges safely (avoiding self-loops)
-            out_count = self._reassign_outgoing_edges_safe(
-                duplicate_id, canonical_id
-            )
-            in_count = self._reassign_incoming_edges_safe(
-                duplicate_id, canonical_id
-            )
-            edges_transferred += (out_count + in_count)
-            
-            # Step 2: Create alias relationship
-            self.graph.add_edge(
-                duplicate_id,
-                canonical_id,
-                relation=alias_relation,
-                source_chunks=[],  # Inferred from deduplication
-                dedup_metadata=metadata.get(duplicate_id, {}),
-                created_by="head_deduplication",
-                timestamp=time.time()
-            )
-            alias_count += 1
-            
-            # Step 3: Remove non-alias edges from duplicate
-            self._remove_non_alias_edges(
-                duplicate_id, 
-                keep_edge=(duplicate_id, canonical_id)
-            )
-            
-            # Step 4: Mark node roles
-            self.graph.nodes[duplicate_id]["properties"]["node_role"] = "alias"
-            self.graph.nodes[duplicate_id]["properties"]["alias_of"] = canonical_id
-            
-            canonical_props = self.graph.nodes[canonical_id].get("properties", {})
-            canonical_props["node_role"] = "representative"
-            
-            # Step 5: Record aliases in canonical node
-            if "aliases" not in canonical_props:
-                canonical_props["aliases"] = []
-            
-            canonical_props["aliases"].append({
-                "alias_id": duplicate_id,
-                "alias_name": self.graph.nodes[duplicate_id]["properties"].get("name", ""),
-                "confidence": metadata.get(duplicate_id, {}).get("confidence", 1.0),
-                "method": metadata.get(duplicate_id, {}).get("method", "unknown"),
-                "timestamp": time.time()
-            })
-            
-            logger.debug(
-                f"Created alias relationship: {duplicate_id} -> {canonical_id} "
-                f"(transferred {out_count + in_count} edges)"
-            )
-            
-        except Exception as e:
-            logger.error(f"Error creating alias relationship {duplicate_id} -> {canonical_id}: {e}")
-            continue
-    
-    logger.info(
-        f"Successfully created {alias_count} alias relationships, "
-        f"transferred {edges_transferred} edges"
-    )
-    
-    return {
-        "alias_relations_created": alias_count,
-        "edges_transferred": edges_transferred
-    }
-
-def _reassign_outgoing_edges_safe(
-    self, 
-    source_id: str, 
-    target_id: str
-) -> int:
-    """
-    Safely transfer outgoing edges, avoiding self-loops.
-    
-    Args:
-        source_id: Source node (will become alias)
-        target_id: Target node (representative)
-        
-    Returns:
-        Number of edges transferred
-    """
-    outgoing = list(self.graph.out_edges(source_id, keys=True, data=True))
-    transferred = 0
-    
-    for _, tail_id, key, data in outgoing:
-        # Skip edges that would create self-loops
-        if tail_id == target_id or tail_id == source_id:
-            logger.debug(
-                f"Skipping edge to avoid self-loop: {source_id} -> {tail_id} "
-                f"(relation: {data.get('relation')})"
-            )
-            continue
-        
-        # Check if similar edge already exists
-        edge_exists, existing_key = self._find_similar_edge(target_id, tail_id, data)
-        
-        if not edge_exists:
-            # Add new edge
-            self.graph.add_edge(target_id, tail_id, **copy.deepcopy(data))
-            transferred += 1
-            logger.debug(
-                f"Transferred edge: {target_id} -> {tail_id} "
-                f"(relation: {data.get('relation')})"
-            )
-        else:
-            # Merge chunk information
-            self._merge_edge_chunks(target_id, tail_id, existing_key, data)
-            logger.debug(
-                f"Merged chunks for existing edge: {target_id} -> {tail_id}"
-            )
-    
-    return transferred
-
-def _reassign_incoming_edges_safe(
-    self, 
-    source_id: str, 
-    target_id: str
-) -> int:
-    """
-    Safely transfer incoming edges, avoiding self-loops.
-    
-    Args:
-        source_id: Source node (will become alias)
-        target_id: Target node (representative)
-        
-    Returns:
-        Number of edges transferred
-    """
-    incoming = list(self.graph.in_edges(source_id, keys=True, data=True))
-    transferred = 0
-    
-    for head_id, _, key, data in incoming:
-        # Skip edges that would create self-loops
-        if head_id == target_id or head_id == source_id:
-            logger.debug(
-                f"Skipping edge to avoid self-loop: {head_id} -> {source_id} "
-                f"(relation: {data.get('relation')})"
-            )
-            continue
-        
-        # Check if similar edge already exists
-        edge_exists, existing_key = self._find_similar_edge(head_id, target_id, data)
-        
-        if not edge_exists:
-            # Add new edge
-            self.graph.add_edge(head_id, target_id, **copy.deepcopy(data))
-            transferred += 1
-            logger.debug(
-                f"Transferred edge: {head_id} -> {target_id} "
-                f"(relation: {data.get('relation')})"
-            )
-        else:
-            # Merge chunk information
-            self._merge_edge_chunks(head_id, target_id, existing_key, data)
-            logger.debug(
-                f"Merged chunks for existing edge: {head_id} -> {target_id}"
-            )
-    
-    return transferred
-
-def _remove_non_alias_edges(
-    self, 
-    node_id: str, 
-    keep_edge: Tuple[str, str]
-):
-    """
-    Remove all edges from a node except the alias_of edge.
-    
-    Args:
-        node_id: Node to clean up
-        keep_edge: Edge to keep (source, target) - the alias_of edge
-    """
-    # Remove all outgoing edges except alias_of
-    outgoing = list(self.graph.out_edges(node_id, keys=True))
-    for _, tail_id, key in outgoing:
-        if (node_id, tail_id) != keep_edge:
-            self.graph.remove_edge(node_id, tail_id, key)
-            logger.debug(f"Removed outgoing edge: {node_id} -> {tail_id}")
-    
-    # Remove all incoming edges
-    incoming = list(self.graph.in_edges(node_id, keys=True))
-    for head_id, _, key in incoming:
-        self.graph.remove_edge(head_id, node_id, key)
-        logger.debug(f"Removed incoming edge: {head_id} -> {node_id}")
-
-def deduplicate_heads_with_llm_v2(
-    self,
-    enable_semantic: bool = True,
-    similarity_threshold: float = 0.85,
-    max_candidates: int = 1000,
-    alias_relation: str = "alias_of"
-) -> Dict[str, Any]:
-    """
-    Main entry: Head deduplication with LLM-driven representative selection.
-    
-    Key improvements:
-    1. LLM decides which entity should be the representative (not code heuristics)
-    2. Uses alias relationships (doesn't delete duplicate nodes)
-    3. No self-loops
-    4. Semantic correctness
-    
-    Args:
-        enable_semantic: Enable semantic deduplication
-        similarity_threshold: Embedding similarity threshold for candidate generation
-        max_candidates: Maximum candidate pairs
-        alias_relation: Name of alias relationship
-        
-    Returns:
-        Statistics dict
-    """
-    logger.info("=" * 70)
-    logger.info("Head Deduplication (LLM-Driven + Alias Relationships)")
-    logger.info("=" * 70)
-    
-    start_time = time.time()
-    
-    # Phase 1: Collect candidates
-    logger.info("\n[Phase 1/4] Collecting head candidates...")
-    candidates = self._collect_head_candidates()
-    logger.info(f"✓ Found {len(candidates)} entity nodes")
-    
-    # Phase 2: Exact match
-    logger.info("\n[Phase 2/4] Exact match deduplication...")
-    exact_merge_mapping = self._deduplicate_heads_exact(candidates)
-    logger.info(f"✓ Identified {len(exact_merge_mapping)} exact matches")
-    
-    # For exact matches, use simple heuristic (ID order) since names are identical
-    exact_stats = self._merge_head_nodes_with_alias(
-        exact_merge_mapping, 
-        {},
-        alias_relation
-    )
-    logger.info(f"✓ Created {exact_stats['alias_relations_created']} alias relationships")
-    
-    # Phase 3: Semantic deduplication with LLM
-    semantic_stats = {"alias_relations_created": 0, "edges_transferred": 0}
-    
-    if enable_semantic:
-        logger.info("\n[Phase 3/4] Semantic deduplication (LLM-driven)...")
-        
-        remaining_nodes = [
-            node_id for node_id in candidates
-            if node_id not in exact_merge_mapping and 
-               node_id in self.graph and
-               self.graph.nodes[node_id].get("properties", {}).get("node_role") != "alias"
-        ]
-        logger.info(f"  Remaining nodes: {len(remaining_nodes)}")
-        
-        if len(remaining_nodes) >= 2:
-            # Generate candidate pairs
-            candidate_pairs = self._generate_semantic_candidates(
-                remaining_nodes,
-                max_candidates=max_candidates,
-                similarity_threshold=0.75  # Pre-filtering threshold
-            )
-            logger.info(f"✓ Generated {len(candidate_pairs)} candidate pairs")
-            
-            if candidate_pairs:
-                # LLM validation with representative selection
-                logger.info("  Using LLM to validate AND select representatives...")
-                semantic_merge_mapping, metadata = self._validate_candidates_with_llm_v2(
-                    candidate_pairs,
-                    similarity_threshold
-                )
-                
-                logger.info(f"✓ LLM identified {len(semantic_merge_mapping)} semantic matches")
-                
-                # Revise representatives with frequency priority
-                semantic_merge_mapping = self._revise_representative_with_frequency(
-                    semantic_merge_mapping,
-                    metadata
-                )
-                
-                # Apply merges
-                semantic_stats = self._merge_head_nodes_with_alias(
-                    semantic_merge_mapping,
-                    metadata,
-                    alias_relation
-                )
-                logger.info(f"✓ Created {semantic_stats['alias_relations_created']} alias relationships")
-    else:
-        logger.info("\n[Phase 3/4] Semantic deduplication skipped")
-    
-    # Phase 4: Validation
-    logger.info("\n[Phase 4/4] Validating graph integrity...")
-    issues = self.validate_graph_integrity_with_alias()
-    
-    if any(v for v in issues.values() if v):
-        logger.warning(f"⚠ Found integrity issues: {issues}")
-    else:
-        logger.info("✓ Graph integrity validated")
-    
-    elapsed_time = time.time() - start_time
-    
-    # Statistics
-    final_main_count = len([
-        n for n, d in self.graph.nodes(data=True)
-        if d.get("label") == "entity" and
-           d.get("properties", {}).get("node_role") != "alias"
-    ])
-    
-    alias_count = len([
-        n for n, d in self.graph.nodes(data=True)
-        if d.get("properties", {}).get("node_role") == "alias"
-    ])
-    
-    stats = {
-        "total_candidates": len(candidates),
-        "exact_alias_created": exact_stats["alias_relations_created"],
-        "semantic_alias_created": semantic_stats["alias_relations_created"],
-        "total_alias_created": (
-            exact_stats["alias_relations_created"] + 
-            semantic_stats["alias_relations_created"]
-        ),
-        "initial_entity_count": len(candidates),
-        "final_main_entity_count": final_main_count,
-        "final_alias_count": alias_count,
-        "elapsed_time_seconds": elapsed_time,
-        "integrity_issues": issues,
-        "method": "llm_driven_v2"
-    }
-    
-    logger.info("\n" + "=" * 70)
-    logger.info("Head Deduplication Completed (LLM-Driven + Alias)")
-    logger.info("=" * 70)
-    logger.info(f"Summary:")
-    logger.info(f"  - Initial entities: {stats['initial_entity_count']}")
-    logger.info(f"  - Final main entities: {stats['final_main_entity_count']}")
-    logger.info(f"  - Final alias entities: {stats['final_alias_count']}")
-    logger.info(f"  - Total alias relations: {stats['total_alias_created']}")
-    logger.info(f"  - Time elapsed: {elapsed_time:.2f}s")
-    logger.info(f"  - Method: LLM-driven representative selection ✓")
-    logger.info("=" * 70)
-    
-    return stats
-
-def validate_graph_integrity_with_alias(self) -> Dict[str, List]:
-    """
-    Validate graph integrity after alias-based deduplication.
-    
-    Modified rules:
-    - Alias nodes are NOT considered orphans (they have alias_of edge)
-    - Self-loops should not exist
-    - All alias_of edges should point to representative nodes
-    
-    Returns:
-        Dict with lists of issues
-    """
-    issues = {
-        "orphan_nodes": [],
-        "self_loops": [],
-        "dangling_references": [],
-        "invalid_alias_nodes": [],
-        "alias_chains": []
-    }
-    
-    # Check orphan nodes (excluding valid alias nodes)
-    for node_id, data in self.graph.nodes(data=True):
-        if data.get("label") == "entity":
-            in_degree = self.graph.in_degree(node_id)
-            out_degree = self.graph.out_degree(node_id)
-            node_role = data.get("properties", {}).get("node_role")
-            
-            # Alias nodes with only alias_of edge are valid
-            if node_role == "alias":
-                if out_degree == 1:
-                    out_edges = list(self.graph.out_edges(node_id, data=True))
-                    if out_edges[0][2].get("relation") == "alias_of":
-                        continue  # Valid alias node
-                # Invalid alias node
-                issues["invalid_alias_nodes"].append(
-                    (node_id, f"in={in_degree}, out={out_degree}")
-                )
-            elif in_degree == 0 and out_degree == 0:
-                issues["orphan_nodes"].append(node_id)
-    
-    # Check self-loops (should not exist with alias method!)
-    for u, v in self.graph.edges():
-        if u == v:
-            issues["self_loops"].append((u, v))
-    
-    # Check alias chains (alias pointing to alias)
-    for node_id, data in self.graph.nodes(data=True):
-        if data.get("properties", {}).get("node_role") == "alias":
-            out_edges = list(self.graph.out_edges(node_id, data=True))
-            for _, target_id, edge_data in out_edges:
-                if edge_data.get("relation") == "alias_of":
-                    target_data = self.graph.nodes.get(target_id, {})
-                    target_role = target_data.get("properties", {}).get("node_role")
-                    if target_role == "alias":
-                        issues["alias_chains"].append((node_id, target_id))
-    
-    # Check dangling references
-    for u, v, data in self.graph.edges(data=True):
-        if u not in self.graph.nodes:
-            issues["dangling_references"].append(("head", u, v))
-        if v not in self.graph.nodes:
-            issues["dangling_references"].append(("tail", u, v))
-    
-    return issues
-
-# Utility functions for working with aliases
-
-def is_alias_node(self, node_id: str) -> bool:
-    """Check if a node is an alias node."""
-    if node_id not in self.graph:
-        return False
-    return (
-        self.graph.nodes[node_id]
-        .get("properties", {})
-        .get("node_role") == "alias"
-    )
-
-def get_main_entities_only(self) -> List[str]:
-    """Get only main entities (excluding aliases)."""
-    return [
-        node_id
-        for node_id, data in self.graph.nodes(data=True)
-        if data.get("label") == "entity" and
-           data.get("properties", {}).get("node_role") != "alias"
-    ]
-
-def resolve_alias(self, node_id: str) -> str:
-    """
-    Resolve alias to main entity.
-    If node is an alias, return its representative; otherwise return itself.
-    """
-    if not self.is_alias_node(node_id):
-        return node_id
-    
-    # Follow alias_of edge
-    for _, target_id, data in self.graph.out_edges(node_id, data=True):
-        if data.get("relation") == "alias_of":
-            return target_id
-    
-    return node_id  # Fallback
-
-def get_all_aliases(self, entity_id: str) -> List[Dict[str, Any]]:
-    """
-    Get all aliases for a given entity.
-    
-    Args:
-        entity_id: Main entity ID
-        
-    Returns:
-        List of alias info dicts
-    """
-    if entity_id not in self.graph:
-        return []
-    
-    properties = self.graph.nodes[entity_id].get("properties", {})
-    return properties.get("aliases", [])
-
-def export_alias_mapping(self, output_path: str):
-    """
-    Export alias mapping for external use.
-    
-    Format: CSV with columns:
-    - alias_id, alias_name, main_entity_id, main_entity_name, confidence, method
-    """
-    import csv
-    
-    rows = []
-    
-    for node_id, data in self.graph.nodes(data=True):
-        if data.get("label") != "entity":
-            continue
-        
-        props = data.get("properties", {})
-        if props.get("node_role") == "representative":
-            main_entity_id = node_id
-            main_entity_name = props.get("name", "")
-            
-            for alias_info in props.get("aliases", []):
-                rows.append({
-                    "alias_id": alias_info["alias_id"],
-                    "alias_name": alias_info["alias_name"],
-                    "main_entity_id": main_entity_id,
-                    "main_entity_name": main_entity_name,
-                    "confidence": alias_info.get("confidence", 1.0),
-                    "method": alias_info.get("method", "unknown")
-                })
-    
-    os.makedirs(os.path.dirname(output_path), exist_ok=True)
-    with open(output_path, 'w', newline='', encoding='utf-8') as f:
-        fieldnames = [
-            "alias_id", "alias_name",
-            "main_entity_id", "main_entity_name",
-            "confidence", "method"
-        ]
-        writer = csv.DictWriter(f, fieldnames=fieldnames)
-        writer.writeheader()
-        writer.writerows(rows)
-    
-    logger.info(f"✓ Exported {len(rows)} alias mappings to {output_path}")
-
-
     
     # ============================================================
     # End of Head Node Deduplication Methods
     # ============================================================
     
+    # ============================================================
+    # Improved Head Deduplication: LLM-Driven + Alias Relationships
+    # ============================================================
+
+    def _validate_candidates_with_llm_v2(
+        self,
+        candidate_pairs: List[Tuple[str, str, float]],
+        threshold: float = 0.85,
+        load_llm_results: bool = False,
+        candidates_names: Dict[str, str] = {}
+    ) -> Tuple[Dict[str, str], Dict[str, dict], List[Dict]]:
+        """
+        Validate candidates using LLM with representative selection.
+        
+        This improved version asks LLM to:
+        1. Determine if entities are coreferent
+        2. Choose which entity should be the primary representative
+        
+        Args:
+            candidate_pairs: List of (node_id_1, node_id_2, similarity)
+            threshold: Confidence threshold (not used for representative selection)
+            
+        Returns:
+            (merge_mapping, metadata): {duplicate_id: representative_id}, metadata
+        """
+        parent = {}
+        def find(x):
+            if x not in parent:
+                parent[x] = x
+            if parent[x] != x:
+                parent[x] = find(parent[x])
+            return parent[x]
+
+        def union(entity1, entity2):
+            """Union with frequency priority."""
+            root1, root2 = find(entity1), find(entity2)
+            if root1 == root2:
+                return
+            if root1 != root2:
+                parent[root1] = root2
+ 
+        if not load_llm_results:
+            logger.info(f"Validating {len(candidate_pairs)} candidates with LLM (v2: LLM-driven representative)...")
+        # Build prompts
+            prompts = []
+            for node_id_1, node_id_2, embedding_sim in candidate_pairs:
+                #if node_id_1 != "entity_2" or node_id_2 != "entity_188":
+                #    continue
+                prompt_text = self._build_head_dedup_prompt_v2(node_id_1, node_id_2)
+                prompts.append({
+                    "prompt": prompt_text,
+                    "type": "semantic",
+                    "metadata": {
+                        "node_id_1": node_id_1,
+                        "node_id_2": node_id_2,
+                        "embedding_similarity": embedding_sim
+                    }
+                })
+            # Concurrent LLM calls
+            logger.info(f"Sending {len(prompts)} requests to LLM...")
+            llm_results = self._concurrent_llm_calls(prompts, type="head_dedup")
+        else:
+            with open(r"/home/hhy/GPT/workspace/m_youtu/llm_results_new.json", "r") as f:
+                llm_results = json.load(f)
+        
+        #import pdb; pdb.set_trace()
+
+        intermediate_results = []
+        llm_results_to_replace = []
+        try:
+            for index, result in enumerate(llm_results):
+                meta = result.get("metadata", {})
+                response = result.get("response", "")
+                parsed, response_to_replace, attempt_count = self._parse_coreference_response_v2(response, prompts[index], index)
+                if attempt_count > 1:
+                    llm_results_to_replace.append((index, response_to_replace))
+                is_coreferent = parsed.get("is_coreferent", False)
+                preferred_representative = parsed.get("representative")
+                rationale = parsed.get("rationale", "")
+                intermediate_results.append(
+                    {
+                        "entity_1": self.graph.nodes[meta["node_id_1"]]["properties"]["name"],
+                        "entity_2": self.graph.nodes[meta["node_id_2"]]["properties"]["name"],
+                        "embedding_similarity": meta.get("embedding_similarity", 0.0),
+                        "llm_judge_results":{
+                        "is_coreferent": is_coreferent, 
+                            "representative": self.graph.nodes[preferred_representative]["properties"]["name"] if is_coreferent else None,
+                            "rationale": rationale
+                        }
+                    })
+        except Exception as e:
+            import pdb; pdb.set_trace()
+
+        #with open("llm_judge_results.json", "w") as f:
+        #    json.dump(intermediate_results, f, indent=2, ensure_ascii=False)
+        #import pdb; pdb.set_trace()
+        if len(llm_results_to_replace) > 0:
+            for index, response_to_replace in llm_results_to_replace:
+                llm_results[index]['response'] = response_to_replace
+                logger.info(f"Replaced response for prompt {index}")
+
+                cache_key = self._generate_llm_cache_key(prompts)
+                self._save_llm_results(cache_key, llm_results)
+                logger.info(f"Saved LLM results to cache for prompt {index}")
+
+        #import pdb; pdb.set_trace()
+
+        # Parse results
+        merge_mapping = {}
+        final_merge_mapping = {}
+        metadata = {}
+        
+        
+        for index, result in enumerate(llm_results):
+            meta = result.get("metadata", {})
+            response = result.get("response", "")
+            
+            # Parse LLM response
+            parsed, response_to_replace, attempt_count = self._parse_coreference_response_v2(response, prompts[index], index)
+            is_coreferent = parsed.get("is_coreferent", False)
+            preferred_representative = parsed.get("representative")
+            rationale = parsed.get("rationale", "")
+            
+            if is_coreferent and preferred_representative:
+                node_id_1 = meta["node_id_1"]
+                node_id_2 = meta["node_id_2"]
+                
+                # Validate that preferred_representative is one of the two entities
+                if preferred_representative not in [node_id_1, node_id_2]:
+                    logger.warning(
+                        f"LLM returned invalid representative {preferred_representative} "
+                        f"for pair ({node_id_1}, {node_id_2}). Skipping."
+                    )
+                    continue
+                
+                # Determine canonical and duplicate based on LLM's choice
+                canonical = preferred_representative
+                duplicate = node_id_2 if canonical == node_id_1 else node_id_1
+                
+                # Record the merge decision
+                merge_mapping[duplicate] = canonical
+                metadata[duplicate] = {
+                    "rationale": rationale,
+                    "confidence": 1.0,  # LLM made the decision
+                    "embedding_similarity": meta.get("embedding_similarity", 0.0),
+                    "method": "llm_v2",
+                    "llm_chosen_representative": canonical
+                }
+
+                
+                logger.debug(
+                    f"LLM decided: {duplicate} is alias of {canonical} "
+                    f"(rationale: {rationale[:100]}...)"
+                )
+
+        # Add existing "别名包括" relationships from the graph to merge_mapping
+        # Strategy: LLM priority, but resolve complex conflicts with graph canonical
+        # - Normal case: respect LLM decisions, don't override
+        # - Complex conflict: when graph says A --[别名包括]--> B, but:
+        #   * LLM says B → C
+        #   * LLM says A → D (D ≠ C)
+        #   Solution: Use A (graph canonical) as final canonical, merge B, C, D to A
+        # Unified semantic: A --[别名包括]--> B means "B is an alias of A"
+        logger.info("Scanning graph for existing '别名包括' relationships (graph canonical priority in conflicts)...")
+        alias_count = 0
+        skipped_count = 0
+        transitive_count = 0
+        complex_resolved_count = 0
+        graph_canonical_dudep = {}
+        
+        for source_id, target_id, edge_data in self.graph.edges(data=True):
+            if edge_data.get("relation", "") != "别名包括" or edge_data.get("relation", "") != "等同于":
+                continue
+            
+            # Unified semantic: source_id --[别名包括]--> target_id
+            # Means: "target_id is an alias of source_id"
+            canonical_id = source_id  # A (graph canonical)
+            duplicate_id = target_id  # B (alias)
+
+            graph_canonical_dudep[duplicate_id] = canonical_id
+            if duplicate_id in merge_mapping:
+                # B already has LLM decision: B → C
+                existing_canonical = merge_mapping[duplicate_id]  # C
+                
+                if existing_canonical == canonical_id:
+                    # Already correct: B → A, skip
+                    skipped_count += 1
+                    logger.debug(f"Already correct: {duplicate_id} → {canonical_id}")
+                else:
+                    # Conflict: B → C (LLM), but graph says B is alias of A
+                    # Check if A also has a decision
+                    if canonical_id not in merge_mapping:
+                        # Use graph canonical: A is the final canonical, override B and cascade C
+                        logger.info(
+                            f"Graph canonical override: {candidates_names[canonical_id]}({canonical_id}) is canonical, "
+                            f"overriding {candidates_names[duplicate_id]}({duplicate_id}) → {candidates_names[existing_canonical]}({existing_canonical}) to {candidates_names[duplicate_id]}({duplicate_id}) → {candidates_names[canonical_id]}({canonical_id})"
+                        )
+                        if canonical_id == 'entity_1135':
+                            pass
+                            #import pdb; pdb.set_trace()
+                        # Override B → A
+                        merge_mapping[duplicate_id] = canonical_id
+                        metadata[duplicate_id] = {
+                            "rationale": f"{candidates_names[duplicate_id]}({duplicate_id}) is alias of graph canonical {candidates_names[canonical_id]}({canonical_id})",
+                            "confidence": 1.0,
+                            "method": "existing_alias_graph_canonical_override"
+                        }
+                        
+                        # Cascade C → A
+                        if existing_canonical != canonical_id and existing_canonical in self.graph.nodes():
+                            merge_mapping[existing_canonical] = canonical_id
+                            metadata[existing_canonical] = {
+                                "rationale": f"Cascade to graph canonical {candidates_names[canonical_id]}({canonical_id})",
+                                "confidence": 0.9,
+                                "method": "alias_graph_canonical_cascade"
+                            }
+                            logger.info(f"Cascade: {candidates_names[existing_canonical]}({existing_canonical}) → {candidates_names[canonical_id]}({canonical_id})")
+                        
+                        transitive_count += 1
+                        
+                    elif merge_mapping[canonical_id] != existing_canonical:
+                        # Complex conflict: A → D, B → C, but B is alias of A
+                        # Solution: Use A (graph canonical) as final canonical
+                        canonical_target = merge_mapping[canonical_id]  # D
+
+                        if canonical_id == 'entity_1366':
+                            #import pdb; pdb.set_trace()
+                            pass
+                        
+                        graph_canonical_id = None
+                        if canonical_id in graph_canonical_dudep:
+                            graph_canonical_id = graph_canonical_dudep[canonical_id]
+
+                        if graph_canonical_id and graph_canonical_id == canonical_target:
+                            logger.info(
+                                f"---Resolving complex conflict: {candidates_names[canonical_id]}({canonical_id}) --[别名包括]--> {candidates_names[duplicate_id]}({duplicate_id}), "
+                                f"---where {candidates_names[duplicate_id]}({duplicate_id}) → {candidates_names[existing_canonical]}({existing_canonical}) (LLM) and {candidates_names[canonical_id]}({canonical_id}) → {candidates_names[canonical_target]}({canonical_target}) (LLM). "
+                                f"---Using {graph_canonical_id} as final canonical (graph canonical has priority)."
+                            )
+                            # Override: B → A (use graph canonical)
+                            merge_mapping[duplicate_id] = graph_canonical_id
+                            metadata[duplicate_id] = {
+                                "rationale": f"Graph canonical override: {candidates_names[duplicate_id]}({duplicate_id}) is alias of graph canonical {candidates_names[graph_canonical_id]}({graph_canonical_id})",
+                                "confidence": 0.95,
+                                "method": "graph_canonical_override"
+                            }
+                        
+                            # Cascade: C → A
+                            if existing_canonical != graph_canonical_id and existing_canonical in self.graph.nodes():
+                                merge_mapping[existing_canonical] = graph_canonical_id
+                                metadata[existing_canonical] = {
+                                    "rationale": f"Cascade to graph canonical {candidates_names[graph_canonical_id]}({graph_canonical_id})",
+                                    "confidence": 0.9,
+                                    "method": "alias_graph_canonical_cascade"
+                                }
+                                logger.info(f"---Cascade: {candidates_names[existing_canonical]}({existing_canonical}) → {candidates_names[graph_canonical_id]}({graph_canonical_id})")
+                        elif graph_canonical_id and graph_canonical_id != canonical_target:
+                            logger.info(
+                                f"---Resolving complex conflict: {candidates_names[canonical_id]}({canonical_id}) --[别名包括]--> {candidates_names[duplicate_id]}({duplicate_id}), "
+                                f"---where {candidates_names[duplicate_id]}({duplicate_id}) → {candidates_names[existing_canonical]}({existing_canonical}) (LLM) and {candidates_names[canonical_id]}({canonical_id}) → {candidates_names[canonical_target]}({canonical_target}) (LLM). "
+                                f"---Using {canonical_id} as final canonical (graph canonical has priority)."
+                            )
+                            #import pdb; pdb.set_trace()
+
+
+                        else:
+                            logger.info(
+                                f"Resolving complex conflict: {candidates_names[canonical_id]}({canonical_id}) --[别名包括]--> {candidates_names[duplicate_id]}({duplicate_id}), "
+                                f"where {candidates_names[duplicate_id]}({duplicate_id}) → {candidates_names[existing_canonical]}({existing_canonical}) (LLM) and {candidates_names[canonical_id]}({canonical_id}) → {candidates_names[canonical_target]}({canonical_target}) (LLM). "
+                                f"Using {canonical_id} as final canonical (graph canonical has priority)."
+                            )
+                            
+                            # Override: B → A (use graph canonical)
+                            merge_mapping[duplicate_id] = canonical_id
+                            metadata[duplicate_id] = {
+                                "rationale": f"Complex conflict resolved: {candidates_names[duplicate_id]}({duplicate_id}) is alias of graph canonical {candidates_names[canonical_id]}({canonical_id})",
+                                "confidence": 0.95,
+                                "method": "existing_alias_graph_canonical_override"
+                            }
+                            
+                            # Cascade: C → A
+                            if existing_canonical != canonical_id and existing_canonical in self.graph.nodes():
+                                merge_mapping[existing_canonical] = canonical_id
+                                metadata[existing_canonical] = {
+                                    "rationale": f"Cascade to graph canonical {candidates_names[canonical_id]}({canonical_id})",
+                                    "confidence": 0.9,
+                                    "method": "alias_graph_canonical_cascade"
+                                }
+                                logger.info(f"Cascade: {candidates_names[existing_canonical]}({existing_canonical}) → {candidates_names[canonical_id]}({canonical_id})")
+                            
+                            # Clear A's decision (A is final canonical, should not merge elsewhere)
+                            if canonical_target != canonical_id:
+                                # Cascade: D → A
+                                if canonical_target in self.graph.nodes():
+                                    merge_mapping[canonical_target] = canonical_id
+                                    metadata[canonical_target] = {
+                                        "rationale": f"Cascade to graph canonical {candidates_names[canonical_id]}({canonical_id})",
+                                        "confidence": 0.9,
+                                        "method": "alias_graph_canonical_cascade"
+                                    }
+                                    logger.info(f"Cascade: {candidates_names[canonical_target]}({canonical_target}) → {candidates_names[canonical_id]}({canonical_id})")
+                                # Clear A's decision
+                                del merge_mapping[canonical_id]
+                        
+                        complex_resolved_count += 1
+            else:
+                # B has no LLM decision yet, use graph relationship
+                # Check if A has a decision
+                if canonical_id in merge_mapping:
+                    # A → D, so B should also → D
+                    final_canonical = merge_mapping[canonical_id]
+                    merge_mapping[duplicate_id] = final_canonical
+                    metadata[duplicate_id] = {
+                        "rationale": f"Alias of {candidates_names[canonical_id]}({canonical_id}) which merges to {candidates_names[final_canonical]}({final_canonical})",
+                        "confidence": 1.0,
+                        "method": "existing_alias_transitive"
+                    }
+                    logger.debug(f"Transitive from graph: {candidates_names[duplicate_id]}({duplicate_id}) → {candidates_names[final_canonical]}({final_canonical}) (via {candidates_names[canonical_id]}({canonical_id}))")
+                else:
+                    # Simple case: B → A
+                    merge_mapping[duplicate_id] = canonical_id
+                    metadata[duplicate_id] = {
+                        "rationale": "Pre-existing alias relationship in graph",
+                        "confidence": 1.0,
+                        "method": "existing_alias"
+                    }
+                alias_count += 1
+        
+        logger.info(
+            f"Added {alias_count} alias relationships from graph. "
+            f"Skipped {skipped_count} (already correct). "
+            f"Resolved {transitive_count} simple conflicts and {complex_resolved_count} complex conflicts."
+        )
+
+
+        def find_with_path(x):
+            """Find root and return the path from x to root.
+            
+            Returns:
+                tuple: (root, path) where path is list of nodes from x to root
+            """
+            if x not in parent:
+                parent[x] = x
+                rank[x] = 0
+                return x, [x]
+            
+            path = [x]
+            visited = {x}
+            current = x
+            
+            # Traverse to root, detecting cycles
+            while parent[current] != current:
+                next_node = parent[current]
+                
+                # Cycle detection
+                if next_node in visited:
+                    cycle_start = path.index(next_node)
+                    cycle = path[cycle_start:] + [next_node]
+                    logger.error(
+                        f"CYCLE DETECTED: {' -> '.join(cycle)}\n"
+                        f"Full path: {' -> '.join(path)} -> {next_node}"
+                    )
+                    raise ValueError(f"Cycle detected in DSU: {' -> '.join(cycle)}")
+                
+                visited.add(next_node)
+                path.append(next_node)
+                current = next_node
+            
+            return current, path, llm_results
+        
+        def get_path_to_root(x):
+            """Get the path from entity x to its root without modifying structure.
+            
+            Returns:
+                list: Path from x to root (including both x and root)
+            """
+            if x not in parent:
+                return [x]
+            
+            path = [x]
+            visited = {x}
+            current = x
+            max_depth = len(parent) + 1  # Safety limit
+            
+            while parent.get(current) != current and len(path) < max_depth:
+                next_node = parent[current]
+                
+                # Cycle detection
+                if next_node in visited:
+                    cycle_start = path.index(next_node)
+                    cycle = path[cycle_start:] + [next_node]
+                    logger.warning(
+                        f"Cycle in path from {x}: {' -> '.join(cycle)}"
+                    )
+                    return path + [next_node]  # Return path including cycle point
+                
+                visited.add(next_node)
+                path.append(next_node)
+                current = next_node
+            
+            return path
+
+        #import pdb; pdb.set_trace()
+        for dup_id, can_id in merge_mapping.items():
+            union(dup_id, can_id)
+        final_merge = []
+        for dup_id, can_id in merge_mapping.items():
+            root = find(dup_id)
+            if root != dup_id:
+                final_merge_mapping[dup_id] = root
+                final_merge.append(
+                    {
+                        "head_node": {
+
+                        },
+                        "relation": "",
+                        "tail_nodes_to_dedup": [
+
+                        ],
+                        "dedup_results":{
+                        "cluster_0": {
+                            "member": [
+                                self._describe_node(dup_id),
+                                self._describe_node(root)
+                            ],
+                        }
+                        }
+                    }
+                )
+            else:
+                final_merge_mapping[dup_id] = dup_id
+                logger.warning(f"Duplicate and canonical are same: {dup_id}")
+        
+
+
+                #alias_id = u
+                #canonical_id = v
+                #if 
+                #final_merge_mapping[alias_id] = canonical_id
+                #metadata[alias_id] = {
+                #    "rationale": data.get("rationale", ""),
+                #}
+        
+        #with open("final_merge_mapping_fix1.json", "w") as f:
+        #    json.dump(final_merge, f, indent=2,ensure_ascii=False)
+
+        logger.info(f"LLM validated {len(merge_mapping)} merges with representative selection")
+        return final_merge_mapping, metadata, llm_results
+
+    def _collect_chunk_context(self, node_id: str, max_length: int = 500) -> str:
+        """
+        Collect chunk text context for a node.
+        
+        Args:
+            node_id: Node ID
+            max_length: Maximum length of chunk text to include (characters)
+            
+        Returns:
+            Formatted chunk context string
+        """
+        if node_id not in self.graph:
+            return "  (Node not found in graph)"
+        
+        node_data = self.graph.nodes[node_id]
+        properties = node_data.get("properties", {})
+        chunk_id = properties.get("chunk id") or properties.get("chunk_id")
+        
+        if not chunk_id:
+            return "  (No chunk information)"
+        
+        chunk_text = self.all_chunks.get(chunk_id)
+        if not chunk_text:
+            return f"  (Chunk {chunk_id} not found)"
+        
+        # Truncate if too long
+        if len(chunk_text) > max_length:
+            chunk_text = chunk_text[:max_length] + "..."
+        
+        return f"  Source text (chunk id: {chunk_id}): \"{chunk_text}\""
+
+    def _build_head_dedup_prompt_v2(self, node_id_1: str, node_id_2: str) -> str:
+        """
+        Build improved LLM prompt that asks for representative selection.
+        
+        Args:
+            node_id_1, node_id_2: Entity IDs
+            
+        Returns:
+            Complete prompt text
+        """
+        # Get entity descriptions
+        desc_1 = self._describe_node(node_id_1)
+        desc_2 = self._describe_node(node_id_2)
+        
+        # Get graph context
+        graph_context_1 = self._collect_node_context(node_id_1, max_relations=1000)
+        graph_context_2 = self._collect_node_context(node_id_2, max_relations=1000)
+
+        # Check if hybrid context is enabled
+        config = self.config.construction.semantic_dedup.head_dedup if hasattr(
+            self.config.construction.semantic_dedup, 'head_dedup'
+        ) else None
+        #import pdb; pdb.set_trace()
+        use_hybrid_context = False
+        if config:
+            use_hybrid_context = config.get('use_hybrid_context', False)
+        
+        if use_hybrid_context:
+            chunk_context_1 = self._collect_chunk_context(node_id_1)
+            chunk_context_2 = self._collect_chunk_context(node_id_2)
+        else:
+            chunk_context_1 = "(Not available)"
+            chunk_context_2 = "(Not available)"
+
+        # Try to load from config first
+        try:
+            # 分别传入prompt
+            prompt_template = self.config.get_prompt_formatted(
+                "head_dedup", 
+                "with_representative_selection_fix4",
+                entity_1_id=node_id_1,
+                entity_1_desc=desc_1,
+                graph_context_1=graph_context_1,    # 区分开
+                chunk_context_1=chunk_context_1,    # 区分开
+                entity_2_id=node_id_2,
+                entity_2_desc=desc_2,
+                graph_context_2=graph_context_2,
+                chunk_context_2=chunk_context_2
+            )
+            return prompt_template
+        except Exception as e:
+            error_msg = (
+                f"Failed to load head_dedup prompt from config: {e}\n"
+                f"Please ensure 'prompts.head_dedup.with_representative_selection' is defined in your config file.\n"
+                f"See HEAD_DEDUP_PROMPT_CUSTOMIZATION.md for details."
+            )
+            logger.error(error_msg)
+            raise ValueError(error_msg)
+
+    def _parse_coreference_response_v2(self, response: str, prompt: dict, index: int) -> Tuple[dict, str, int]:
+        """
+        Parse LLM response with representative selection.
+        
+        Expected format:
+        {
+        "is_coreferent": true/false,
+        "representative": "entity_XXX" or null,
+        "rationale": "..."
+        }
+        
+        Args:
+            response: LLM JSON response
+            prompt: prompt used to generate the response
+        Returns:
+            Parsed dict with is_coreferent, representative, rationale
+        """
+
+        start_time = datetime.datetime.now()
+        max_wait_time = 1 * 3600
+        attempt_count = 0
+        retry_delay = 10  # Initial retry delay
+        MAX_RETRY_WAIT_SECONDS = 300  # Max 5 minutes between retries
+
+        response_to_parse = response
+
+        while True:
+            attempt_count += 1
+            elapsed = (datetime.datetime.now() - start_time).total_seconds()
+            if elapsed > max_wait_time:
+                logger.error("Max wait time (%ds) exceeded. ", max_wait_time)
+                return {
+                    "is_coreferent": False,
+                    "representative": None,
+                    "rationale": "Parse error"
+                }, response_to_parse, attempt_count
+
+            try:
+                import json_repair
+                parsed = json_repair.loads(response_to_parse)
+                
+                is_coreferent = bool(parsed.get("is_coreferent", False))
+                representative = parsed.get("representative")
+                rationale = str(parsed.get("rationale", ""))
+                
+                # Validate
+                if is_coreferent and not representative:
+                    logger.warning(
+                        f"LLM said is_coreferent=true but didn't provide representative. "
+                        f"Response: {response_to_parse[:200]}"
+                    )
+                    # Don't mark as coreferent if no representative
+                    is_coreferent = False
+                
+                if not is_coreferent:
+                    representative = None
+                
+                return {
+                    "is_coreferent": is_coreferent,
+                    "representative": representative,
+                    "rationale": rationale
+                }, response_to_parse, attempt_count
+                
+            except Exception as e:
+                logger.warning(f"Failed to parse LLM response: {e}, attempt {attempt_count}")
+                logger.debug(f"Response: {response[:500]}...")
+             
+
+            retry_delay = min(retry_delay * 1.5, MAX_RETRY_WAIT_SECONDS)
+            logger.info(f"Prompt {index} waiting {retry_delay:.0f}s before next attempt...")
+            time.sleep(retry_delay)
+
+            response_to_parse = self._concurrent_llm_calls([prompt], type="head_dedup")[0]['response']
+
+
+
+    def _merge_head_nodes_with_alias(
+        self,
+        merge_mapping: Dict[str, str],
+        metadata: Dict[str, dict],
+        alias_relation: str = "alias_of",
+        candidate_pairs: Dict[str, str] = {},
+        invalid_nodes: List[Tuple[str, str]] = []
+    ) -> Dict[str, int]:
+        """
+        Merge head nodes using explicit alias relationships.
+
+        Strategy:
+        1. Transfer all non-alias edges to representative
+        2. Keep duplicate node (don't delete)
+        3. Create explicit: duplicate --[alias_of]--> representative
+        4. Clean up other edges from duplicate
+        5. Mark node roles
+
+        Args:
+            merge_mapping: {duplicate_id: canonical_id}
+            metadata: Merge metadata from LLM/embedding
+            alias_relation: Name of the alias relationship
+
+        Returns:
+            Statistics dict with counts
+        """
+        if not merge_mapping:
+            logger.info("No head nodes to merge")
+            return {"alias_relations_created": 0, "edges_transferred": 0}
+
+        logger.info(f"Merging {len(merge_mapping)} head nodes with alias relationships...")
+
+        alias_count = 0
+        edges_transferred = 0
+
+        for duplicate_id, canonical_id in merge_mapping.items():
+            duplicate_name = self.graph.nodes[duplicate_id].get("properties", {}).get("name", "")
+            canonical_name = self.graph.nodes[canonical_id].get("properties", {}).get("name", "")
+            if (duplicate_id, duplicate_name) in invalid_nodes and (canonical_id, canonical_name) in invalid_nodes:
+                logger.warning(f"Invalid nodes: {duplicate_name} -> {canonical_name}")
+                continue
+
+            if "entity_109" in duplicate_id or "entity_109" in canonical_id:
+                #import pdb; pdb.set_trace()
+                pass
+                #import pdb; pdb.set_trace()
+            # Validate nodes exist
+            if duplicate_id not in self.graph or canonical_id not in self.graph:
+                logger.warning(f"Nodes not found: {duplicate_id} or {canonical_id}")
+                #import pdb; pdb.set_trace()
+                continue
+
+            if duplicate_id == canonical_id:
+                logger.warning(f"Duplicate and canonical are same: {duplicate_id}")
+                #import pdb; pdb.set_trace()
+                continue
+
+            try:
+                # Step 1: Transfer edges safely (avoiding self-loops)
+                out_count = self._reassign_outgoing_edges_safe(
+                    duplicate_id, canonical_id, candidate_pairs
+                )
+                in_count = self._reassign_incoming_edges_safe(
+                    duplicate_id, canonical_id
+                )
+                edges_transferred += (out_count + in_count)
+
+                edge_exists = False
+                for source_id, target_id, data in self.graph.edges(duplicate_id, data=True):
+                    if data.get("relation") == alias_relation and target_id == canonical_id:
+                        #import pdb; pdb.set_trace()
+                        edge_exists = True
+                        break
+                if edge_exists:
+                    logger.warning(f"Edge already exists: {duplicate_id} -> {canonical_id}")
+                    continue
+
+                # Step 2: Create alias relationship
+                self.graph.add_edge(
+                    duplicate_id,
+                    canonical_id,
+                    relation=alias_relation,
+                    #source_chunks=[],  # Inferred from deduplication
+                    #dedup_metadata=metadata.get(duplicate_id, {}),
+                    #created_by="head_deduplication",
+                    #timestamp=time.time()
+                )
+                alias_count += 1
+
+                # Step 3: Remove non-alias edges from duplicate
+                self._remove_non_alias_edges(
+                    duplicate_id,
+                    keep_edge=(duplicate_id, canonical_id)
+                )
+
+                # Step 4: Mark node roles
+                self.graph.nodes[duplicate_id]["properties"]["node_role"] = "alias"
+                self.graph.nodes[duplicate_id]["properties"]["alias_of"] = canonical_id
+
+                canonical_props = self.graph.nodes[canonical_id].get("properties", {})
+                canonical_props["node_role"] = "representative"
+
+                # Step 5: Record aliases in canonical node
+                if "aliases" not in canonical_props:
+                    canonical_props["aliases"] = []
+                
+                canonical_props["aliases"].append({
+                    "alias_id": duplicate_id,
+                    "alias_name": self.graph.nodes[duplicate_id]["properties"].get("name", ""),
+                    "confidence": metadata.get(duplicate_id, {}).get("confidence", 1.0),
+                    "method": metadata.get(duplicate_id, {}).get("method", "unknown"),
+                    "timestamp": time.time()
+                })
+                
+                logger.debug(
+                    f"Created alias relationship: {duplicate_id} -> {canonical_id} "
+                    f"(transferred {out_count + in_count} edges)"
+                )
+                
+            except Exception as e:
+                import traceback
+                logger.error(f"Error creating alias relationship {duplicate_id} -> {canonical_id}: {e}\n{traceback.format_exc()}")
+                continue
+        
+        logger.info(
+            f"Successfully created {alias_count} alias relationships, "
+            f"transferred {edges_transferred} edges"
+        )
+        
+        return {
+            "alias_relations_created": alias_count,
+            "edges_transferred": edges_transferred
+        }
+
+    def _merge_head_nodes_with_alias_v2(
+        self,
+        merge_mapping: Dict[str, str],
+        metadata: Dict[str, dict],
+        alias_relation: str = "alias_of",
+        candidate_pairs: Dict[str, str] = {},
+        invalid_nodes: List[Tuple[str, str]] = []
+    ) -> Dict[str, int]:
+        """
+        Merge head nodes using explicit alias relationships.
+
+        Strategy:
+        1. Transfer all non-alias edges to representative
+        2. Keep duplicate node (don't delete)
+        3. Create explicit: duplicate --[alias_of]--> representative
+        4. Clean up other edges from duplicate
+        5. Mark node roles
+
+        Args:
+            merge_mapping: {duplicate_id: canonical_id}
+            metadata: Merge metadata from LLM/embedding
+            alias_relation: Name of the alias relationship
+
+        Returns:
+            Statistics dict with counts
+        """
+        if not merge_mapping:
+            logger.info("No head nodes to merge")
+            return {"alias_relations_created": 0, "edges_transferred": 0}
+
+        logger.info(f"Merging {len(merge_mapping)} head nodes with alias relationships...")
+
+        alias_count = 0
+        edges_transferred = 0
+
+        for duplicate_id, canonical_id in merge_mapping.items():
+            duplicate_name = self.graph.nodes[duplicate_id].get("properties", {}).get("name", "")
+            canonical_name = self.graph.nodes[canonical_id].get("properties", {}).get("name", "")
+            if (duplicate_id, duplicate_name) in invalid_nodes and (canonical_id, canonical_name) in invalid_nodes:
+                logger.warning(f"Invalid nodes: {duplicate_name} -> {canonical_name}")
+                continue
+
+            if "entity_109" in duplicate_id and "entity_1099" not in duplicate_id \
+                or "entity_109" in canonical_id and "entity_1099" not in canonical_id:
+                #import pdb; pdb.set_trace()
+                pass
+                #import pdb; pdb.set_trace()
+            # Validate nodes exist
+            if duplicate_id not in self.graph or canonical_id not in self.graph:
+                logger.warning(f"Nodes not found: {duplicate_id} or {canonical_id}")
+                #import pdb; pdb.set_trace()
+                continue
+
+            if duplicate_id == canonical_id:
+                logger.warning(f"Duplicate and canonical are same: {duplicate_id}")
+                #import pdb; pdb.set_trace()
+                continue
+
+            try:
+                # Step 1: Transfer edges safely (avoiding self-loops)
+                out_count, skip_flag_out = self._reassign_outgoing_edges_safe_v2(
+                    duplicate_id, canonical_id, candidate_pairs
+                )
+                in_count, skip_flag_in = self._reassign_incoming_edges_safe_v2(
+                    duplicate_id, canonical_id
+                )
+                edges_transferred += (out_count + in_count)
+
+
+                if skip_flag_out or skip_flag_in:
+                    logger.warning(
+                        f"Skipping merging to avoid self-loop: {duplicate_id} -> {canonical_id} | "
+                        f"skip_flag_out: {skip_flag_out}, skip_flag_in: {skip_flag_in}"
+                        )
+                    #import pdb; pdb.set_trace()
+                    continue
+
+                # Step 2: Create alias relationship
+                self.graph.add_edge(
+                    duplicate_id,
+                    canonical_id,
+                    relation=alias_relation,
+                    #source_chunks=[],  # Inferred from deduplication
+                    #dedup_metadata=metadata.get(duplicate_id, {}),
+                    #created_by="head_deduplication",
+                    #timestamp=time.time()
+                )
+                alias_count += 1
+
+                # Step 3: Remove non-alias edges from duplicate
+                self._remove_non_alias_edges(
+                    duplicate_id,
+                    keep_edge=(duplicate_id, canonical_id)
+                )
+
+                # Step 4: Mark node roles
+                self.graph.nodes[duplicate_id]["properties"]["node_role"] = "alias"
+                self.graph.nodes[duplicate_id]["properties"]["alias_of"] = canonical_id
+
+                canonical_props = self.graph.nodes[canonical_id].get("properties", {})
+                canonical_props["node_role"] = "representative"
+
+                # Step 5: Record aliases in canonical node
+                if "aliases" not in canonical_props:
+                    canonical_props["aliases"] = []
+                
+                canonical_props["aliases"].append({
+                    "alias_id": duplicate_id,
+                    "alias_name": self.graph.nodes[duplicate_id]["properties"].get("name", ""),
+                    "confidence": metadata.get(duplicate_id, {}).get("confidence", 1.0),
+                    "method": metadata.get(duplicate_id, {}).get("method", "unknown"),
+                    "timestamp": time.time()
+                })
+                
+                logger.debug(
+                    f"Created alias relationship: {duplicate_id} -> {canonical_id} "
+                    f"(transferred {out_count + in_count} edges)"
+                )
+                
+            except Exception as e:
+                import traceback
+                logger.error(f"Error creating alias relationship {duplicate_id} -> {canonical_id}: {e}\n{traceback.format_exc()}")
+                continue
+        
+        logger.info(
+            f"Successfully created {alias_count} alias relationships, "
+            f"transferred {edges_transferred} edges"
+        )
+        
+        return {
+            "alias_relations_created": alias_count,
+            "edges_transferred": edges_transferred
+        }
+
+    def _resolve_canonical_chain(self, node_id: str, merge_mapping: Dict[str, str] = None) -> str:
+        """
+        Resolve the canonical chain for a node by following merge mappings.
+        Returns the final canonical node after following all alias relationships.
+
+        Args:
+            node_id: The node to resolve
+            merge_mapping: Optional merge mapping to use for resolution
+
+        Returns:
+            The final canonical node ID
+        """
+        if merge_mapping is None:
+            merge_mapping = {}
+
+        visited = set()
+        current = node_id
+
+        while current in merge_mapping and current not in visited:
+            visited.add(current)
+            current = merge_mapping[current]
+
+        return current
+
+    def _merge_exact_and_semantic_mappings(
+        self,
+        exact_merge_mapping: Dict[str, str],
+        semantic_merge_mapping: Dict[str, str],
+    ) -> Tuple[Dict[str, str], Dict[str, str]]:
+        """
+        Merge exact and semantic merge mappings, resolving canonical chains.
+        Handles cases where semantic mappings affect nodes that were canonical in the exact phase.
+
+        Args:
+            exact_merge_mapping: {duplicate_id: canonical_id} from exact matching phase
+            semantic_merge_mapping: {duplicate_id: canonical_id} from semantic matching phase
+
+        Returns:
+            Combined merge mapping with resolved canonical chains
+        """
+        # First, resolve all canonical targets in semantic_merge_mapping
+        resolved_semantic_mapping = {}
+        for dup_id, can_id in semantic_merge_mapping.items():
+            resolved_semantic_mapping[dup_id] = self._resolve_canonical_chain(can_id, semantic_merge_mapping)
+
+        # Create a mapping from old canonical to new canonical for updates
+        canonical_updates = {}
+        for dup_id, resolved_can_id in resolved_semantic_mapping.items():
+            if dup_id in exact_merge_mapping.values():  # This was a canonical in exact phase
+                canonical_updates[dup_id] = resolved_can_id
+
+        # Update exact_merge_mapping: replace old canonicals with resolved ones
+        updated_exact_mapping = {}
+        for dup_id, can_id in exact_merge_mapping.items():
+            if can_id in canonical_updates:
+                updated_exact_mapping[dup_id] = canonical_updates[can_id]
+            else:
+                updated_exact_mapping[dup_id] = can_id
+
+        # Combine mappings: exact mappings take precedence, then semantic
+        final_merge_mapping = dict(updated_exact_mapping)
+        final_merge_mapping.update(resolved_semantic_mapping)
+
+        return final_merge_mapping, dict(updated_exact_mapping)
+
+    def _reassign_outgoing_edges_safe(
+        self, 
+        source_id: str, 
+        target_id: str,
+        candidate_pairs: Dict[str, str]
+    ) -> int:
+        """
+        Safely transfer outgoing edges, avoiding self-loops.
+        
+        Args:
+            source_id: Source node (will become alias)
+            target_id: Target node (representative)
+            
+        Returns:
+            Number of edges transferred
+        """
+        outgoing = list(self.graph.out_edges(source_id, keys=True, data=True))
+        transferred = 0
+        
+        for _, tail_id, key, data in outgoing:
+            # Skip edges that would create self-loops
+            if tail_id == target_id or tail_id == source_id:
+                logger.warning(
+                    f"Skipping edge to avoid self-loop: {source_id} -> {tail_id} "
+                    f"(relation: {data.get('relation')})"
+                )
+                continue
+            
+            # Check if similar edge already exists
+            edge_exists, existing_key = self._find_similar_edge(target_id, tail_id, data)
+            
+            if not edge_exists:
+                # Add new edge
+                self.graph.add_edge(target_id, tail_id, **copy.deepcopy(data))
+                transferred += 1
+                logger.info(
+                    f"Transferred edge: {target_id} -> {tail_id} ({candidate_pairs[target_id]}({(candidate_pairs[source_id])}) -> ({candidate_pairs[tail_id]})"
+                    f"(relation: {data.get('relation')})"
+                )
+            else:
+                # Merge chunk information
+                self._merge_edge_chunks(target_id, tail_id, existing_key, data)
+                logger.debug(
+                    f"Merged chunks for existing edge: {target_id} -> {tail_id}"
+                )
+        
+        return transferred
+
+    def _reassign_incoming_edges_safe(
+        self, 
+        source_id: str, 
+        target_id: str
+    ) -> int:
+        """
+        Safely transfer incoming edges, avoiding self-loops.
+        
+        Args:
+            source_id: Source node (will become alias)
+            target_id: Target node (representative)
+            
+        Returns:
+            Number of edges transferred
+        """
+        incoming = list(self.graph.in_edges(source_id, keys=True, data=True))
+        transferred = 0
+        
+        for head_id, _, key, data in incoming:
+            # Skip edges that would create self-loops
+            if head_id == target_id or head_id == source_id:
+                logger.debug(
+                    f"Skipping edge to avoid self-loop: {head_id} -> {source_id} "
+                    f"(relation: {data.get('relation')})"
+                )
+                continue
+            
+            # Check if similar edge already exists
+            edge_exists, existing_key = self._find_similar_edge(head_id, target_id, data)
+            
+            if not edge_exists:
+                # Add new edge
+                self.graph.add_edge(head_id, target_id, **copy.deepcopy(data))
+                transferred += 1
+                logger.debug(
+                    f"Transferred edge: {head_id} -> {target_id} "
+                    f"(relation: {data.get('relation')})"
+                )
+            else:
+                # Merge chunk information
+                self._merge_edge_chunks(head_id, target_id, existing_key, data)
+                logger.debug(
+                    f"Merged chunks for existing edge: {head_id} -> {target_id}"
+                )
+        
+        return transferred
+
+    def _reassign_outgoing_edges_safe_v2(
+        self, 
+        source_id: str, 
+        target_id: str,
+        candidate_pairs: Dict[str, str]
+    ) -> Tuple[int,bool]:
+        """
+        Safely transfer outgoing edges, avoiding self-loops.
+        
+        Args:
+            source_id: Source node (will become alias)
+            target_id: Target node (representative)
+            
+        Returns:
+            Number of edges transferred
+        """
+        outgoing = list(self.graph.out_edges(source_id, keys=True, data=True))
+        transferred = 0
+        
+        skip_flag = False
+
+        for _, tail_id, key, data in outgoing:
+            # Skip edges that would create self-loops
+            if tail_id == target_id and data.get("relation") != "等同于":
+                skip_flag = True
+                logger.warning(
+                    f"Besides relation '等同于', "
+                    f"There is a another relation of {self.graph.nodes[source_id].get('properties', {}).get('name', source_id)} -> {self.graph.nodes[tail_id].get('properties', {}).get('name', tail_id)} -> {data.get('relation')}")
+                logger.warning(
+                    f"Skipping merging to avoid self-loop: {source_id} -> {tail_id} "
+                    f"(relation: {data.get('relation')})"
+                )
+                break
+
+        if skip_flag:
+            return transferred, skip_flag
+
+        for _, tail_id, key, data in outgoing:
+            # Skip edges that would create self-loops
+            if tail_id == target_id or tail_id == source_id:
+                logger.warning(
+                    f"Skipping edge to avoid self-loop: {source_id} -> {tail_id} "
+                    f"(relation: {data.get('relation')})"
+                )
+                if tail_id == target_id and data.get("relation") == "等同于":
+                    skip_flag = True
+                continue
+            
+            # Check if similar edge already exists
+            edge_exists, existing_key = self._find_similar_edge(target_id, tail_id, data)
+            
+            if not edge_exists:
+                # Add new edge
+                self.graph.add_edge(target_id, tail_id, **copy.deepcopy(data))
+                transferred += 1
+                logger.info(
+                    f"Transferred edge: {target_id} -> {tail_id} ({candidate_pairs[target_id]}({(candidate_pairs[source_id])}) -> ({candidate_pairs[tail_id]})"
+                    f"(relation: {data.get('relation')})"
+                )
+            else:
+                # Merge chunk information
+                self._merge_edge_chunks(target_id, tail_id, existing_key, data)
+                logger.debug(
+                    f"Merged chunks for existing edge: {target_id} -> {tail_id}"
+                )
+        
+        return transferred, skip_flag
+
+    def _reassign_incoming_edges_safe_v2(
+        self, 
+        source_id: str, 
+        target_id: str
+    ) -> Tuple[int,bool]:
+        """
+        Safely transfer incoming edges, avoiding self-loops.
+        
+        Args:
+            source_id: Source node (will become alias)
+            target_id: Target node (representative)
+            
+        Returns:
+            Number of edges transferred
+        """
+        incoming = list(self.graph.in_edges(source_id, keys=True, data=True))
+        transferred = 0
+
+        skip_flag = False
+
+        for head_id, _, key, data in incoming:
+            # Skip edges that would create self-loops
+            if head_id == target_id and data.get("relation") != "等同于":
+                skip_flag = True
+                logger.warning(
+                    f"Besides relation '等同于', "
+                    f"There is a another relation of {self.graph.nodes[source_id].get('properties', {}).get('name', source_id)} -> {self.graph.nodes[target_id].get('properties', {}).get('name', target_id)} -> {data.get('relation')}")
+                logger.warning(
+                    f"Skipping merging to avoid self-loop: {source_id} -> {target_id} | "
+                    f"(relation: {data.get('relation')})"
+                )
+                break
+
+        if not skip_flag:
+            return transferred, skip_flag
+
+        for head_id, _, key, data in incoming:
+            # Skip edges that would create self-loops
+            if head_id == target_id or head_id == source_id:
+                logger.debug(
+                    f"Skipping edge to avoid self-loop: {head_id} -> {source_id} "
+                    f"(relation: {data.get('relation')})"
+                )
+                continue
+            
+            # Check if similar edge already exists
+            edge_exists, existing_key = self._find_similar_edge(head_id, target_id, data)
+            
+            if not edge_exists:
+                # Add new edge
+                self.graph.add_edge(head_id, target_id, **copy.deepcopy(data))
+                transferred += 1
+                logger.debug(
+                    f"Transferred edge: {head_id} -> {target_id} "
+                    f"(relation: {data.get('relation')})"
+                )
+            else:
+                # Merge chunk information
+                self._merge_edge_chunks(head_id, target_id, existing_key, data)
+                logger.debug(
+                    f"Merged chunks for existing edge: {head_id} -> {target_id}"
+                )
+        
+        return transferred, skip_flag
+
+    def _remove_non_alias_edges(
+        self, 
+        node_id: str, 
+        keep_edge: Tuple[str, str]
+    ):
+        """
+        Remove all edges from a node except the alias_of edge.
+        
+        Args:
+            node_id: Node to clean up
+            keep_edge: Edge to keep (source, target) - the alias_of edge
+        """
+        # Remove all outgoing edges except alias_of
+        outgoing = list(self.graph.out_edges(node_id, keys=True))
+        for _, tail_id, key in outgoing:
+            if (node_id, tail_id) != keep_edge:
+                self.graph.remove_edge(node_id, tail_id, key)
+                logger.info(f"Removed outgoing edge: {self.graph.nodes[node_id].get('properties', {}).get('name', node_id)} -> {self.graph.nodes[tail_id].get('properties', {}).get('name', tail_id)}")
+        
+        # Remove all incoming edges
+        incoming = list(self.graph.in_edges(node_id, keys=True))
+        for head_id, _, key in incoming:
+            self.graph.remove_edge(head_id, node_id, key)
+            logger.info(f"Removed incoming edge: {self.graph.nodes[head_id].get('properties', {}).get('name', head_id)} -> {self.graph.nodes[node_id].get('properties', {}).get('name', node_id)}")
+
+    def _load_intermediate_dedup_head_results(self, intermediate_results_path: str):
+        with open(intermediate_results_path, 'r', encoding='utf-8') as f:
+            intermediate_results = json.load(f)
+
+        self.dataset_name = intermediate_results['dataset']
+        self.config = intermediate_results['config']
+        self.phases = intermediate_results['phases']
+
+        phase1_candidates = self.phases.get('phase1_candidates', {})
+        phase3_semantic = self.phases.get('phase3_semantic', {})
+        return phase1_candidates, phase3_semantic
+
+
+    def deduplicate_heads_with_llm_v2(
+        self,
+        enable_semantic: bool = True,
+        similarity_threshold: float = 0.85,
+        max_candidates: int = 1000,
+        alias_relation: str = "等同于",
+        load_llm_results :bool = False,
+        return_dedup_results: bool = False,
+        load_intermediate_results: bool = False
+    ) -> Dict[str, Any]:
+        """
+        Main entry: Head deduplication with LLM-driven representative selection.
+
+        Key improvements:
+        1. LLM decides which entity should be the representative (not code heuristics)
+        2. Uses alias relationships (doesn't delete duplicate nodes)
+        3. No self-loops
+        4. Semantic correctness
+
+        Args:
+            enable_semantic: Enable semantic deduplication
+            similarity_threshold: Embedding similarity threshold for candidate generation
+            max_candidates: Maximum candidate pairs
+            alias_relation: Name of alias relationship
+            load_llm_results: Load pre-computed LLM results instead of generating new ones
+            return_dedup_results: If True, return dedup results in entity_attribution format instead of modifying graph
+
+        Returns:
+            Statistics dict or dedup results list (depending on return_dedup_results)
+        """
+        logger.info("=" * 70)
+        logger.info("Head Deduplication (LLM-Driven + Alias Relationships)")
+        logger.info("=" * 70)
+
+        self.ori_graph = copy.deepcopy(self.graph)
+        #import pdb; pdb.set_trace()
+        # Get configuration
+        config = self.config.construction.semantic_dedup.head_dedup if hasattr(
+            self.config.construction.semantic_dedup, 'head_dedup'
+        ) else None
+        
+        if not config or not config.get('enabled', False):
+            logger.info("Head deduplication is disabled in config")
+            return {"enabled": False}
+        #import pdb; pdb.set_trace()
+        # Check if intermediate results should be saved
+        save_intermediate = config.get('save_intermediate_results', False)
+
+        use_llm_validation = config.get("use_llm_validation", False)
+
+        if load_intermediate_results:
+            intermediate_results = self._load_intermediate_results(config.get('intermediate_results_path', None))
+        
+        # Initialize intermediate results collector
+        intermediate_results = {
+            "dataset": self.dataset_name,
+            "config": {
+                "enable_semantic": enable_semantic,
+                "similarity_threshold": similarity_threshold,
+                "use_llm_validation": use_llm_validation,
+                "max_candidates": max_candidates,
+                "candidate_similarity_threshold": config.get('candidate_similarity_threshold', 0.75)
+            },
+            "phases": {}
+        } if save_intermediate else None
+
+
+        start_time = time.time()
+        
+        # Phase 1: Collect candidates
+        logger.info("\n[Phase 1/4] Collecting head candidates...")
+        candidates, candidates_names = self._collect_head_candidates()
+        logger.info(f"✓ Found {len(candidates)} entity nodes")
+        
+        # Record candidates info if saving intermediate results
+        if save_intermediate:
+            intermediate_results["phases"]["phase1_candidates"] = {
+                "total_candidates": len(candidates),
+                "candidates": [{
+                    "node_id": node_id,
+                    "name": self.graph.nodes[node_id].get("properties", {}).get("name", ""),
+                    "description": self.graph.nodes[node_id].get("properties", {}).get("description", "")[:200]
+                } for node_id in candidates] if candidates else []  # Store first 10 samples
+            }
+
+        # Phase 2: Exact match
+        logger.info("\n[Phase 2/4] Exact match deduplication...")
+        exact_merge_mapping, invalid_nodes = self._deduplicate_heads_exact(candidates)
+        logger.info(f"✓ Identified {len(exact_merge_mapping)} exact matches")
+        
+#        # Record exact match results
+#        if save_intermediate:
+#            intermediate_results["phases"]["phase2_exact_match"] = {
+#                "total_matches": len(exact_merge_mapping),
+#                "merge_pairs": [{
+#                    "duplicate_id": dup_id,
+#                    "duplicate_name": self.graph.nodes.get(dup_id, {}).get("properties", {}).get("name", ""),
+#                    "canonical_id": can_id,
+#                    "canonical_name": self.graph.nodes.get(can_id, {}).get("properties", {}).get("name", "")
+#                } for dup_id, can_id in list(exact_merge_mapping.items())[:50]]  # Store first 50 pairs
+#            }
+
+        # For exact matches, use simple heuristic (ID order) since names are identical
+        exact_stats = self._merge_head_nodes_with_alias(
+            exact_merge_mapping,
+            {},
+            alias_relation,
+            candidates_names,
+            invalid_nodes
+        )
+        logger.info(f"✓ Created {exact_stats['alias_relations_created']} alias relationships")
+        
+        # Phase 3: Semantic deduplication with LLM
+        semantic_stats = {"alias_relations_created": 0, "edges_transferred": 0}
+        
+        if enable_semantic:
+            logger.info("\n[Phase 3/4] Semantic deduplication (LLM-driven)...")
+            
+            remaining_nodes = [
+                node_id for node_id in candidates
+                if node_id not in exact_merge_mapping and 
+                node_id in self.graph and
+                self.graph.nodes[node_id].get("properties", {}).get("node_role") != "alias"
+            ]
+            logger.info(f"  Remaining nodes: {len(remaining_nodes)}")
+            
+            if len(remaining_nodes) >= 2:
+                candidate_pairs = None
+                if not load_llm_results:
+                    # Generate candidate pairs
+                    candidate_pairs = self._generate_semantic_candidates(
+                        remaining_nodes,
+                        candidates_names,
+                        max_candidates=max_candidates,
+                        similarity_threshold=0.75  # Pre-filtering threshold
+                    )
+                    logger.info(f"✓ Generated {len(candidate_pairs)} candidate pairs")
+                
+                    # Record candidate pairs
+                    if save_intermediate:
+                        intermediate_results["phases"]["phase3_semantic"] = {
+                            "remaining_nodes": len(remaining_nodes),
+                            "candidate_pairs_generated": len(candidate_pairs),
+                            "validation_method": "llm" if use_llm_validation else "embedding",
+                            "sample_candidate_pairs": [{
+                                "node_id_1": pair[0],
+                                "node_name_1": self.graph.nodes.get(pair[0], {}).get("properties", {}).get("name", ""),
+                                "node_id_2": pair[1],
+                                "node_name_2": self.graph.nodes.get(pair[1], {}).get("properties", {}).get("name", ""),
+                                "embedding_similarity": float(pair[2])
+                            } for pair in candidate_pairs[:20]]  # Store first 20 pairs
+                        }
+                elif save_intermediate:
+                    # Initialize phase3_semantic when loading LLM results
+                    intermediate_results["phases"]["phase3_semantic"] = {
+                        "remaining_nodes": len(remaining_nodes),
+                        "candidate_pairs_generated": 0,
+                        "validation_method": "llm",
+                        "load_llm_results": True
+                    }
+                
+
+                if load_llm_results or candidate_pairs:
+                    # LLM validation with representative selection
+                    logger.info("  Using LLM to validate AND select representatives...")
+                    semantic_merge_mapping, metadata, llm_results = self._validate_candidates_with_llm_v2(
+                        candidate_pairs if candidate_pairs is not None else [],
+                        similarity_threshold,
+                        load_llm_results,
+                        candidates_names
+                    )
+                    #import pdb; pdb.set_trace()
+                    logger.info(f"✓ LLM identified {len(semantic_merge_mapping)} semantic matches")
+                    
+                    #import pdb; pdb.set_trace()
+                    # Record semantic validation results
+                    if save_intermediate:
+                        intermediate_results["phases"]["phase3_semantic"]["validation_results"] = {
+                            "total_matches": len(semantic_merge_mapping),
+                            "merge_decisions": [{
+                                "duplicate_name": self.graph.nodes.get(dup_id, {}).get("properties", {}).get("name", ""),
+                                "canonical_name": self.graph.nodes.get(can_id, {}).get("properties", {}).get("name", ""),
+                                "metadata": metadata.get(dup_id, {})
+                            } for dup_id, can_id in list(semantic_merge_mapping.items())]  # Store first 50
+                        }
+                        intermediate_results["phases"]["phase3_semantic"]["llm_results"] = llm_results
+
+                    # Merge exact and semantic mappings with resolved canonical chains
+                    final_merge_mapping, updated_exact_mapping = self._merge_exact_and_semantic_mappings(
+                        exact_merge_mapping,
+                        semantic_merge_mapping,
+                    )
+
+                    exact_merge_mapping = updated_exact_mapping
+
+                    #import pdb; pdb.set_trace()
+
+                    # Apply all merges using the first phase function (handles both exact and semantic)
+                    semantic_stats = self._merge_head_nodes_with_alias(
+                        updated_exact_mapping,
+                        {},
+                        alias_relation,
+                        candidates_names,
+                        invalid_nodes
+                    )
+
+                    # Apply merges
+                    semantic_stats = self._merge_head_nodes_with_alias_v2(
+                        semantic_merge_mapping,
+                        metadata,
+                        alias_relation,
+                        candidates_names,
+                        invalid_nodes
+                    )
+                    logger.info(f"✓ Created {semantic_stats['alias_relations_created']} alias relationships")
+        else:
+            logger.info("\n[Phase 3/4] Semantic deduplication skipped")
+        
+        # Phase 4: Validation
+        logger.info("\n[Phase 4/4] Validating graph integrity...")
+        issues = self.validate_graph_integrity_with_alias(candidates_names)
+        
+        if any(v for v in issues.values() if v):
+            logger.warning(f"⚠ Found integrity issues: {issues}")
+        else:
+            logger.info("✓ Graph integrity validated")
+        
+        elapsed_time = time.time() - start_time
+        
+        # Statistics
+        final_main_count = len([
+            n for n, d in self.graph.nodes(data=True)
+            if d.get("label") == "entity" and
+            d.get("properties", {}).get("node_role") != "alias"
+        ])
+        
+        alias_count = len([
+            n for n, d in self.graph.nodes(data=True)
+            if d.get("properties", {}).get("node_role") == "alias"
+        ])
+        
+        stats = {
+            "total_candidates": len(candidates),
+            "exact_alias_created": exact_stats["alias_relations_created"],
+            "semantic_alias_created": semantic_stats["alias_relations_created"],
+            "total_alias_created": (
+                exact_stats["alias_relations_created"] + 
+                semantic_stats["alias_relations_created"]
+            ),
+            "initial_entity_count": len(candidates),
+            "final_main_entity_count": final_main_count,
+            "final_alias_count": alias_count,
+            "elapsed_time_seconds": elapsed_time,
+            "integrity_issues": issues,
+            "method": "llm_driven_v2"
+        }
+        
+        logger.info("\n" + "=" * 70)
+        logger.info("Head Deduplication Completed (LLM-Driven + Alias)")
+        logger.info("=" * 70)
+        logger.info(f"Summary:")
+        logger.info(f"  - Initial entities: {stats['initial_entity_count']}")
+        logger.info(f"  - Final main entities: {stats['final_main_entity_count']}")
+        logger.info(f"  - Final alias entities: {stats['final_alias_count']}")
+        logger.info(f"  - Total alias relations: {stats['total_alias_created']}")
+        logger.info(f"  - Time elapsed: {elapsed_time:.2f}s")
+        logger.info(f"  - Method: LLM-driven representative selection ✓")
+        logger.info("=" * 70)
+        
+        # Save intermediate results to file
+        if save_intermediate and intermediate_results:
+            import datetime
+            timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+            output_path = config.get('intermediate_results_path', None)
+            
+            if not output_path:
+                output_path = f"output/dedup_intermediate/{self.dataset_name}_head_dedup_{timestamp}.json"
+            else:
+                # If path is a directory, add filename
+                if output_path.endswith('/'):
+                    output_path = f"{output_path}{self.dataset_name}_head_dedup_{timestamp}.json"
+                else:
+                    # Add _head suffix
+                    base, ext = os.path.splitext(output_path)
+                    output_path = f"{base}_head_{timestamp}{ext}"
+            
+            # Ensure directory exists
+            output_dir = os.path.dirname(output_path)
+            if output_dir:
+                os.makedirs(output_dir, exist_ok=True)
+            
+            # Add summary statistics
+            intermediate_results["summary"] = stats
+            
+            try:
+                with open(output_path, 'w', encoding='utf-8') as f:
+                    json.dump(intermediate_results, f, indent=2, ensure_ascii=False)
+                logger.info(f"Saved head deduplication intermediate results to: {output_path}")
+                logger.info(f"Summary: {intermediate_results['summary']}")
+            except Exception as e:
+                logger.warning(f"Failed to save intermediate results: {e}")
+
+        # Export for review if configured
+        if config.get('export_review', False):
+            review_path = os.path.join(
+                config.get('review_output_dir', 'output/review'),
+                f"head_merge_{self.dataset_name}_{int(time.time())}.csv"
+            )
+            min_conf, max_conf = config.get('review_confidence_range', [0.70, 0.90])
+            self.export_head_merge_candidates_for_review(
+                output_path=review_path,
+                min_confidence=min_conf,
+                max_confidence=max_conf
+            )
+
+        # If return_dedup_results is True, format and return results instead of just modifying graph
+        if return_dedup_results:
+            head_dedup_results = self._format_head_dedup_results_for_output(
+                candidates, exact_merge_mapping, semantic_merge_mapping, metadata, stats
+            )
+            return head_dedup_results
+
+        return stats
+
+    def _format_head_dedup_results_for_output(self, candidates: List[str], exact_merge_mapping: Dict[str, str],
+                                             semantic_merge_mapping: Dict[str, str], metadata: Dict[str, Any],
+                                             stats: Dict[str, Any]) -> List[Dict[str, Any]]:
+        """Format head deduplication results in a format similar to final_merge_mapping_fix1.json"""
+        output = []
+
+        # Group all dedup results by cluster
+        cluster_results = {}
+        cluster_idx = 0
+
+        # Use _describe_node method for consistent formatting
+
+        # Process exact matches - each pair becomes a cluster
+        for dup_id, rep_id in exact_merge_mapping.items():
+            cluster_key = f"cluster_{cluster_idx}"
+            cluster_results[cluster_key] = {
+                "member": [self._describe_node(dup_id), self._describe_node(rep_id)]
+            }
+            cluster_idx += 1
+
+        # Process semantic matches - each pair becomes a cluster
+        for dup_id, rep_id in semantic_merge_mapping.items():
+            #import pdb; pdb.set_trace()
+            cluster_key = f"cluster_{cluster_idx}"
+            cluster_results[cluster_key] = {
+                "member": [self._describe_node(dup_id), self._describe_node(rep_id)]
+            }
+            cluster_idx += 1
+
+        # Create result item in the format similar to final_merge_mapping_fix1.json
+        head_dedup_item = {
+            "head_node": {},
+            "relation": "",
+            "tail_nodes_to_dedup": [],
+            "dedup_results": cluster_results,
+            "dedup_stats": stats
+        }
+
+        output.append(head_dedup_item)
+        return output
+
+    def validate_graph_integrity_with_alias(self, candidates_names: Dict[str, str]) -> Dict[str, List]:
+        """
+        Validate graph integrity after alias-based deduplication.
+        
+        Modified rules:
+        - Alias nodes are NOT considered orphans (they have alias_of edge)
+        - Self-loops should not exist
+        - All alias_of edges should point to representative nodes
+        
+        Returns:
+            Dict with lists of issues
+        """
+        issues = {
+            "orphan_nodes": [],
+            "self_loops": [],
+            "dangling_references": [],
+            "invalid_alias_nodes": [],
+            "alias_chains": []
+        }
+        
+        # Check orphan nodes (excluding valid alias nodes)
+        for node_id, data in self.graph.nodes(data=True):
+            if data.get("label") == "entity":
+                in_degree = self.graph.in_degree(node_id)
+                out_degree = self.graph.out_degree(node_id)
+                node_role = data.get("properties", {}).get("node_role")
+                
+                # Alias nodes with only alias_of edge are valid
+                if node_role == "alias":
+                    if out_degree == 1:
+                        out_edges = list(self.graph.out_edges(node_id, data=True))
+                        if out_edges[0][2].get("relation") == "alias_of" or out_edges[0][2].get("relation") == "等同于" or out_edges[0][2].get("relation") == "别名包括":
+                            continue  # Valid alias node
+                    #import pdb; pdb.set_trace()
+                    # Invalid alias node
+                    issues["invalid_alias_nodes"].append(
+                        (node_id, f"in={in_degree}, out={out_degree}")
+                    )
+                elif in_degree == 0 and out_degree == 0:
+                    issues["orphan_nodes"].append(node_id)
+        
+        # Check self-loops (should not exist with alias method!)
+        for u, v in self.graph.edges():
+            if u == v:
+                #import pdb; pdb.set_trace()
+                issues["self_loops"].append((u, v))
+        
+        # Check alias chains (alias pointing to alias)
+        for node_id, data in self.graph.nodes(data=True):
+            if data.get("properties", {}).get("node_role") == "alias":
+                out_edges = list(self.graph.out_edges(node_id, data=True))
+                for _, target_id, edge_data in out_edges:
+                    if edge_data.get("relation") == "alias_of":
+                        target_data = self.graph.nodes.get(target_id, {})
+                        target_role = target_data.get("properties", {}).get("node_role")
+                        if target_role == "alias":
+                            issues["alias_chains"].append((node_id, target_id))
+        
+        # Check dangling references
+        for u, v, data in self.graph.edges(data=True):
+            if u not in self.graph.nodes:
+                issues["dangling_references"].append(("head", u, v))
+            if v not in self.graph.nodes:
+                issues["dangling_references"].append(("tail", u, v))
+        
+        return issues
+
+    # Utility functions for working with aliases
+
+    def is_alias_node(self, node_id: str) -> bool:
+        """Check if a node is an alias node."""
+        if node_id not in self.graph:
+            return False
+        return (
+            self.graph.nodes[node_id]
+            .get("properties", {})
+            .get("node_role") == "alias"
+        )
+
+    def get_main_entities_only(self) -> List[str]:
+        """Get only main entities (excluding aliases)."""
+        return [
+            node_id
+            for node_id, data in self.graph.nodes(data=True)
+            if data.get("label") == "entity" and
+            data.get("properties", {}).get("node_role") != "alias"
+        ]
+
+    def resolve_alias(self, node_id: str) -> str:
+        """
+        Resolve alias to main entity.
+        If node is an alias, return its representative; otherwise return itself.
+        """
+        if not self.is_alias_node(node_id):
+            return node_id
+        
+        # Follow alias_of edge
+        for _, target_id, data in self.graph.out_edges(node_id, data=True):
+            if data.get("relation") == "alias_of":
+                return target_id
+        
+        return node_id  # Fallback
+
+    def get_all_aliases(self, entity_id: str) -> List[Dict[str, Any]]:
+        """
+        Get all aliases for a given entity.
+        
+        Args:
+            entity_id: Main entity ID
+            
+        Returns:
+            List of alias info dicts
+        """
+        if entity_id not in self.graph:
+            return []
+        
+        properties = self.graph.nodes[entity_id].get("properties", {})
+        return properties.get("aliases", [])
+
+    def export_alias_mapping(self, output_path: str):
+        """
+        Export alias mapping for external use.
+        
+        Format: CSV with columns:
+        - alias_id, alias_name, main_entity_id, main_entity_name, confidence, method
+        """
+        import csv
+        
+        rows = []
+        
+        for node_id, data in self.graph.nodes(data=True):
+            if data.get("label") != "entity":
+                continue
+            
+            props = data.get("properties", {})
+            if props.get("node_role") == "representative":
+                main_entity_id = node_id
+                main_entity_name = props.get("name", "")
+                
+                for alias_info in props.get("aliases", []):
+                    rows.append({
+                        "alias_id": alias_info["alias_id"],
+                        "alias_name": alias_info["alias_name"],
+                        "main_entity_id": main_entity_id,
+                        "main_entity_name": main_entity_name,
+                        "confidence": alias_info.get("confidence", 1.0),
+                        "method": alias_info.get("method", "unknown")
+                    })
+        
+        os.makedirs(os.path.dirname(output_path), exist_ok=True)
+        with open(output_path, 'w', newline='', encoding='utf-8') as f:
+            fieldnames = [
+                "alias_id", "alias_name",
+                "main_entity_id", "main_entity_name",
+                "confidence", "method"
+            ]
+            writer = csv.DictWriter(f, fieldnames=fieldnames)
+            writer.writeheader()
+            writer.writerows(rows)
+        
+        logger.info(f"✓ Exported {len(rows)} alias mappings to {output_path}")
+
+
     def build_knowledge_graph(self, corpus):
         logger.info(f"========{'Start Building':^20}========")
         logger.info(f"{'➖' * 30}")
