@@ -30,7 +30,7 @@ from offline_semantic_dedup import (
     _load_chunk_mapping
 )
 from config import ConfigManager, get_config
-from apply_tail_dedup_results import apply_entity_dedup_results_to_graph
+from apply_tail_dedup_results import apply_entity_dedup_results_to_graph, TailDedupApplicator
 from utils_ import graph_processor
 from utils_.logger import logger
 
@@ -554,8 +554,44 @@ async def stage_4_final_tail_dedup():
     logger.info("Running final tail entity semantic deduplication")
 
     # Run final tail deduplication
-    final_dedup_results = deduper.triple_deduplicate_semantic(return_dedup_results=True)
-    logger.info(f"Final tail entity deduplication completed, found {len(final_dedup_results) if final_dedup_results else 0} deduplication groups")
+    #final_dedup_results = deduper.triple_deduplicate_semantic(return_dedup_results=True)
+    #logger.info(f"Final tail entity deduplication completed, found {len(final_dedup_results) if final_dedup_results else 0} deduplication groups")
+
+    merged_head_ids = set()
+    head_dedup_result = st.session_state.dedup_results.get("头实体去重", {})
+    head_dedup_groups = head_dedup_result.get("dedup_results") if isinstance(head_dedup_result, dict) else []
+
+    if head_dedup_groups:
+        applicator = TailDedupApplicator(st.session_state.graph)
+        for group in head_dedup_groups:
+            dedup_clusters = group.get("dedup_results", {})
+            for cluster_data in dedup_clusters.values():
+                members = cluster_data.get("member", [])
+                if len(members) < 2:
+                    continue
+                representative_id = applicator._find_node_by_identifier(members[-1])
+                if representative_id:
+                    merged_head_ids.add(representative_id)
+
+    if not merged_head_ids:
+        logger.info("No head entities were merged in Stage 3; skipping final tail deduplication.")
+        return {
+            'dedup_results': [],
+            'graph_stats': {
+                'nodes': st.session_state.graph.number_of_nodes(),
+                'edges': st.session_state.graph.number_of_edges()
+            }
+        }
+
+    # Run final tail deduplication only for merged head entities
+    final_dedup_results = deduper.triple_deduplicate_semantic(
+        return_dedup_results=True,
+        target_heads=merged_head_ids
+    )
+    logger.info(
+        "Final tail entity deduplication completed, found %d deduplication groups",
+        len(final_dedup_results) if final_dedup_results else 0
+    )
 
     update_progress(70, "应用最终去重结果...")
     logger.info("Applying final deduplication results")
@@ -1039,8 +1075,8 @@ def check_and_display_recovery_options():
 
             col1, col2 = st.columns(2)
             with col1:
-                if st.button("🔄 重新开始当前阶段", key="restart_stage", type="primary"):
-                    # Trigger restart by setting a flag that will be handled after rendering
+                # Use a distinct widget key to avoid conflicts with query params
+                if st.button("🔄 重新开始当前阶段", key="restart_stage_btn", type="primary"):                    # Trigger restart by setting a flag that will be handled after rendering
                     st.query_params["restart_stage"] = "true"
                     st.rerun()
 
